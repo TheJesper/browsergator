@@ -1,0 +1,51 @@
+{
+  "name": "browsergator-mcp",
+  "version": "0.2.0",
+  "private": false,
+  "license": "MIT",
+  "type": "module",
+  "description": "Browsergator: a client-neutral Streamable HTTP MCP gateway for many agents sharing one browser",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "browser-automation",
+    "streamable-http",
+    "multi-agent",
+    "chrome-devtools"
+  ],
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "start:stdio": "node dist/stdio-adapter.js",
+    "dev:stdio": "tsx src/stdio-adapter.ts",
+    "smoke:live": "tsx scripts/smoke-live.ts",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "express": "5.2.1",
+    "ws": "8.21.3",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.0",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.0",
+    "eslint": "^10.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^6.0.0",
+    "typescript-eslint": "^8.40.0",
+    "vitest": "^4.0.0"
+  }
+}
