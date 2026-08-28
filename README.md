@@ -12,9 +12,11 @@ stdio client ┘
 
 The gateway uses explicit Chrome target IDs as `pageId`, permits parallel work on different tabs, serializes mutations per tab with FIFO queues, and protects sensitive tabs with leases and policy. Reads normally bypass the mutation queue.
 
+Tabs are created as individual tabs. Browsergator must never create a tab group or browser context implicitly; a client must request an explicit grouping feature when one is available. If no grouping request is present, leave Chrome's tab groups unchanged.
+
 ## MVP tools
 
-`list_tabs`, `open_tab`, `close_tab`, `navigate`, `snapshot`, `screenshot`, `console_list`, `network_list`, `network_get_response_body`, `claim_tab`, `release_tab`, and `run_atomic`.
+`list_tabs`, `open_tab`, `close_tab`, `navigate`, `click`, `fill`, `snapshot`, `screenshot`, `console_list`, `network_list`, `network_get_response_body`, `claim_tab`, `release_tab`, and `run_atomic`.
 
 ## Requirements
 

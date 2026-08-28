@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
-import { asGatewayError } from '../errors.js';
+import { asGatewayError, GatewayError } from '../errors.js';
 import type { BrowserGateway, MutationMetadata } from '../gateway.js';
 import type { AgentContext, NavigationOptions } from '../types.js';
 
@@ -83,6 +83,61 @@ export function createMcpServer(gateway: BrowserGateway, session: SessionReferen
           args.pageId,
           args.url,
           { waitUntil: args.waitUntil as NavigationOptions['waitUntil'], timeoutMs: args.timeoutMs },
+          mutationMetadata(args, session.clientSessionId)
+        )
+      )
+  );
+
+  server.registerTool(
+    'click',
+    {
+      description:
+        'Click one element in an explicit page. Locate it with a CSS selector, optionally narrowed by visible text.',
+      inputSchema: {
+        pageId: z.string().min(1),
+        selector: z.string().min(1).max(2_000).optional(),
+        text: z.string().min(1).max(500).optional(),
+        exactText: z.boolean().default(false),
+        ...mutationShape
+      },
+      annotations: { destructiveHint: true, idempotentHint: true }
+    },
+    async (args) => {
+      if (!args.selector && !args.text) {
+        return errorResult(new GatewayError('INVALID_SELECTOR', 'click requires selector or text'));
+      }
+      return toolResult(() =>
+        gateway.click(
+          args.pageId,
+          {
+            ...(args.selector ? { selector: args.selector } : {}),
+            ...(args.text ? { text: args.text } : {}),
+            ...(args.exactText ? { exactText: true } : {})
+          },
+          mutationMetadata(args, session.clientSessionId)
+        )
+      );
+    }
+  );
+
+  server.registerTool(
+    'fill',
+    {
+      description: 'Fill an input or contenteditable element in an explicit page using a CSS selector.',
+      inputSchema: {
+        pageId: z.string().min(1),
+        selector: z.string().min(1).max(2_000),
+        value: z.string().max(20_000),
+        ...mutationShape
+      },
+      annotations: { destructiveHint: true, idempotentHint: true }
+    },
+    async (args) =>
+      toolResult(() =>
+        gateway.fill(
+          args.pageId,
+          { selector: args.selector },
+          args.value,
           mutationMetadata(args, session.clientSessionId)
         )
       )

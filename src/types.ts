@@ -62,6 +62,19 @@ export interface NavigationResult {
   title: string;
 }
 
+export interface ElementLocator {
+  selector?: string;
+  text?: string;
+  exactText?: boolean;
+}
+
+export interface InteractionResult {
+  pageId: string;
+  action: 'click' | 'fill';
+  tagName: string;
+  text: string;
+}
+
 export interface ResponseBodyResult {
   body: string;
   base64Encoded: boolean;
@@ -75,6 +88,8 @@ export interface BrowserDriver {
   openTab(url: string): Promise<DriverTab>;
   closeTab(pageId: string): Promise<void>;
   navigate(pageId: string, url: string, options: NavigationOptions): Promise<NavigationResult>;
+  click(pageId: string, locator: ElementLocator): Promise<InteractionResult>;
+  fill(pageId: string, locator: ElementLocator, value: string): Promise<InteractionResult>;
   snapshot(pageId: string, maxNodes: number): Promise<AccessibilitySnapshot>;
   screenshot(pageId: string, format: 'png' | 'jpeg', quality?: number): Promise<ScreenshotResult>;
   getResponseBody(pageId: string, requestId: string): Promise<ResponseBodyResult>;

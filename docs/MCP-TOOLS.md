@@ -2,6 +2,8 @@
 
 All page-specific tools require an explicit Chrome target ID in `pageId`. Tool failures return a structured JSON object and set MCP `isError`.
 
+`open_tab` creates one individual tab only. No tool creates or changes Chrome tab groups or browser contexts implicitly. Grouping must always be an explicit, separately authorized request.
+
 ## Reads
 
 - `list_tabs`: current page targets plus protected/lease metadata. No page queue.
@@ -16,6 +18,8 @@ All page-specific tools require an explicit Chrome target ID in `pageId`. Tool f
 - `open_tab`: creates a new page target. It does not reuse an existing tab.
 - `close_tab`: per-page FIFO mutation; denied for protected tabs unless authorized.
 - `navigate`: per-page FIFO mutation with automatic short lease behavior.
+- `click`: per-page FIFO mutation; clicks an element using a CSS selector, optionally narrowed by visible text.
+- `fill`: per-page FIFO mutation; fills an input, textarea, select, or contenteditable element using a CSS selector.
 - `run_atomic`: FIFO claim, policy check, navigate, optional URL/title verification, and release. The required idempotency key deduplicates retries.
 
 ## Coordination
@@ -27,4 +31,4 @@ Mutation metadata uses required `agentId`, `taskId`, and `leaseOwnerId`, optiona
 
 ## Error codes
 
-`TAB_NOT_FOUND`, `TAB_PROTECTED`, `LEASE_CONFLICT`, `LEASE_EXPIRED`, `BROWSER_DISCONNECTED`, `NEEDS_HUMAN`, `RESPONSE_BODY_UNAVAILABLE`, `AUTH_REQUIRED`, `INVALID_CONFIG`, `IDEMPOTENCY_CONFLICT`, and `INTERNAL_ERROR`.
+`TAB_NOT_FOUND`, `TAB_PROTECTED`, `LEASE_CONFLICT`, `LEASE_EXPIRED`, `BROWSER_DISCONNECTED`, `NEEDS_HUMAN`, `RESPONSE_BODY_UNAVAILABLE`, `AUTH_REQUIRED`, `INVALID_CONFIG`, `INVALID_SELECTOR`, `ELEMENT_NOT_FOUND`, `IDEMPOTENCY_CONFLICT`, and `INTERNAL_ERROR`.

@@ -11,6 +11,8 @@ import type {
   BrowserEvent,
   BrowserVersion,
   DriverTab,
+  ElementLocator,
+  InteractionResult,
   NavigationOptions,
   NavigationResult,
   ResponseBodyResult,
@@ -175,6 +177,18 @@ export class WebSocketCdpDriver implements BrowserDriver {
     return { pageId, ...inspected };
   }
 
+  async click(pageId: string, locator: ElementLocator): Promise<InteractionResult> {
+    const sessionId = this.requireSession(pageId);
+    const result = await this.evaluateInteraction(sessionId, clickExpression(locator));
+    return interactionResult(pageId, 'click', result);
+  }
+
+  async fill(pageId: string, locator: ElementLocator, value: string): Promise<InteractionResult> {
+    const sessionId = this.requireSession(pageId);
+    const result = await this.evaluateInteraction(sessionId, fillExpression(locator, value));
+    return interactionResult(pageId, 'fill', result);
+  }
+
   async snapshot(pageId: string, maxNodes: number): Promise<AccessibilitySnapshot> {
     const sessionId = this.requireSession(pageId);
     const result = await this.send('Accessibility.getFullAXTree', {}, sessionId);
@@ -235,6 +249,29 @@ export class WebSocketCdpDriver implements BrowserDriver {
     );
     const value = result['result']?.value as { url?: unknown; title?: unknown } | undefined;
     return { url: String(value?.url ?? ''), title: String(value?.title ?? '') };
+  }
+
+  private async evaluateInteraction(
+    sessionId: string,
+    expression: string
+  ): Promise<Record<string, unknown>> {
+    const result = await this.send(
+      'Runtime.evaluate',
+      { expression, returnByValue: true, awaitPromise: true, userGesture: true },
+      sessionId
+    );
+    const exception = result['exceptionDetails'] as { text?: unknown; exception?: { description?: unknown } } | undefined;
+    if (exception) {
+      throw new GatewayError(
+        'INVALID_SELECTOR',
+        String(exception.exception?.description ?? exception.text ?? 'The element locator is invalid')
+      );
+    }
+    const value = result['result']?.value;
+    if (!value || typeof value !== 'object') {
+      throw new GatewayError('ELEMENT_NOT_FOUND', 'No matching element was found');
+    }
+    return value as Record<string, unknown>;
   }
 
   private async connect(): Promise<void> {
@@ -543,6 +580,85 @@ export class WebSocketCdpDriver implements BrowserDriver {
     };
     this.events.emit('browser-event', event);
   }
+}
+
+function clickExpression(locator: ElementLocator): string {
+  return elementExpression(
+    locator,
+    `
+    if (!(element instanceof HTMLElement)) return { ok: false, reason: 'not-interactable' };
+    element.scrollIntoView({ block: 'center', inline: 'center' });
+    element.click();
+    return { ok: true, tagName: element.tagName, text: (element.innerText || element.textContent || '').trim().slice(0, 500) };
+  `
+  );
+}
+
+function fillExpression(locator: ElementLocator, value: string): string {
+  return elementExpression(
+    locator,
+    `
+    if (!(element instanceof HTMLElement)) return { ok: false, reason: 'not-interactable' };
+    if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement || element.isContentEditable)) {
+      return { ok: false, reason: 'not-fillable' };
+    }
+    element.scrollIntoView({ block: 'center', inline: 'center' });
+    element.focus();
+    const nextValue = ${JSON.stringify(value)};
+    if (element.isContentEditable) {
+      element.textContent = nextValue;
+    } else {
+      const prototype = Object.getPrototypeOf(element);
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+      if (descriptor?.set) descriptor.set.call(element, nextValue);
+      else element.value = nextValue;
+    }
+    element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: nextValue }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+    return { ok: true, tagName: element.tagName, text: (element.value || element.textContent || '').trim().slice(0, 500) };
+  `
+  );
+}
+
+function elementExpression(locator: ElementLocator, action: string): string {
+  const selector = JSON.stringify(locator.selector ?? null);
+  const text = JSON.stringify(locator.text ?? null);
+  const exactText = locator.exactText === true;
+  return `(() => {
+    const selector = ${selector};
+    const text = ${text};
+    const exactText = ${exactText};
+    const query = selector || 'a,button,input,textarea,select,[role="button"],[contenteditable="true"]';
+    const candidates = Array.from(document.querySelectorAll(query));
+    const normalized = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+    const element = text === null
+      ? candidates[0]
+      : candidates.find((candidate) => {
+          const candidateText = normalized(candidate.innerText || candidate.textContent || candidate.getAttribute('aria-label') || candidate.getAttribute('value'));
+          return exactText ? candidateText === text : candidateText.includes(text);
+        });
+    if (!element) return { ok: false, reason: 'not-found' };
+    ${action}
+  })()`;
+}
+
+function interactionResult(pageId: string, action: 'click' | 'fill', result: Record<string, unknown>): InteractionResult {
+  if (result['ok'] !== true) {
+    const reason = String(result['reason'] ?? 'not-found');
+    if (reason === 'not-found') {
+      throw new GatewayError('ELEMENT_NOT_FOUND', 'No matching element was found', { pageId });
+    }
+    throw new GatewayError('ELEMENT_NOT_FOUND', 'The matching element cannot be interacted with', {
+      pageId,
+      reason
+    });
+  }
+  return {
+    pageId,
+    action,
+    tagName: String(result['tagName'] ?? ''),
+    text: String(result['text'] ?? '')
+  };
 }
 
 function eventKind(method: string): BrowserEvent['kind'] | undefined {

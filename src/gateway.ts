@@ -7,6 +7,7 @@ import type {
   BrowserDriver,
   BrowserEvent,
   DriverTab,
+  ElementLocator,
   NavigationOptions
 } from './types.js';
 import type { AuditEvent, AuditSink } from './core/audit-log.js';
@@ -149,6 +150,29 @@ export class BrowserGateway {
     this.policy.assertMutationAllowed(url, metadata.context.agentId);
     return this.mutate(pageId, 'navigate', metadata, { url, options }, () =>
       this.driver.navigate(pageId, url, options)
+    );
+  }
+
+  async click(
+    pageId: string,
+    locator: ElementLocator,
+    metadata: MutationMetadata
+  ): Promise<ReturnType<BrowserDriver['click']>> {
+    return this.mutate(pageId, 'click', metadata, { locator }, () => this.driver.click(pageId, locator));
+  }
+
+  async fill(
+    pageId: string,
+    locator: ElementLocator,
+    value: string,
+    metadata: MutationMetadata
+  ): Promise<ReturnType<BrowserDriver['fill']>> {
+    return this.mutate(
+      pageId,
+      'fill',
+      metadata,
+      { locator, valueLength: value.length, valueHash: hash(value) },
+      () => this.driver.fill(pageId, locator, value)
     );
   }
 

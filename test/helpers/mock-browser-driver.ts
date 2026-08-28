@@ -7,6 +7,8 @@ import type {
   BrowserDriver,
   BrowserEvent,
   DriverTab,
+  ElementLocator,
+  InteractionResult,
   NavigationOptions,
   NavigationResult,
   ResponseBodyResult,
@@ -107,6 +109,20 @@ export class MockBrowserDriver implements BrowserDriver {
       this.navigationOrder.push(`${pageId}:end:${url}`);
       this.leave(pageId);
     }
+  }
+
+  async click(pageId: string, locator: ElementLocator): Promise<InteractionResult> {
+    this.requireTab(pageId);
+    if (!locator.selector && !locator.text) {
+      throw new GatewayError('ELEMENT_NOT_FOUND', 'Mock locator is empty');
+    }
+    return { pageId, action: 'click', tagName: 'BUTTON', text: locator.text ?? locator.selector ?? '' };
+  }
+
+  async fill(pageId: string, locator: ElementLocator, _value: string): Promise<InteractionResult> {
+    this.requireTab(pageId);
+    if (!locator.selector) throw new GatewayError('ELEMENT_NOT_FOUND', 'Mock fill selector is empty');
+    return { pageId, action: 'fill', tagName: 'INPUT', text: locator.selector };
   }
 
   async snapshot(pageId: string, _maxNodes: number): Promise<AccessibilitySnapshot> {

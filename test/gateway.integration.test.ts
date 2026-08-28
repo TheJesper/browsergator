@@ -55,6 +55,20 @@ describe('BrowserGateway integration with mock CDP', () => {
     await mutation;
   });
 
+  it('serializes click and fill mutations through the per-tab lease', async () => {
+    const context = {
+      context: { agentId: 'a', taskId: 'interaction', leaseOwnerId: 'owner-a', clientSessionId: 's1' }
+    };
+    await expect(gateway.click('p1', { selector: 'a', text: 'Köp' }, context)).resolves.toMatchObject({
+      action: 'click',
+      pageId: 'p1'
+    });
+    await expect(gateway.fill('p1', { selector: '#amount' }, '500', context)).resolves.toMatchObject({
+      action: 'fill',
+      pageId: 'p1'
+    });
+  });
+
   it('enforces protected tabs and recovers after a mock disconnect', async () => {
     const beforeReconnect = (await gateway.listTabs())[0];
     expect(beforeReconnect).toMatchObject({
