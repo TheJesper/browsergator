@@ -63,6 +63,10 @@ npm run build
 
 See [docs/PRODUCT-SPEC.md](docs/PRODUCT-SPEC.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and [docs/SECURITY.md](docs/SECURITY.md).
 
+## Responsible use and accessibility
+
+Browsergator can help people who need an AI-assisted browser interface, including people with disabilities. The operator remains responsible for the accounts, permissions, instructions, data, and actions delegated to an agent. Use it only with authorised systems, keep humans in the loop for consequential actions, and never use it to bypass security or facilitate unlawful activity. Read the full [disclaimer and acceptable-use policy](DISCLAIMER.md).
+
 ## Contribute with us
 
 We use our Slowgun workflow to contribute directly to the shared project instead of creating forks. Bring an idea, test a client, fix a rough edge, or improve the docs — then help make Browsergator reach the next level together.
