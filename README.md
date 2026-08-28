@@ -63,6 +63,12 @@ npm run build
 
 See [docs/PRODUCT-SPEC.md](docs/PRODUCT-SPEC.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and [docs/SECURITY.md](docs/SECURITY.md).
 
+## Contribute with us
+
+We use our Slowgun workflow to contribute directly to the shared project instead of creating forks. Bring an idea, test a client, fix a rough edge, or improve the docs — then help make Browsergator reach the next level together.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the quality gates and contribution guidelines.
+
 ## Publish
 
 The package is prepared for public npm distribution as `browsergator-mcp`:
