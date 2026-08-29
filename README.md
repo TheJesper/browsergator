@@ -1,5 +1,9 @@
 # Browsergator
 
+<p align="center">
+  <img src="assets/brand/browsergator-mascot-256.png" alt="Browsergator pixel-art mascot" width="192">
+</p>
+
 Browsergator is a long-lived, client-neutral MCP service that lets many agents coordinate work against one dedicated browser over the Chrome DevTools Protocol (CDP). The stable MCP server ID remains `browser-gateway` for compatibility.
 
 ```text
