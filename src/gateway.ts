@@ -8,7 +8,8 @@ import type {
   BrowserEvent,
   DriverTab,
   ElementLocator,
-  NavigationOptions
+  NavigationOptions,
+  WaitForOptions
 } from './types.js';
 import type { AuditEvent, AuditSink } from './core/audit-log.js';
 import { IdempotencyStore } from './core/idempotency-store.js';
@@ -173,6 +174,48 @@ export class BrowserGateway {
       metadata,
       { locator, valueLength: value.length, valueHash: hash(value) },
       () => this.driver.fill(pageId, locator, value)
+    );
+  }
+
+  async waitFor(pageId: string, options: WaitForOptions): ReturnType<BrowserDriver['waitFor']> {
+    await this.requireTab(pageId);
+    return this.driver.waitFor(pageId, options);
+  }
+
+  async pressKey(pageId: string, key: string, metadata: MutationMetadata): ReturnType<BrowserDriver['pressKey']> {
+    return this.mutate(pageId, 'press_key', metadata, { key }, () => this.driver.pressKey(pageId, key));
+  }
+
+  async typeText(pageId: string, text: string, metadata: MutationMetadata): ReturnType<BrowserDriver['typeText']> {
+    return this.mutate(pageId, 'type_text', metadata, { textLength: text.length, textHash: hash(text) }, () =>
+      this.driver.typeText(pageId, text)
+    );
+  }
+
+  async hover(pageId: string, locator: ElementLocator, metadata: MutationMetadata): ReturnType<BrowserDriver['hover']> {
+    return this.mutate(pageId, 'hover', metadata, { locator }, () => this.driver.hover(pageId, locator));
+  }
+
+  async clickAt(pageId: string, x: number, y: number, metadata: MutationMetadata): ReturnType<BrowserDriver['clickAt']> {
+    return this.mutate(pageId, 'click_at', metadata, { x, y }, () => this.driver.clickAt(pageId, x, y));
+  }
+
+  async drag(pageId: string, from: ElementLocator, to: ElementLocator, metadata: MutationMetadata): ReturnType<BrowserDriver['drag']> {
+    return this.mutate(pageId, 'drag', metadata, { from, to }, () => this.driver.drag(pageId, from, to));
+  }
+
+  async handleDialog(
+    pageId: string,
+    accept: boolean,
+    promptText: string | undefined,
+    metadata: MutationMetadata
+  ): ReturnType<BrowserDriver['handleDialog']> {
+    return this.mutate(
+      pageId,
+      'handle_dialog',
+      metadata,
+      { accept, ...(promptText === undefined ? {} : { promptTextLength: promptText.length }) },
+      () => this.driver.handleDialog(pageId, accept, promptText)
     );
   }
 

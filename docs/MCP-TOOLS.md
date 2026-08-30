@@ -20,6 +20,14 @@ All page-specific tools require an explicit Chrome target ID in `pageId`. Tool f
 - `navigate`: per-page FIFO mutation with automatic short lease behavior.
 - `click`: per-page FIFO mutation; clicks an element using a CSS selector, optionally narrowed by visible text.
 - `fill`: per-page FIFO mutation; fills an input, textarea, select, or contenteditable element using a CSS selector.
+- `wait_for`: waits for a CSS selector or visible text without mutating the page.
+- `press_key`: dispatches a key press to the focused element.
+- `type_text`: inserts text into the focused element.
+- `hover`: dispatches hover events for a targeted element.
+- `click_at`: clicks viewport coordinates.
+- `drag`: drags between two targeted elements.
+- `fill_form`: fills multiple CSS-selected controls sequentially.
+- `handle_dialog`: accepts or dismisses an open JavaScript dialog.
 - `run_atomic`: FIFO claim, policy check, navigate, optional URL/title verification, and release. The required idempotency key deduplicates retries.
 
 ## Coordination
@@ -31,4 +39,4 @@ Mutation metadata uses required `agentId`, `taskId`, and `leaseOwnerId`, optiona
 
 ## Error codes
 
-`TAB_NOT_FOUND`, `TAB_PROTECTED`, `LEASE_CONFLICT`, `LEASE_EXPIRED`, `BROWSER_DISCONNECTED`, `NEEDS_HUMAN`, `RESPONSE_BODY_UNAVAILABLE`, `AUTH_REQUIRED`, `INVALID_CONFIG`, `INVALID_SELECTOR`, `ELEMENT_NOT_FOUND`, `IDEMPOTENCY_CONFLICT`, and `INTERNAL_ERROR`.
+`TAB_NOT_FOUND`, `TAB_PROTECTED`, `LEASE_CONFLICT`, `LEASE_EXPIRED`, `BROWSER_DISCONNECTED`, `NEEDS_HUMAN`, `DIALOG_NOT_OPEN`, `WAIT_TIMEOUT`, `RESPONSE_BODY_UNAVAILABLE`, `AUTH_REQUIRED`, `INVALID_CONFIG`, `INVALID_SELECTOR`, `ELEMENT_NOT_FOUND`, `ELEMENT_NOT_INTERACTABLE`, `IDEMPOTENCY_CONFLICT`, and `INTERNAL_ERROR`.

@@ -15,7 +15,7 @@ Codex, Claude Code, Gemini CLI, TeamRoom/Forge agents, and other MCP clients may
 ## MVP scope
 
 - Browser connection and target lifecycle discovery
-- Fourteen MCP tools listed in `MCP-TOOLS.md`
+- Twenty-two MCP tools listed in `MCP-TOOLS.md`
 - Per-page queues and expiring runtime leases
 - Atomic navigate-and-verify operation
 - Accessibility snapshot and PNG/JPEG screenshot
@@ -26,12 +26,12 @@ Codex, Claude Code, Gemini CLI, TeamRoom/Forge agents, and other MCP clients may
 - Protected URL patterns with agent allowlist
 - Unit and mock-CDP integration tests
 - Direct multi-client HTTP support plus a tested stateless stdio-to-HTTP adapter
-- Selector- and text-targeted click plus CSS-selector fill through the shared per-page queue
+- Selector/text/UID targeting, click/fill/form interaction, pointer/keyboard primitives, waits, and JavaScript dialog handling through the shared per-page queue
 - Explicit separation of client session, agent, task, browser session, browser context, page, and lease owner
 
 ## Deferred
 
-Key/typing/drag/scroll primitives, uploads/downloads, dialogs and CAPTCHA resume UX, request interception, browser contexts, full storage/cookie APIs, emulation, traces, screencast, richer atomic action plans, durable multi-process state, natural interaction, and CloakBrowser sessions.
+Scroll, uploads/downloads, richer dialog/CAPTCHA resume UX, request interception, browser contexts, full storage/cookie APIs, emulation, traces, screencast, richer atomic action plans, durable multi-process state, natural interaction, and CloakBrowser sessions.
 
 ## Non-goals
 

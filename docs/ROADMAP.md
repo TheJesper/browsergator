@@ -10,7 +10,7 @@ Direct Codex, Claude Code, Gemini CLI, and TeamRoom configuration; stateless std
 
 ## 0.3 Interaction
 
-Type, key, scroll, drag, dialogs, popup ownership, uploads/downloads, richer DOM targeting, visual stability, and deterministic `natural` mode. Basic selector/text click and CSS-selector fill are available in the current gateway.
+Scroll, popup ownership, uploads/downloads, richer DOM targeting, visual stability, and deterministic `natural` mode. Current gateway support includes selector/text/UID click and fill, waits, keyboard input, hover, coordinate click, drag, form fill, and JavaScript dialog handling.
 
 ## 0.4 DevTools depth
 

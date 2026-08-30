@@ -20,7 +20,7 @@ Tabs are created as individual tabs. Browsergator must never create a tab group 
 
 ## MVP tools
 
-`list_tabs`, `open_tab`, `close_tab`, `navigate`, `click`, `fill`, `snapshot`, `screenshot`, `console_list`, `network_list`, `network_get_response_body`, `claim_tab`, `release_tab`, and `run_atomic`.
+`list_tabs`, `open_tab`, `close_tab`, `navigate`, `click`, `fill`, `wait_for`, `press_key`, `type_text`, `hover`, `click_at`, `drag`, `fill_form`, `handle_dialog`, `snapshot`, `screenshot`, `console_list`, `network_list`, `network_get_response_body`, `claim_tab`, `release_tab`, and `run_atomic`.
 
 ## Requirements
 

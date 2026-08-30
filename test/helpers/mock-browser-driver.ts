@@ -12,7 +12,9 @@ import type {
   NavigationOptions,
   NavigationResult,
   ResponseBodyResult,
-  ScreenshotResult
+  ScreenshotResult,
+  WaitForOptions,
+  WaitResult
 } from '../../src/types.js';
 
 export class MockBrowserDriver implements BrowserDriver {
@@ -123,6 +125,41 @@ export class MockBrowserDriver implements BrowserDriver {
     this.requireTab(pageId);
     if (!locator.selector) throw new GatewayError('ELEMENT_NOT_FOUND', 'Mock fill selector is empty');
     return { pageId, action: 'fill', tagName: 'INPUT', text: locator.selector };
+  }
+
+  async waitFor(pageId: string, options: WaitForOptions): Promise<WaitResult> {
+    this.requireTab(pageId);
+    return { pageId, matched: options.selector ? 'selector' : 'text', value: options.selector ?? options.text ?? '' };
+  }
+
+  async pressKey(pageId: string, key: string): Promise<{ pageId: string; key: string }> {
+    this.requireTab(pageId);
+    return { pageId, key };
+  }
+
+  async typeText(pageId: string, text: string): Promise<{ pageId: string; textLength: number }> {
+    this.requireTab(pageId);
+    return { pageId, textLength: text.length };
+  }
+
+  async hover(pageId: string, locator: ElementLocator): Promise<InteractionResult> {
+    this.requireTab(pageId);
+    return { pageId, action: 'hover', tagName: 'BUTTON', text: locator.text ?? locator.selector ?? locator.uid ?? '' };
+  }
+
+  async clickAt(pageId: string, x: number, y: number): Promise<{ pageId: string; x: number; y: number }> {
+    this.requireTab(pageId);
+    return { pageId, x, y };
+  }
+
+  async drag(pageId: string, _from: ElementLocator, _to: ElementLocator): Promise<InteractionResult> {
+    this.requireTab(pageId);
+    return { pageId, action: 'drag', tagName: 'DRAG', text: 'mock' };
+  }
+
+  async handleDialog(pageId: string, accept: boolean): Promise<{ pageId: string; accepted: boolean }> {
+    this.requireTab(pageId);
+    return { pageId, accepted: accept };
   }
 
   async snapshot(pageId: string, _maxNodes: number): Promise<AccessibilitySnapshot> {

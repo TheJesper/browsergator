@@ -63,6 +63,7 @@ export interface NavigationResult {
 }
 
 export interface ElementLocator {
+  uid?: string;
   selector?: string;
   text?: string;
   exactText?: boolean;
@@ -70,9 +71,21 @@ export interface ElementLocator {
 
 export interface InteractionResult {
   pageId: string;
-  action: 'click' | 'fill';
+  action: 'click' | 'fill' | 'hover' | 'drag';
   tagName: string;
   text: string;
+}
+
+export interface WaitForOptions {
+  selector?: string;
+  text?: string;
+  timeoutMs: number;
+}
+
+export interface WaitResult {
+  pageId: string;
+  matched: 'selector' | 'text';
+  value: string;
 }
 
 export interface ResponseBodyResult {
@@ -90,6 +103,13 @@ export interface BrowserDriver {
   navigate(pageId: string, url: string, options: NavigationOptions): Promise<NavigationResult>;
   click(pageId: string, locator: ElementLocator): Promise<InteractionResult>;
   fill(pageId: string, locator: ElementLocator, value: string): Promise<InteractionResult>;
+  waitFor(pageId: string, options: WaitForOptions): Promise<WaitResult>;
+  pressKey(pageId: string, key: string): Promise<{ pageId: string; key: string }>;
+  typeText(pageId: string, text: string): Promise<{ pageId: string; textLength: number }>;
+  hover(pageId: string, locator: ElementLocator): Promise<InteractionResult>;
+  clickAt(pageId: string, x: number, y: number): Promise<{ pageId: string; x: number; y: number }>;
+  drag(pageId: string, from: ElementLocator, to: ElementLocator): Promise<InteractionResult>;
+  handleDialog(pageId: string, accept: boolean, promptText?: string): Promise<{ pageId: string; accepted: boolean }>;
   snapshot(pageId: string, maxNodes: number): Promise<AccessibilitySnapshot>;
   screenshot(pageId: string, format: 'png' | 'jpeg', quality?: number): Promise<ScreenshotResult>;
   getResponseBody(pageId: string, requestId: string): Promise<ResponseBodyResult>;

@@ -69,6 +69,19 @@ describe('BrowserGateway integration with mock CDP', () => {
     });
   });
 
+  it('supports the interaction primitives through the shared gateway', async () => {
+    const metadata = {
+      context: { agentId: 'a', taskId: 'interaction-2', leaseOwnerId: 'owner-a', clientSessionId: 's1' }
+    };
+    await expect(gateway.waitFor('p1', { selector: '#ready', timeoutMs: 100 })).resolves.toMatchObject({ pageId: 'p1' });
+    await expect(gateway.pressKey('p1', 'Enter', metadata)).resolves.toMatchObject({ key: 'Enter' });
+    await expect(gateway.typeText('p1', 'hello', metadata)).resolves.toMatchObject({ textLength: 5 });
+    await expect(gateway.hover('p1', { selector: '#menu' }, metadata)).resolves.toMatchObject({ action: 'hover' });
+    await expect(gateway.clickAt('p1', 10, 20, metadata)).resolves.toMatchObject({ x: 10, y: 20 });
+    await expect(gateway.drag('p1', { selector: '#from' }, { selector: '#to' }, metadata)).resolves.toMatchObject({ action: 'drag' });
+    await expect(gateway.handleDialog('p1', true, undefined, metadata)).resolves.toMatchObject({ accepted: true });
+  });
+
   it('enforces protected tabs and recovers after a mock disconnect', async () => {
     const beforeReconnect = (await gateway.listTabs())[0];
     expect(beforeReconnect).toMatchObject({

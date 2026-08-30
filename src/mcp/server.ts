@@ -23,6 +23,17 @@ const mutationShape = {
   idempotencyKey: z.string().min(1).max(256).optional()
 };
 
+const locatorShape = {
+  uid: z.string().min(1).max(128).optional(),
+  selector: z.string().min(1).max(2_000).optional(),
+  text: z.string().min(1).max(500).optional(),
+  exactText: z.boolean().default(false)
+};
+
+const locatorSchema = z
+  .object(locatorShape)
+  .refine((value) => Boolean(value.uid || value.selector || value.text), 'locator requires uid, selector, or text');
+
 export function createMcpServer(gateway: BrowserGateway, session: SessionReference): McpServer {
   const server = new McpServer(
     { name: 'browser-gateway', version: '0.2.0' },
@@ -95,25 +106,19 @@ export function createMcpServer(gateway: BrowserGateway, session: SessionReferen
         'Click one element in an explicit page. Locate it with a CSS selector, optionally narrowed by visible text.',
       inputSchema: {
         pageId: z.string().min(1),
-        selector: z.string().min(1).max(2_000).optional(),
-        text: z.string().min(1).max(500).optional(),
-        exactText: z.boolean().default(false),
+        ...locatorShape,
         ...mutationShape
       },
       annotations: { destructiveHint: true, idempotentHint: true }
     },
     async (args) => {
-      if (!args.selector && !args.text) {
-        return errorResult(new GatewayError('INVALID_SELECTOR', 'click requires selector or text'));
+      if (!args.uid && !args.selector && !args.text) {
+        return errorResult(new GatewayError('INVALID_SELECTOR', 'click requires uid, selector, or text'));
       }
       return toolResult(() =>
         gateway.click(
           args.pageId,
-          {
-            ...(args.selector ? { selector: args.selector } : {}),
-            ...(args.text ? { text: args.text } : {}),
-            ...(args.exactText ? { exactText: true } : {})
-          },
+          locatorFromArgs(args),
           mutationMetadata(args, session.clientSessionId)
         )
       );
@@ -126,21 +131,118 @@ export function createMcpServer(gateway: BrowserGateway, session: SessionReferen
       description: 'Fill an input or contenteditable element in an explicit page using a CSS selector.',
       inputSchema: {
         pageId: z.string().min(1),
-        selector: z.string().min(1).max(2_000),
+        ...locatorShape,
         value: z.string().max(20_000),
         ...mutationShape
       },
       annotations: { destructiveHint: true, idempotentHint: true }
     },
-    async (args) =>
-      toolResult(() =>
-        gateway.fill(
-          args.pageId,
-          { selector: args.selector },
-          args.value,
-          mutationMetadata(args, session.clientSessionId)
-        )
-      )
+    async (args) => {
+      if (!args.uid && !args.selector) return errorResult(new GatewayError('INVALID_SELECTOR', 'fill requires uid or selector'));
+      return toolResult(() => gateway.fill(args.pageId, locatorFromArgs(args), args.value, mutationMetadata(args, session.clientSessionId)));
+    }
+  );
+
+  server.registerTool(
+    'wait_for',
+    {
+      description: 'Wait for a CSS selector or visible text to appear in an explicit page.',
+      inputSchema: {
+        pageId: z.string().min(1),
+        selector: z.string().min(1).max(2_000).optional(),
+        text: z.string().min(1).max(2_000).optional(),
+        timeoutMs: z.number().int().min(100).max(60_000).default(15_000)
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true }
+    },
+    async (args) => {
+      if (!args.selector && !args.text) return errorResult(new GatewayError('INVALID_SELECTOR', 'wait_for requires selector or text'));
+      return toolResult(() => gateway.waitFor(args.pageId, { ...(args.selector ? { selector: args.selector } : {}), ...(args.text ? { text: args.text } : {}), timeoutMs: args.timeoutMs }));
+    }
+  );
+
+  server.registerTool(
+    'press_key',
+    {
+      description: 'Dispatch a key press to the focused element in an explicit page.',
+      inputSchema: { pageId: z.string().min(1), key: z.string().min(1).max(100), ...mutationShape },
+      annotations: { destructiveHint: true, idempotentHint: true }
+    },
+    async (args) => toolResult(() => gateway.pressKey(args.pageId, args.key, mutationMetadata(args, session.clientSessionId)))
+  );
+
+  server.registerTool(
+    'type_text',
+    {
+      description: 'Insert text into the currently focused element in an explicit page.',
+      inputSchema: { pageId: z.string().min(1), text: z.string().max(20_000), ...mutationShape },
+      annotations: { destructiveHint: true, idempotentHint: true }
+    },
+    async (args) => toolResult(() => gateway.typeText(args.pageId, args.text, mutationMetadata(args, session.clientSessionId)))
+  );
+
+  server.registerTool(
+    'hover',
+    {
+      description: 'Hover an element using a snapshot uid, CSS selector, or visible text.',
+      inputSchema: { pageId: z.string().min(1), ...locatorShape, ...mutationShape },
+      annotations: { destructiveHint: true, idempotentHint: true }
+    },
+    async (args) => toolResult(() => gateway.hover(args.pageId, locatorFromArgs(args), mutationMetadata(args, session.clientSessionId)))
+  );
+
+  server.registerTool(
+    'click_at',
+    {
+      description: 'Click at viewport coordinates in an explicit page.',
+      inputSchema: { pageId: z.string().min(1), x: z.number().finite(), y: z.number().finite(), ...mutationShape },
+      annotations: { destructiveHint: true, idempotentHint: true }
+    },
+    async (args) => toolResult(() => gateway.clickAt(args.pageId, args.x, args.y, mutationMetadata(args, session.clientSessionId)))
+  );
+
+  server.registerTool(
+    'drag',
+    {
+      description: 'Drag from one element to another using snapshot uids, CSS selectors, or visible text.',
+      inputSchema: {
+        pageId: z.string().min(1),
+        from: locatorSchema,
+        to: locatorSchema,
+        ...mutationShape
+      },
+      annotations: { destructiveHint: true, idempotentHint: true }
+    },
+    async (args) => toolResult(() => gateway.drag(args.pageId, args.from, args.to, mutationMetadata(args, session.clientSessionId)))
+  );
+
+  server.registerTool(
+    'fill_form',
+    {
+      description: 'Fill multiple CSS-selected form controls sequentially in one explicit page.',
+      inputSchema: {
+        pageId: z.string().min(1),
+        elements: z.array(z.object({ selector: z.string().min(1).max(2_000), value: z.string().max(20_000) })).min(1).max(100),
+        ...mutationShape
+      },
+      annotations: { destructiveHint: true, idempotentHint: true }
+    },
+    async (args) => toolResult(async () => {
+      const metadata = mutationMetadata(args, session.clientSessionId);
+      const results = [];
+      for (const element of args.elements) results.push(await gateway.fill(args.pageId, { selector: element.selector }, element.value, { ...metadata, idempotencyKey: undefined }));
+      return { pageId: args.pageId, count: results.length, results };
+    })
+  );
+
+  server.registerTool(
+    'handle_dialog',
+    {
+      description: 'Accept or dismiss the currently open JavaScript dialog in an explicit page.',
+      inputSchema: { pageId: z.string().min(1), accept: z.boolean(), promptText: z.string().max(2_000).optional(), ...mutationShape },
+      annotations: { destructiveHint: true, idempotentHint: true }
+    },
+    async (args) => toolResult(() => gateway.handleDialog(args.pageId, args.accept, args.promptText, mutationMetadata(args, session.clientSessionId)))
   );
 
   server.registerTool(
@@ -324,6 +426,20 @@ function mutationMetadata(
     context: agentContext(value, clientSessionId),
     ...(value.leaseId ? { leaseId: value.leaseId } : {}),
     ...(value.idempotencyKey ? { idempotencyKey: value.idempotencyKey } : {})
+  };
+}
+
+function locatorFromArgs(value: {
+  uid?: string;
+  selector?: string;
+  text?: string;
+  exactText?: boolean;
+}): { uid?: string; selector?: string; text?: string; exactText?: boolean } {
+  return {
+    ...(value.uid ? { uid: value.uid } : {}),
+    ...(value.selector ? { selector: value.selector } : {}),
+    ...(value.text ? { text: value.text } : {}),
+    ...(value.exactText ? { exactText: true } : {})
   };
 }
 

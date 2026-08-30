@@ -16,7 +16,9 @@ import type {
   NavigationOptions,
   NavigationResult,
   ResponseBodyResult,
-  ScreenshotResult
+  ScreenshotResult,
+  WaitForOptions,
+  WaitResult
 } from '../types.js';
 import { log } from '../core/logger.js';
 
@@ -179,14 +181,89 @@ export class WebSocketCdpDriver implements BrowserDriver {
 
   async click(pageId: string, locator: ElementLocator): Promise<InteractionResult> {
     const sessionId = this.requireSession(pageId);
-    const result = await this.evaluateInteraction(sessionId, clickExpression(locator));
-    return interactionResult(pageId, 'click', result);
+    const result = await this.evaluateInteraction(sessionId, locator, clickAction());
+    return interactionResult(pageId, 'hover', result);
   }
 
   async fill(pageId: string, locator: ElementLocator, value: string): Promise<InteractionResult> {
     const sessionId = this.requireSession(pageId);
-    const result = await this.evaluateInteraction(sessionId, fillExpression(locator, value));
+    const result = await this.evaluateInteraction(sessionId, locator, fillAction(value));
     return interactionResult(pageId, 'fill', result);
+  }
+
+  async waitFor(pageId: string, options: WaitForOptions): Promise<WaitResult> {
+    const sessionId = this.requireSession(pageId);
+    if (!options.selector && !options.text) {
+      throw new GatewayError('INVALID_SELECTOR', 'wait_for requires selector or text');
+    }
+    const deadline = Date.now() + options.timeoutMs;
+    while (Date.now() < deadline) {
+      const result = await this.send(
+        'Runtime.evaluate',
+        { expression: waitExpression(options), returnByValue: true, awaitPromise: true },
+        sessionId
+      );
+      const value = result['result']?.value as { matched?: unknown; value?: unknown } | undefined;
+      if (value?.matched === true) {
+        return {
+          pageId,
+          matched: options.selector ? 'selector' : 'text',
+          value: String(value.value ?? options.selector ?? options.text ?? '')
+        };
+      }
+      await delay(50);
+    }
+    throw new GatewayError('WAIT_TIMEOUT', `Timed out waiting after ${options.timeoutMs}ms`, {
+      pageId,
+      ...(options.selector ? { selector: options.selector } : {}),
+      ...(options.text ? { text: options.text } : {})
+    });
+  }
+
+  async pressKey(pageId: string, key: string): Promise<{ pageId: string; key: string }> {
+    const sessionId = this.requireSession(pageId);
+    await this.send('Input.dispatchKeyEvent', { type: 'keyDown', key }, sessionId);
+    await this.send('Input.dispatchKeyEvent', { type: 'keyUp', key }, sessionId);
+    return { pageId, key };
+  }
+
+  async typeText(pageId: string, text: string): Promise<{ pageId: string; textLength: number }> {
+    const sessionId = this.requireSession(pageId);
+    await this.send('Input.insertText', { text }, sessionId);
+    return { pageId, textLength: text.length };
+  }
+
+  async hover(pageId: string, locator: ElementLocator): Promise<InteractionResult> {
+    const sessionId = this.requireSession(pageId);
+    const result = await this.evaluateInteraction(sessionId, locator, hoverAction());
+    return interactionResult(pageId, 'click', result);
+  }
+
+  async clickAt(pageId: string, x: number, y: number): Promise<{ pageId: string; x: number; y: number }> {
+    const sessionId = this.requireSession(pageId);
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y }, sessionId);
+    await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }, sessionId);
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }, sessionId);
+    return { pageId, x, y };
+  }
+
+  async drag(pageId: string, from: ElementLocator, to: ElementLocator): Promise<InteractionResult> {
+    const sessionId = this.requireSession(pageId);
+    const start = await this.elementCenter(sessionId, from);
+    const end = await this.elementCenter(sessionId, to);
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x, y: start.y }, sessionId);
+    await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', clickCount: 1 }, sessionId);
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: end.x, y: end.y, button: 'left', buttons: 1 }, sessionId);
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: end.x, y: end.y, button: 'left', clickCount: 1 }, sessionId);
+    return { pageId, action: 'drag', tagName: 'DRAG', text: `${start.x},${start.y}->${end.x},${end.y}` };
+  }
+
+  async handleDialog(pageId: string, accept: boolean, promptText?: string): Promise<{ pageId: string; accepted: boolean }> {
+    const sessionId = this.requireSession(pageId);
+    if (!this.dialogs.has(pageId)) throw new GatewayError('DIALOG_NOT_OPEN', 'No JavaScript dialog is open', { pageId });
+    await this.send('Page.handleJavaScriptDialog', { accept, ...(promptText === undefined ? {} : { promptText }) }, sessionId);
+    this.dialogs.delete(pageId);
+    return { pageId, accepted: accept };
   }
 
   async snapshot(pageId: string, maxNodes: number): Promise<AccessibilitySnapshot> {
@@ -195,6 +272,7 @@ export class WebSocketCdpDriver implements BrowserDriver {
     const allNodes = Array.isArray(result['nodes']) ? result['nodes'] : [];
     const nodes = allNodes.slice(0, maxNodes).map((node: Record<string, any>) => ({
       nodeId: node['nodeId'],
+      ...(node['backendDOMNodeId'] ? { uid: String(node['backendDOMNodeId']) } : {}),
       ...(node['backendDOMNodeId'] ? { backendDOMNodeId: node['backendDOMNodeId'] } : {}),
       ignored: Boolean(node['ignored']),
       role: axValue(node['role']),
@@ -253,13 +331,45 @@ export class WebSocketCdpDriver implements BrowserDriver {
 
   private async evaluateInteraction(
     sessionId: string,
-    expression: string
+    locator: ElementLocator,
+    action: string
   ): Promise<Record<string, unknown>> {
-    const result = await this.send(
-      'Runtime.evaluate',
-      { expression, returnByValue: true, awaitPromise: true, userGesture: true },
-      sessionId
+    if (locator.uid !== undefined) {
+      const backendDOMNodeId = Number(locator.uid);
+      if (!Number.isInteger(backendDOMNodeId) || backendDOMNodeId <= 0) {
+        throw new GatewayError('INVALID_SELECTOR', 'The element uid is invalid', { uid: locator.uid });
+      }
+      const resolved = await this.send('DOM.resolveNode', { backendNodeId: backendDOMNodeId }, sessionId);
+      const objectId = resolved['object']?.['objectId'];
+      if (typeof objectId !== 'string') throw new GatewayError('ELEMENT_NOT_FOUND', 'The element uid is stale');
+      try {
+        return this.extractEvaluation(
+          await this.send(
+            'Runtime.callFunctionOn',
+            {
+              objectId,
+              functionDeclaration: `function() { ${action} }`,
+              returnByValue: true,
+              awaitPromise: true,
+              userGesture: true
+            },
+            sessionId
+          )
+        );
+      } finally {
+        await this.send('Runtime.releaseObject', { objectId }, sessionId).catch(() => undefined);
+      }
+    }
+    return this.extractEvaluation(
+      await this.send(
+        'Runtime.evaluate',
+        { expression: elementExpression(locator, action), returnByValue: true, awaitPromise: true, userGesture: true },
+        sessionId
+      )
     );
+  }
+
+  private extractEvaluation(result: Record<string, any>): Record<string, unknown> {
     const exception = result['exceptionDetails'] as { text?: unknown; exception?: { description?: unknown } } | undefined;
     if (exception) {
       throw new GatewayError(
@@ -272,6 +382,19 @@ export class WebSocketCdpDriver implements BrowserDriver {
       throw new GatewayError('ELEMENT_NOT_FOUND', 'No matching element was found');
     }
     return value as Record<string, unknown>;
+  }
+
+  private async elementCenter(
+    sessionId: string,
+    locator: ElementLocator
+  ): Promise<{ x: number; y: number }> {
+    const result = await this.evaluateInteraction(
+      sessionId,
+      locator,
+      `const element = this; const rect = element.getBoundingClientRect(); return { ok: rect.width > 0 && rect.height > 0, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };`
+    );
+    if (result['ok'] !== true) throw new GatewayError('ELEMENT_NOT_INTERACTABLE', 'Element has no visible bounds');
+    return { x: Number(result['x']), y: Number(result['y']) };
   }
 
   private async connect(): Promise<void> {
@@ -582,22 +705,19 @@ export class WebSocketCdpDriver implements BrowserDriver {
   }
 }
 
-function clickExpression(locator: ElementLocator): string {
-  return elementExpression(
-    locator,
-    `
+function clickAction(): string {
+  return `
+    const element = this;
     if (!(element instanceof HTMLElement)) return { ok: false, reason: 'not-interactable' };
     element.scrollIntoView({ block: 'center', inline: 'center' });
     element.click();
     return { ok: true, tagName: element.tagName, text: (element.innerText || element.textContent || '').trim().slice(0, 500) };
-  `
-  );
+  `;
 }
 
-function fillExpression(locator: ElementLocator, value: string): string {
-  return elementExpression(
-    locator,
-    `
+function fillAction(value: string): string {
+  return `
+    const element = this;
     if (!(element instanceof HTMLElement)) return { ok: false, reason: 'not-interactable' };
     if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement || element.isContentEditable)) {
       return { ok: false, reason: 'not-fillable' };
@@ -616,15 +736,25 @@ function fillExpression(locator: ElementLocator, value: string): string {
     element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: nextValue }));
     element.dispatchEvent(new Event('change', { bubbles: true }));
     return { ok: true, tagName: element.tagName, text: (element.value || element.textContent || '').trim().slice(0, 500) };
-  `
-  );
+  `;
+}
+
+function hoverAction(): string {
+  return `
+    const element = this;
+    if (!(element instanceof HTMLElement)) return { ok: false, reason: 'not-interactable' };
+    element.scrollIntoView({ block: 'center', inline: 'center' });
+    element.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    element.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    return { ok: true, tagName: element.tagName, text: (element.innerText || element.textContent || '').trim().slice(0, 500) };
+  `;
 }
 
 function elementExpression(locator: ElementLocator, action: string): string {
   const selector = JSON.stringify(locator.selector ?? null);
   const text = JSON.stringify(locator.text ?? null);
   const exactText = locator.exactText === true;
-  return `(() => {
+  return `(function() {
     const selector = ${selector};
     const text = ${text};
     const exactText = ${exactText};
@@ -638,17 +768,29 @@ function elementExpression(locator: ElementLocator, action: string): string {
           return exactText ? candidateText === text : candidateText.includes(text);
         });
     if (!element) return { ok: false, reason: 'not-found' };
-    ${action}
+    return (function() { ${action} }).call(element);
   })()`;
 }
 
-function interactionResult(pageId: string, action: 'click' | 'fill', result: Record<string, unknown>): InteractionResult {
+function waitExpression(options: WaitForOptions): string {
+  const selector = JSON.stringify(options.selector ?? null);
+  const text = JSON.stringify(options.text ?? null);
+  return `(() => {
+    const selector = ${selector};
+    const text = ${text};
+    if (selector !== null) return { matched: Boolean(document.querySelector(selector)), value: selector };
+    const bodyText = String(document.body?.innerText || document.documentElement?.innerText || '');
+    return { matched: bodyText.includes(text), value: text };
+  })()`;
+}
+
+function interactionResult(pageId: string, action: 'click' | 'fill' | 'hover' | 'drag', result: Record<string, unknown>): InteractionResult {
   if (result['ok'] !== true) {
     const reason = String(result['reason'] ?? 'not-found');
     if (reason === 'not-found') {
       throw new GatewayError('ELEMENT_NOT_FOUND', 'No matching element was found', { pageId });
     }
-    throw new GatewayError('ELEMENT_NOT_FOUND', 'The matching element cannot be interacted with', {
+    throw new GatewayError('ELEMENT_NOT_INTERACTABLE', 'The matching element cannot be interacted with', {
       pageId,
       reason
     });
