@@ -80,6 +80,10 @@ Equivalent project `.mcp.json` when user scope is not wanted:
 
 Claude Code may host several subagents behind one MCP client connection. Each subagent must still send its own `agentId`, `taskId`, and `leaseOwnerId` in tool calls.
 
+### Avoid Claude's separate Chrome DevTools plugin
+
+Claude's optional `chrome-devtools-mcp@claude-plugins-official` plugin is a different MCP server. It can start its own browser integration and create per-session Chrome tab groups; Browsergator does not create tab groups. When Browsergator is the intended browser service, disable that plugin in `C:\\Users\\<user>\\.claude\\settings.json` and leave only `browser-gateway` as the browser MCP entry. Restart Claude Code after changing the setting.
+
 ## Gemini CLI
 
 Preferred user-scope setup. As with Claude, the single quotes preserve environment expansion for Gemini's settings loader:
