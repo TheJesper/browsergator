@@ -23,6 +23,13 @@ export class MockBrowserDriver implements BrowserDriver {
   readonly activeByPage = new Map<string, number>();
   readonly maxActiveByPage = new Map<string, number>();
   readonly responseBodies = new Map<string, ResponseBodyResult>();
+  readonly evaluateResults = new Map<string, unknown>();
+  defaultEvaluateResult: unknown = null;
+  storage: { local: Record<string, string>; session: Record<string, string>; cookies: string } = {
+    local: {},
+    session: {},
+    cookies: ''
+  };
   activeGlobal = 0;
   maxActiveGlobal = 0;
   navigationDelayMs = 0;
@@ -187,6 +194,20 @@ export class MockBrowserDriver implements BrowserDriver {
   async inspectPage(pageId: string): Promise<{ url: string; title: string }> {
     const tab = this.requireTab(pageId);
     return { url: tab.url, title: tab.title };
+  }
+
+  async evaluate(pageId: string, expression: string): Promise<unknown> {
+    this.requireTab(pageId);
+    const scripted = this.evaluateResults.get(expression);
+    if (scripted !== undefined) return scripted;
+    return this.defaultEvaluateResult;
+  }
+
+  async readStorage(
+    pageId: string
+  ): Promise<{ local: Record<string, string>; session: Record<string, string>; cookies: string }> {
+    this.requireTab(pageId);
+    return this.storage;
   }
 
   disconnect(): void {

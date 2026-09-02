@@ -7,3 +7,8 @@ coverage/
 *.log
 *.tsbuildinfo
 docs/HANDOVER-CLAUDE.md
+
+# Chrome/browser profile dirs -- may hold cookies, tokens, session data
+.chrome-demo-profile/
+*-profile/
+.cache/

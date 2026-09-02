@@ -286,6 +286,61 @@ export function createMcpServer(gateway: BrowserGateway, session: SessionReferen
   );
 
   server.registerTool(
+    'evaluate',
+    {
+      description:
+        'Run JavaScript in one explicit page and return the (redacted) result. Set write=true for any mutating script (DOM changes, POST, storage writes). A mutating evaluate on a non-local environment (test/ci/qa/staging/prod or any remote host) is BLOCKED unless confirm=true -- ask the user to approve first. Reads are allowed on any environment.',
+      inputSchema: {
+        pageId: z.string().min(1),
+        expression: z.string().min(1).max(20000),
+        write: z.boolean().default(false),
+        confirm: z.boolean().default(false),
+        ...mutationShape
+      },
+      annotations: { readOnlyHint: false, idempotentHint: false }
+    },
+    async (args) =>
+      toolResult(() =>
+        gateway.evaluate(
+          args.pageId,
+          args.expression,
+          { write: args.write, confirm: args.confirm },
+          {
+            context: agentContext(args, session.clientSessionId),
+            ...(args.leaseId ? { leaseId: args.leaseId } : {}),
+            ...(args.idempotencyKey ? { idempotencyKey: args.idempotencyKey } : {})
+          }
+        )
+      )
+  );
+
+  server.registerTool(
+    'get_storage',
+    {
+      description:
+        'Read localStorage, sessionStorage and (optionally) cookies for one explicit page. Read-only; output passes through redaction so tokens/secrets are masked. Set includeCookies=true only when cookies are actually needed.',
+      inputSchema: {
+        pageId: z.string().min(1),
+        includeCookies: z.boolean().default(false)
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true }
+    },
+    async ({ pageId, includeCookies }) =>
+      toolResult(() => gateway.readStorage(pageId, { cookies: includeCookies }))
+  );
+
+  server.registerTool(
+    'classify_environment',
+    {
+      description:
+        'Classify one explicit page as local / test / remote / prod for write-safety awareness. Use before a mutating action to decide whether user approval is needed.',
+      inputSchema: { pageId: z.string().min(1) },
+      annotations: { readOnlyHint: true, idempotentHint: true }
+    },
+    async ({ pageId }) => toolResult(() => gateway.classifyPage(pageId))
+  );
+
+  server.registerTool(
     'console_list',
     {
       description: 'List bounded observed console, log, and exception events for one explicit page.',

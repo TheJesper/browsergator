@@ -14,6 +14,8 @@ export type GatewayErrorCode =
   | 'WAIT_TIMEOUT'
   | 'DIALOG_NOT_OPEN'
   | 'IDEMPOTENCY_CONFLICT'
+  | 'EVALUATE_FAILED'
+  | 'WRITE_CONFIRM_REQUIRED'
   | 'INTERNAL_ERROR';
 
 export class GatewayError extends Error {

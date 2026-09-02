@@ -16,6 +16,7 @@ import { IdempotencyStore } from './core/idempotency-store.js';
 import { LeaseManager, type RuntimeLease } from './core/lease-manager.js';
 import { PerTabFifo } from './core/per-tab-fifo.js';
 import { ProtectedTabPolicy } from './core/policy.js';
+import { EnvironmentPolicy, type EnvironmentDecision } from './core/environment.js';
 import { redact } from './core/redaction.js';
 import { RingBuffer } from './core/ring-buffer.js';
 
@@ -56,6 +57,7 @@ export class BrowserGateway {
   readonly leases: LeaseManager;
   readonly queue = new PerTabFifo();
   readonly policy: ProtectedTabPolicy;
+  readonly environment = new EnvironmentPolicy();
   private readonly idempotency = new IdempotencyStore();
   private readonly consoleEvents = new Map<string, RingBuffer<BrowserEvent>>();
   private readonly networkEvents = new Map<string, RingBuffer<BrowserEvent>>();
@@ -232,6 +234,70 @@ export class BrowserGateway {
     await this.requireTab(pageId);
     return this.driver.screenshot(pageId, format, quality);
   }
+
+  /** Classify a page's environment tier (local/test/remote/prod) for write-safety gating. */
+  async classifyPage(pageId: string): Promise<EnvironmentDecision> {
+    const tab = await this.requireTab(pageId);
+    return this.environment.classify(tab.url);
+  }
+
+  /**
+   * Run JavaScript in a page. `write=true` marks the call as mutating: it passes
+   * through the protected-tab policy AND the environment gate. On a non-local
+   * environment a mutating evaluate requires confirm=true, otherwise it is blocked
+   * with a warning the agent must relay to the user. Output is redacted.
+   */
+  async evaluate(
+    pageId: string,
+    expression: string,
+    options: { write: boolean; confirm: boolean },
+    metadata: MutationMetadata
+  ): Promise<{ pageId: string; value: unknown; environment: EnvironmentDecision }> {
+    const tab = await this.requireTab(pageId);
+    const environment = this.environment.classify(tab.url);
+
+    if (!options.write) {
+      // Read-only evaluate: no lease, no environment gate. Output redacted.
+      const value = await this.driver.evaluate(pageId, expression);
+      return { pageId, value: redact(value), environment };
+    }
+
+    // Mutating evaluate: protected-tab policy + environment confirm gate + lease (via mutate).
+    this.policy.assertMutationAllowed(tab.url, metadata.context.agentId);
+    if (environment.writeNeedsConfirm && !options.confirm) {
+      throw new GatewayError('WRITE_CONFIRM_REQUIRED', environment.reason, {
+        pageId,
+        tier: environment.tier,
+        host: environment.host,
+        hint: 'This is a mutating evaluate on a non-local environment. Ask the user to approve, then retry with confirm=true.'
+      });
+    }
+    const value = await this.mutate(
+      pageId,
+      'evaluate_write',
+      metadata,
+      { tier: environment.tier, host: environment.host, expressionHash: hash(expression) },
+      () => this.driver.evaluate(pageId, expression)
+    );
+    return { pageId, value: redact(value), environment };
+  }
+
+  /** Read localStorage, sessionStorage and cookies. Read-only; output redacted. */
+  async readStorage(
+    pageId: string,
+    include: { cookies: boolean }
+  ): Promise<{ pageId: string; local: Record<string, string>; session: Record<string, string>; cookies: string; environment: EnvironmentDecision }> {
+    const tab = await this.requireTab(pageId);
+    const environment = this.environment.classify(tab.url);
+    const raw = await this.driver.readStorage(pageId);
+    const safe = redact({
+      local: raw.local,
+      session: raw.session,
+      cookies: include.cookies ? raw.cookies : '[OMITTED]'
+    }) as { local: Record<string, string>; session: Record<string, string>; cookies: string };
+    return { pageId, ...safe, environment };
+  }
+
 
   consoleList(pageId: string, limit = 100): BrowserEvent[] {
     return this.consoleEvents.get(pageId)?.values(limit) ?? [];

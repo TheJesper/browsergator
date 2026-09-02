@@ -51,6 +51,18 @@ export interface ScreenshotResult {
   data: string;
 }
 
+export interface EvaluateResult {
+  pageId: string;
+  value: unknown;
+}
+
+export interface StorageResult {
+  pageId: string;
+  local: Record<string, string>;
+  session: Record<string, string>;
+  cookies: string;
+}
+
 export interface NavigationOptions {
   waitUntil: 'none' | 'domcontentloaded' | 'load' | 'networkidle';
   timeoutMs: number;
@@ -114,5 +126,7 @@ export interface BrowserDriver {
   screenshot(pageId: string, format: 'png' | 'jpeg', quality?: number): Promise<ScreenshotResult>;
   getResponseBody(pageId: string, requestId: string): Promise<ResponseBodyResult>;
   inspectPage(pageId: string): Promise<{ url: string; title: string }>;
+  evaluate(pageId: string, expression: string): Promise<unknown>;
+  readStorage(pageId: string): Promise<{ local: Record<string, string>; session: Record<string, string>; cookies: string }>;
   onEvent(listener: (event: BrowserEvent) => void): () => void;
 }

@@ -329,6 +329,42 @@ export class WebSocketCdpDriver implements BrowserDriver {
     return { url: String(value?.url ?? ''), title: String(value?.title ?? '') };
   }
 
+  async evaluate(pageId: string, expression: string): Promise<unknown> {
+    const sessionId = this.requireSession(pageId);
+    const result = await this.send(
+      'Runtime.evaluate',
+      { expression, returnByValue: true, awaitPromise: true },
+      sessionId
+    );
+    const exception = result['exceptionDetails'] as
+      | { exception?: { description?: string }; text?: string }
+      | undefined;
+    if (exception) {
+      throw new GatewayError(
+        'EVALUATE_FAILED',
+        String(exception.exception?.description ?? exception.text ?? 'Expression evaluation failed'),
+        { pageId }
+      );
+    }
+    return result['result']?.value;
+  }
+
+  async readStorage(pageId: string): Promise<{ local: Record<string, string>; session: Record<string, string>; cookies: string }> {
+    const value = (await this.evaluate(
+      pageId,
+      '({' +
+        'local: Object.fromEntries(Object.entries(localStorage)),' +
+        'session: Object.fromEntries(Object.entries(sessionStorage)),' +
+        'cookies: document.cookie' +
+        '})'
+    )) as { local?: Record<string, string>; session?: Record<string, string>; cookies?: string } | undefined;
+    return {
+      local: value?.local ?? {},
+      session: value?.session ?? {},
+      cookies: String(value?.cookies ?? '')
+    };
+  }
+
   private async evaluateInteraction(
     sessionId: string,
     locator: ElementLocator,

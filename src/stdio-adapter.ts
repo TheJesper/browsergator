@@ -34,14 +34,28 @@ export async function runStdioAdapter(options = optionsFromEnvironment()): Promi
   server.setRequestHandler(CallToolRequestSchema, async (request) =>
     upstream.callTool(request.params)
   );
+  // Guard: on Node 24 / Windows the Streamable HTTP (SSE) transport can hit a
+  // libuv "UV_HANDLE_CLOSING" assertion if its async handle is closed twice.
+  // Close the upstream at most once, and never re-enter from onclose + signals.
+  let upstreamClosed = false;
+  const closeUpstreamOnce = async (): Promise<void> => {
+    if (upstreamClosed) return;
+    upstreamClosed = true;
+    await upstream.close().catch((error) => writeError(error));
+  };
+
   server.onclose = () => {
-    void upstream.close().catch((error) => writeError(error));
+    void closeUpstreamOnce();
   };
 
   const stdio = new StdioServerTransport();
   const shutdown = async (): Promise<void> => {
     await server.close().catch(() => undefined);
-    await upstream.close().catch(() => undefined);
+    await closeUpstreamOnce();
+    // On Node 24 / Windows, letting the event loop drain the SSE keep-alive
+    // handle can trip a libuv assertion. Exit deterministically once the
+    // transports are closed.
+    process.exit(0);
   };
   process.once('SIGINT', () => void shutdown());
   process.once('SIGTERM', () => void shutdown());
