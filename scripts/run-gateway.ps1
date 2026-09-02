@@ -1,38 +1,26 @@
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    Windows convenience launcher for the Browsergator gateway.
+.DESCRIPTION
+    Delegates to the portable Node launcher (scripts/run-gateway.mjs) so there is a
+    single source of truth and no hardcoded interpreter path. Node is resolved from
+    PATH, so this works with system installs, nvm4w, fnm, winget, and Scoop.
+
+    Configuration/secrets come from the ambient environment or a project-root .env
+    file (loaded by the gateway). This script no longer reads a Windows User-scope
+    registry variable and no longer hardcodes C:\Program Files\nodejs\node.exe.
+.EXAMPLE
+    ./scripts/run-gateway.ps1
+    ./scripts/run-gateway.ps1 --dev
+#>
 $ErrorActionPreference = 'Stop'
 
-$projectRoot = Split-Path -Parent $PSScriptRoot
-$nodePath = 'C:\Program Files\nodejs\node.exe'
-$entrypoint = Join-Path $projectRoot 'dist\index.js'
-$dataDirectory = Join-Path $projectRoot '.data'
-
-if (-not (Test-Path -LiteralPath $nodePath)) {
-    throw "Node.js was not found at $nodePath"
+$node = Get-Command node -ErrorAction SilentlyContinue
+if ($null -eq $node) {
+    throw "Node.js was not found on PATH. Install Node 22.12+ (system, nvm4w, fnm, winget, or Scoop)."
 }
 
-if (-not (Test-Path -LiteralPath $entrypoint)) {
-    throw "Browser Gateway is not built. Missing $entrypoint"
-}
-
-$token = [Environment]::GetEnvironmentVariable('BROWSER_GATEWAY_TOKEN', 'User')
-if ([string]::IsNullOrWhiteSpace($token)) {
-    throw 'The user-level BROWSER_GATEWAY_TOKEN environment variable is missing.'
-}
-
-New-Item -ItemType Directory -Path $dataDirectory -Force | Out-Null
-$env:BROWSER_GATEWAY_TOKEN = $token
-$env:BROWSER_GATEWAY_HOST = '127.0.0.1'
-$env:BROWSER_GATEWAY_PORT = '8788'
-$env:BROWSER_GATEWAY_BROWSER_URL = 'http://127.0.0.1:9222'
-$env:BROWSER_GATEWAY_DATA_DIR = $dataDirectory
-
-Set-Location -LiteralPath $projectRoot
-$process = Start-Process `
-    -FilePath $nodePath `
-    -ArgumentList @($entrypoint) `
-    -WorkingDirectory $projectRoot `
-    -WindowStyle Hidden `
-    -RedirectStandardOutput (Join-Path $dataDirectory 'service.stdout.log') `
-    -RedirectStandardError (Join-Path $dataDirectory 'service.stderr.log') `
-    -Wait `
-    -PassThru
-exit $process.ExitCode
+$launcher = Join-Path $PSScriptRoot 'run-gateway.mjs'
+& $node.Source $launcher @args
+exit $LASTEXITCODE

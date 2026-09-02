@@ -18,9 +18,15 @@ The stdio adapter is only a transport bridge. It opens one upstream MCP client s
 
 ## Shared prerequisite
 
-In PowerShell, set the token in the parent environment before starting clients:
+Set the token in the parent environment before starting clients, or place it in a project-root `.env` file (see `.env.example`).
+
+```bash
+# bash / zsh
+export BROWSER_GATEWAY_TOKEN='<same-long-token-used-by-the-gateway>'
+```
 
 ```powershell
+# PowerShell
 $env:BROWSER_GATEWAY_TOKEN = '<same-long-token-used-by-the-gateway>'
 ```
 
@@ -123,8 +129,8 @@ copilot mcp add `
   --env BROWSER_GATEWAY_TOKEN='<injected-secret>' `
   --tools '*' --timeout 60000 `
   browser-gateway -- `
-  'C:\Program Files\nodejs\node.exe' `
-  '<repo-root>\dist\stdio-adapter.js'
+  node `
+  '<repo-root>/dist/stdio-adapter.js'
 copilot mcp get browser-gateway
 ```
 
@@ -140,19 +146,19 @@ If a Forge runner is changed to a client that only accepts stdio, use the adapte
 
 Build once:
 
-```powershell
+```text
 cd <repo-root>
 npm run build
 ```
 
-Use this standard MCP server entry in the client's stdio configuration:
+Use this standard MCP server entry in the client's stdio configuration. `command` is `node` (resolved from PATH) with a forward-slash path that works on every OS:
 
 ```json
 {
   "mcpServers": {
     "browser-gateway": {
-      "command": "C:\\Program Files\\nodejs\\node.exe",
-      "args": ["<repo-root>\\dist\\stdio-adapter.js"],
+      "command": "node",
+      "args": ["<repo-root>/dist/stdio-adapter.js"],
       "env": {
         "BROWSER_GATEWAY_URL": "http://127.0.0.1:8788/mcp",
         "BROWSER_GATEWAY_TOKEN": "${BROWSER_GATEWAY_TOKEN}"
@@ -178,9 +184,23 @@ Suggested convention: `agentId=claude:<project>:<agent>`, `taskId=<orchestrator-
 
 ## Connection checks
 
+Health and readiness endpoints (POSIX `curl` and PowerShell `Invoke-RestMethod`):
+
+```bash
+# bash / zsh
+curl http://127.0.0.1:8788/healthz
+curl http://127.0.0.1:8788/readyz
+```
+
 ```powershell
+# PowerShell
 Invoke-RestMethod http://127.0.0.1:8788/healthz
 Invoke-RestMethod http://127.0.0.1:8788/readyz
+```
+
+Per-client listings:
+
+```text
 codex mcp list
 claude mcp list
 gemini mcp list
@@ -189,8 +209,79 @@ copilot mcp get browser-gateway
 
 Only one gateway service should listen on port 8788. Client and adapter process counts may be greater than one.
 
-## Installed Windows singleton
+## Persistent service (per OS)
 
-The supported local deployment uses the `Browser Gateway` scheduled task at user logon. It runs `scripts/run-gateway.ps1`, which loads `BROWSER_GATEWAY_TOKEN` from the user's environment, fixes the gateway and CDP endpoints to loopback, and writes redacted operational logs under `.data`. Task Scheduler is configured to ignore duplicate starts and restart after failures.
+The gateway runs in the foreground under `npm run serve` (or `node scripts/run-gateway.mjs`). For a long-lived service, use the native supervisor for your OS. All three point at the same portable launcher and read the token from the environment or a `.env` file.
+
+### Windows -- Task Scheduler
+
+Run `scripts/run-gateway.ps1` (resolves Node from PATH and delegates to `run-gateway.mjs`) or `node scripts\run-gateway.mjs` at user logon. Configure the task to ignore duplicate starts and restart after failure. The gateway's singleton lock prevents a second live instance.
+
+### macOS -- launchd (user agent)
+
+Create `~/Library/LaunchAgents/com.browsergator.gateway.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key><string>com.browsergator.gateway</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/usr/bin/env</string>
+      <string>node</string>
+      <string><repo-root>/scripts/run-gateway.mjs</string>
+    </array>
+    <key>WorkingDirectory</key><string><repo-root></string>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardOutPath</key><string><repo-root>/.data/service.stdout.log</string>
+    <key>StandardErrorPath</key><string><repo-root>/.data/service.stderr.log</string>
+  </dict>
+</plist>
+```
+
+Load and start it:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.browsergator.gateway.plist
+launchctl start com.browsergator.gateway
+```
+
+The token comes from a project-root `.env` file (loaded by the gateway). launchd does not read your login shell profile, so do not rely on an exported shell variable here.
+
+### Linux -- systemd (user service)
+
+Create `~/.config/systemd/user/browsergator.service`:
+
+```ini
+[Unit]
+Description=Browsergator MCP gateway
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=<repo-root>
+EnvironmentFile=<repo-root>/.env
+ExecStart=/usr/bin/node <repo-root>/scripts/run-gateway.mjs
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+Enable and start it:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now browsergator.service
+systemctl --user status browsergator.service
+```
+
+Adjust the `node` path to match your install (e.g. an nvm/fnm shim). The gateway's singleton lock still guarantees one live instance.
+
+
+## Verification record
 
 The four installed clients were each verified with a real read-only `list_tabs` tool call on 2026-08-28. Codex, Claude, and Gemini used direct Streamable HTTP; Copilot used the stateless adapter.

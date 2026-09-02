@@ -41,7 +41,7 @@ export class EnvironmentPolicy {
   constructor(private readonly patterns: EnvironmentPatterns = DEFAULT_ENVIRONMENT_PATTERNS) {}
 
   classify(url: string): EnvironmentDecision {
-    let host = '';
+    let host: string;
     try {
       host = new URL(url).hostname.toLowerCase();
     } catch {

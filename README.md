@@ -32,15 +32,38 @@ The gateway never launches or stops Chrome.
 
 ## Install and run
 
-```powershell
+```text
 cd <repo-root>
 npm install
-$env:BROWSER_GATEWAY_TOKEN = ([Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)))
 npm run build
-npm start
+npm run serve
 ```
 
-For an installed Windows singleton, `scripts/run-gateway.ps1` reads a persistent user token and Task Scheduler can start it at user logon. See the client compatibility guide for global client setup.
+`npm run serve` starts the gateway in the foreground on every OS (Windows, macOS, Linux) using the Node runtime that runs npm -- no hardcoded interpreter path. Press Ctrl+C to stop it. Use `npm run serve:dev` to run the TypeScript source directly via tsx.
+
+### Provide the token
+
+The gateway reads `BROWSER_GATEWAY_TOKEN` (>= 24 chars) from the environment. Set it in your shell, or put it in a project-root `.env` file (see `.env.example`; `.env` is gitignored). A real environment variable always wins over `.env`.
+
+Generate a token:
+
+```bash
+# bash / zsh
+export BROWSER_GATEWAY_TOKEN=$(node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))")
+# or: openssl rand -base64 32
+```
+
+```powershell
+# PowerShell
+$env:BROWSER_GATEWAY_TOKEN = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+```
+
+```bash
+# portable -- writes a .env file (any OS with Node)
+node -e "const c=require('crypto');require('fs').writeFileSync('.env','BROWSER_GATEWAY_TOKEN='+c.randomBytes(32).toString('base64url')+'\n')"
+```
+
+On Windows you may still use `scripts/run-gateway.ps1`, which now resolves Node from PATH (works with nvm4w, fnm, winget, Scoop) and delegates to the portable launcher. For a persistent service, see the deployment recipes (Windows Task Scheduler, macOS launchd, Linux systemd) in the client compatibility guide.
 
 Defaults:
 
@@ -60,7 +83,7 @@ MCP client session, `agentId`, `taskId`, browser session, browser context, `page
 
 ## Quality gates
 
-```powershell
+```text
 npm run lint
 npm run typecheck
 npm test

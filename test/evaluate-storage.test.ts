@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { BrowserGateway } from '../src/gateway.js';
-import { GatewayError } from '../src/errors.js';
 import { MemoryAuditLog } from '../src/core/audit-log.js';
 import { EnvironmentPolicy } from '../src/core/environment.js';
 import { MockBrowserDriver, mockTab } from './helpers/mock-browser-driver.js';

@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 
 import { loadConfig } from './config.js';
 import { JsonlAuditLog } from './core/audit-log.js';
+import { loadDotenv } from './core/dotenv.js';
 import { log } from './core/logger.js';
 import { SingletonLock } from './core/singleton-lock.js';
 import { WebSocketCdpDriver } from './cdp/websocket-cdp-driver.js';
@@ -10,6 +11,8 @@ import { BrowserGateway } from './gateway.js';
 import { GatewayHttpServer } from './http/server.js';
 
 async function main(): Promise<void> {
+  // Load .env (if present) before reading config. Existing env vars always win.
+  loadDotenv();
   const config = loadConfig();
   const lock = new SingletonLock(fileURLToPath(new URL('../.data/gateway.lock', import.meta.url)));
   await lock.acquire();
