@@ -92,17 +92,36 @@ Logs are quiet by default: while Chrome is not yet up the gateway prints a singl
 agent Chrome" notice, not one line per retry. Set `BROWSER_GATEWAY_LOG_LEVEL=debug` (or
 `BROWSER_GATEWAY_DEBUG=1`) to see per-attempt detail.
 
-## Install for agents
+## Install for agents (machine-wide)
 
-Browsergator ships agent-facing guidance (the `/bg` skill) that teaches any agent how to
-connect to and drive the shared browser. Install it once into your global agent config so
-every agent, in every repo, picks it up:
+Browsergator ships agent-facing guidance that teaches any agent how to connect to and drive
+the shared browser. One command installs it into **every agent client on the machine**, so
+any agent -- in any client, in any repo -- knows to use the shared browser as soon as it is
+asked to browse:
 
 ```text
-npm run install:agent            # copies agent-assets/skills/* -> <home>/.kiro/skills/
-npm run install:agent -- --dry-run    # preview only, writes nothing
-npm run install:agent -- --uninstall  # remove only what this installed
+npm run install:agent                    # install into every detected client
+npm run install:agent -- --dry-run       # preview only, writes nothing
+npm run install:agent -- --uninstall     # remove only what this installed
+npm run install:agent -- --all           # also install into clients not present yet
+npm run install:agent -- --only=claude,codex   # limit to named clients
 ```
+
+Two install shapes, because agent clients differ:
+
+| Client | Target | Shape |
+|---|---|---|
+| Claude Code | `~/.claude/skills/` | `bg` skill + `browse` / `browser` / `browsergator` aliases |
+| Kiro | `~/.kiro/skills/` | same |
+| Codex | `~/.codex/AGENTS.md` | managed markdown block |
+| Gemini CLI | `~/.gemini/GEMINI.md` | managed markdown block |
+| GitHub Copilot CLI | `~/.copilot/copilot-instructions.md` | managed markdown block |
+| Cursor | `~/.cursor/rules/browsergator.md` | managed markdown block |
+| Windsurf | `~/.windsurf/rules/browsergator.md` | managed markdown block |
+
+Instruction-file clients get a block delimited by `BEGIN/END BROWSERGATOR` markers, so
+re-running replaces only that block and never touches your own content. Skill clients get
+their own directories only; sibling skills are left alone.
 
 This copies **no secrets** -- only versioned guidance. After installing, ensure the gateway
 and Chrome are running, then in any agent say `/bg` (or "use the shared browser") and it will
