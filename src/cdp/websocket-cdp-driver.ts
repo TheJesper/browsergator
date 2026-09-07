@@ -53,6 +53,7 @@ export class WebSocketCdpDriver implements BrowserDriver {
   private stopping = false;
   private nextId = 1;
   private reconnectAttempts = 0;
+  private waitingLogged = false;
   private browserSessionId?: string;
   private connectedAt?: string;
   private lastDisconnectedAt?: string;
@@ -78,7 +79,7 @@ export class WebSocketCdpDriver implements BrowserDriver {
       await this.connect();
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
-      log('warn', 'Initial CDP connection failed; reconnect scheduled', { error: this.lastError });
+      this.noteBrowserUnavailable('Initial CDP connection failed; waiting for agent Chrome', error);
       this.scheduleReconnect();
     }
   }
@@ -469,6 +470,7 @@ export class WebSocketCdpDriver implements BrowserDriver {
     });
 
     this.reconnectAttempts = 0;
+    this.waitingLogged = false;
     this.browserSessionId = randomUUID();
     this.connectedAt = new Date().toISOString();
     this.lastError = undefined;
@@ -489,6 +491,10 @@ export class WebSocketCdpDriver implements BrowserDriver {
     this.emitEvent('lifecycle', 'Browser.connected', undefined, {
       browserSessionId: this.browserSessionId,
       version: this.version
+    });
+    log('info', 'Connected to agent Chrome', {
+      browser: this.version.browser,
+      pages: [...this.targets.values()].filter((t) => t.type === 'page').length
     });
   }
 
@@ -704,7 +710,10 @@ export class WebSocketCdpDriver implements BrowserDriver {
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       void this.connect().catch((error) => {
-        this.recordError(error);
+        this.lastError = error instanceof Error ? error.message : String(error);
+        // A reconnect attempt failing usually just means Chrome is not up yet.
+        // Log the wait once at info; keep the noisy per-attempt detail at debug.
+        this.noteBrowserUnavailable('Waiting for agent Chrome on the debug port', error);
         this.scheduleReconnect();
       });
     }, delayMs);
@@ -724,6 +733,32 @@ export class WebSocketCdpDriver implements BrowserDriver {
     log('warn', 'CDP driver error', { error: this.lastError });
   }
 
+  /**
+   * Log that agent Chrome is not reachable. The first occurrence (per outage) is
+   * surfaced at info so the operator knows to start Chrome; subsequent repeats
+   * during the reconnect backoff are logged at debug to avoid flooding the log.
+   * A genuinely unexpected error (not a plain "no browser there") is warned once.
+   */
+  private noteBrowserUnavailable(message: string, error: unknown): void {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (isBrowserAbsentError(error)) {
+      if (!this.waitingLogged) {
+        this.waitingLogged = true;
+        log('info', message, { browserUrl: this.browserUrl, hint: 'start agent Chrome with --remote-debugging-port' });
+      } else {
+        log('debug', 'CDP reconnect attempt failed (Chrome still absent)', { error: detail });
+      }
+      return;
+    }
+    // Unexpected failure shape -- surface it, but still only once per outage.
+    if (!this.waitingLogged) {
+      this.waitingLogged = true;
+      log('warn', 'CDP connection failed', { error: detail });
+    } else {
+      log('debug', 'CDP reconnect attempt failed', { error: detail });
+    }
+  }
+
   private emitEvent(
     kind: BrowserEvent['kind'],
     method: string,
@@ -739,6 +774,32 @@ export class WebSocketCdpDriver implements BrowserDriver {
     };
     this.events.emit('browser-event', event);
   }
+}
+
+/**
+ * True when an error means "no browser is listening on the debug port yet"
+ * (connection refused, DNS/host unreachable, fetch abort, socket reset) rather
+ * than an unexpected protocol/logic failure. Node wraps these as a generic
+ * "fetch failed" TypeError with a `cause`, so we inspect the cause code too.
+ */
+function isBrowserAbsentError(error: unknown): boolean {
+  const absentCodes = ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EHOSTUNREACH', 'ETIMEDOUT', 'ABORT_ERR'];
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    if (current instanceof Error) {
+      const code = (current as { code?: unknown }).code;
+      if (typeof code === 'string' && absentCodes.includes(code)) return true;
+      if (current.name === 'AbortError') return true;
+      const message = current.message.toLowerCase();
+      if (message.includes('fetch failed') || message.includes('econnrefused') || message.includes('connect')) return true;
+      current = (current as { cause?: unknown }).cause;
+    } else {
+      break;
+    }
+  }
+  return false;
 }
 
 function clickAction(): string {

@@ -213,9 +213,32 @@ Only one gateway service should listen on port 8788. Client and adapter process 
 
 The gateway runs in the foreground under `npm run serve` (or `node scripts/run-gateway.mjs`). For a long-lived service, use the native supervisor for your OS. All three point at the same portable launcher and read the token from the environment or a `.env` file.
 
-### Windows -- Task Scheduler
+For the full "always-on shared browser", register TWO services on each OS -- one for the dedicated Chrome (`scripts/launch-chrome.mjs`) and one for the gateway (`scripts/run-gateway.mjs`). The Chrome launcher is idempotent and creates its isolated profile automatically under `<home>/.cache/browsergator/chrome-profile`.
 
-Run `scripts/run-gateway.ps1` (resolves Node from PATH and delegates to `run-gateway.mjs`) or `node scripts\run-gateway.mjs` at user logon. Configure the task to ignore duplicate starts and restart after failure. The gateway's singleton lock prevents a second live instance.
+### Windows -- Task Scheduler (windowless)
+
+Run both launchers at logon. To avoid a console window flashing (Task Scheduler runs `node.exe`, a console app), route through `wscript.exe` + `scripts/hidden-launch.vbs`, which starts `node <launcher>` with a hidden window. Set the tasks `-Hidden` as well.
+
+```powershell
+$wscript   = "$env:SystemRoot\System32\wscript.exe"
+$vbs       = "<repo>\scripts\hidden-launch.vbs"
+$trigger   = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+
+# Dedicated Chrome
+Register-ScheduledTask -TaskName 'BrowsergatorChrome' -Force `
+  -Action (New-ScheduledTaskAction -Execute $wscript -Argument "`"$vbs`" `"<repo>\scripts\launch-chrome.mjs`"" -WorkingDirectory '<repo>') `
+  -Trigger $trigger -Principal $principal `
+  -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -Hidden -ExecutionTimeLimit (New-TimeSpan -Minutes 2))
+
+# Gateway (restart on failure)
+Register-ScheduledTask -TaskName 'BrowsergatorGateway' -Force `
+  -Action (New-ScheduledTaskAction -Execute $wscript -Argument "`"$vbs`" `"<repo>\scripts\run-gateway.mjs`"" -WorkingDirectory '<repo>') `
+  -Trigger $trigger -Principal $principal `
+  -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -Hidden -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero))
+```
+
+Both tasks ignore duplicate starts; the gateway's singleton lock prevents a second live instance.
 
 ### macOS -- launchd (user agent)
 
@@ -251,6 +274,8 @@ launchctl start com.browsergator.gateway
 
 The token comes from a project-root `.env` file (loaded by the gateway). launchd does not read your login shell profile, so do not rely on an exported shell variable here.
 
+For the shared browser, add a second agent `com.browsergator.chrome` with `ProgramArguments = [/usr/bin/env, node, <repo>/scripts/launch-chrome.mjs]`, `RunAtLoad`, `KeepAlive`. It creates its isolated profile under `~/.cache/browsergator/chrome-profile` on first run.
+
 ### Linux -- systemd (user service)
 
 Create `~/.config/systemd/user/browsergator.service`:
@@ -280,6 +305,10 @@ systemctl --user status browsergator.service
 ```
 
 Adjust the `node` path to match your install (e.g. an nvm/fnm shim). The gateway's singleton lock still guarantees one live instance.
+
+For the shared browser, add a second unit `browsergator-chrome.service` with
+`ExecStart=/usr/bin/node <repo>/scripts/launch-chrome.mjs` and `Restart=on-failure`. It creates
+its isolated profile under `~/.cache/browsergator/chrome-profile` on first run and is idempotent.
 
 
 ## Verification record

@@ -20,7 +20,14 @@ export default tseslint.config(
       globals: {
         process: 'readonly',
         console: 'readonly',
-        Buffer: 'readonly'
+        Buffer: 'readonly',
+        fetch: 'readonly',
+        URL: 'readonly',
+        AbortController: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly'
       }
     }
   }

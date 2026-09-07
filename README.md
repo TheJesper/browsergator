@@ -65,6 +65,33 @@ node -e "const c=require('crypto');require('fs').writeFileSync('.env','BROWSER_G
 
 On Windows you may still use `scripts/run-gateway.ps1`, which now resolves Node from PATH (works with nvm4w, fnm, winget, Scoop) and delegates to the portable launcher. For a persistent service, see the deployment recipes (Windows Task Scheduler, macOS launchd, Linux systemd) in the client compatibility guide.
 
+## Shared agent browser
+
+Browsergator is designed as one always-on browser that many agents share. The gateway never
+launches Chrome itself -- a dedicated Chrome runs alongside it and the gateway connects over CDP.
+
+Start the dedicated Chrome (idempotent -- does nothing if it is already up):
+
+```text
+npm run chrome
+```
+
+This launches a separate Chrome with an isolated, persistent profile at
+`<home>/.cache/browsergator/chrome-profile` (created automatically, never committed) and a
+loopback debug port on `127.0.0.1:9222`. It is NOT your everyday Chrome -- Chrome 136+ no longer
+allows remote debugging on the default profile, so a dedicated profile is required. Log in to
+any service once in this browser; the session persists across restarts, so every agent works
+against an authenticated browser without per-agent login.
+
+Then start the gateway (`npm run serve`). When both are up, the gateway logs `Connected to
+agent Chrome` once and reports `browserConnected: true`. Agents can connect and disconnect
+freely; the browser and gateway stay running. For always-on setup at logon, see the per-OS
+service recipes in the client compatibility guide.
+
+Logs are quiet by default: while Chrome is not yet up the gateway prints a single "waiting for
+agent Chrome" notice, not one line per retry. Set `BROWSER_GATEWAY_LOG_LEVEL=debug` (or
+`BROWSER_GATEWAY_DEBUG=1`) to see per-attempt detail.
+
 Defaults:
 
 - MCP: `http://127.0.0.1:8788/mcp`

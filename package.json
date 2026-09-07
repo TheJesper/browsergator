@@ -24,6 +24,7 @@
     "dev": "tsx watch src/index.ts",
     "serve": "node scripts/run-gateway.mjs",
     "serve:dev": "node scripts/run-gateway.mjs --dev",
+    "chrome": "node scripts/launch-chrome.mjs",
     "start": "node dist/index.js",
     "start:stdio": "node dist/stdio-adapter.js",
     "dev:stdio": "tsx src/stdio-adapter.ts",
