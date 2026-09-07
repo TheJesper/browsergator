@@ -92,6 +92,23 @@ Logs are quiet by default: while Chrome is not yet up the gateway prints a singl
 agent Chrome" notice, not one line per retry. Set `BROWSER_GATEWAY_LOG_LEVEL=debug` (or
 `BROWSER_GATEWAY_DEBUG=1`) to see per-attempt detail.
 
+## Install for agents
+
+Browsergator ships agent-facing guidance (the `/bg` skill) that teaches any agent how to
+connect to and drive the shared browser. Install it once into your global agent config so
+every agent, in every repo, picks it up:
+
+```text
+npm run install:agent            # copies agent-assets/skills/* -> <home>/.kiro/skills/
+npm run install:agent -- --dry-run    # preview only, writes nothing
+npm run install:agent -- --uninstall  # remove only what this installed
+```
+
+This copies **no secrets** -- only versioned guidance. After installing, ensure the gateway
+and Chrome are running, then in any agent say `/bg` (or "use the shared browser") and it will
+know to `list_tabs` first and drive tabs by explicit `pageId`. Per-client MCP registration
+(the endpoint + bearer token) is still done per client -- see the client compatibility guide.
+
 Defaults:
 
 - MCP: `http://127.0.0.1:8788/mcp`
