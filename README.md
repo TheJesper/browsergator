@@ -92,6 +92,29 @@ Logs are quiet by default: while Chrome is not yet up the gateway prints a singl
 agent Chrome" notice, not one line per retry. Set `BROWSER_GATEWAY_LOG_LEVEL=debug` (or
 `BROWSER_GATEWAY_DEBUG=1`) to see per-attempt detail.
 
+### If the browser is down -- one command, any agent
+
+The shared Chrome and gateway are meant to be always-on and self-healing. If the browser was
+closed, **any agent or user restarts it with one idempotent command** -- never hand-roll a
+`chrome --remote-debugging-port` line, and never point it at a different `--user-data-dir`
+(that creates a second, conflicting profile):
+
+```text
+npm run chrome     # safe to run anytime; does nothing if Chrome is already up
+```
+
+The launcher owns the correct profile (`<home>/.cache/browsergator/chrome-profile`) and starts
+Chrome detached + windowless. The gateway then reconnects on its own within a few seconds --
+you do NOT restart the gateway to recover from a browser outage. Confirm with:
+
+```text
+curl http://127.0.0.1:9222/json/version     # Chrome debug port up
+curl http://127.0.0.1:8788/healthz          # gateway up (then a tool call shows browserConnected: true)
+```
+
+At logon both are started automatically by the OS services (see the client compatibility
+guide), so in normal use you never start anything by hand.
+
 ## Install for agents (machine-wide)
 
 Browsergator ships agent-facing guidance that teaches any agent how to connect to and drive

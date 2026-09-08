@@ -16,6 +16,33 @@ that many agents share over MCP. Agents are ephemeral clients; the browser and g
 running. You can add, remove, read, and drive tabs -- the same tab or different tabs as other
 agents.
 
+## If the browser is down (READ THIS FIRST)
+
+If `list_tabs` fails with "not connected", or you cannot reach the gateway, the shared Chrome
+is not up. **Do NOT invent your own `chrome --remote-debugging-port` command.** Improvising a
+launch with a different `--user-data-dir` creates a second, conflicting profile and breaks the
+shared setup for everyone.
+
+There is exactly ONE way to (re)start the shared Chrome. It is safe to run any number of times
+by any agent -- it does nothing if Chrome is already up (idempotent):
+
+```
+npm run chrome        # from the Browsergator repo
+# or, from anywhere:
+node <browsergator-repo>/scripts/launch-chrome.mjs
+```
+
+That launcher owns the correct profile (`<home>/.cache/browsergator/chrome-profile`), binds the
+loopback debug port, and starts Chrome detached and windowless. After it reports the port is up,
+the gateway reconnects automatically within a few seconds -- then retry `list_tabs`.
+
+Rules when the browser is down:
+- Run the launcher above. Never hand-roll a `chrome.exe --remote-debugging-port` command.
+- Never pass a different `--user-data-dir`. The profile is fixed and shared.
+- The gateway auto-reconnects; you do NOT restart the gateway to fix a browser outage.
+- If the launcher is missing, tell the user to run it from the Browsergator repo -- do not
+  substitute your own command.
+
 ## Connection
 
 The gateway speaks Streamable HTTP MCP:
@@ -59,4 +86,6 @@ close_tab { pageId }                       -> close ONLY tabs you should close
 - Do not close tabs other agents/users may be using unless asked.
 - Prefer opening your own tab for scratch work; close it when finished.
 - On prod hosts (`classify_environment` -> tier `prod`), treat writes as high-risk and confirm.
-- The gateway never launches or kills Chrome; do not try to start/stop the browser.
+- Never start or stop Chrome by hand. If it is down, run the ONE launcher above
+  (`npm run chrome`) -- never a custom `chrome --remote-debugging-port` command with a
+  different profile.
