@@ -65,6 +65,16 @@ node -e "const c=require('crypto');require('fs').writeFileSync('.env','BROWSER_G
 
 On Windows you may still use `scripts/run-gateway.ps1`, which now resolves Node from PATH (works with nvm4w, fnm, winget, Scoop) and delegates to the portable launcher. For a persistent service, see the deployment recipes (Windows Task Scheduler, macOS launchd, Linux systemd) in the client compatibility guide.
 
+By default the shared Chrome is **visible** -- you log in once and can watch what agents do.
+For environments where nobody watches (CI, servers), headless is opt-in:
+
+```text
+npm run chrome:headless        # or: node scripts/launch-chrome.mjs --headless
+# or set BROWSERGATOR_CHROME_HEADLESS=1
+```
+
+Headless uses the same isolated profile and debug port; only the window is hidden.
+
 ## Shared agent browser
 
 Browsergator is designed as one always-on browser that many agents share. The gateway never

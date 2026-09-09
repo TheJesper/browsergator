@@ -89,9 +89,17 @@ async function main() {
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-features=Translate,MediaRouter',
-    '--hide-crash-restore-bubble',
-    'about:blank'
+    '--hide-crash-restore-bubble'
   ];
+
+  // Headless is OPT-IN. Default is a visible, shared browser you can log into and watch.
+  // Enable with --headless or BROWSERGATOR_CHROME_HEADLESS=1 (e.g. for CI where nobody looks).
+  const headless = process.argv.includes('--headless') || process.env.BROWSERGATOR_CHROME_HEADLESS === '1';
+  if (headless) {
+    args.push('--headless=new');
+  }
+
+  args.push('about:blank');
 
   const child = spawn(chrome, args, {
     detached: true, // survives this launcher process
@@ -104,7 +112,7 @@ async function main() {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     if (await debugPortAlive()) {
-      console.log(`[launch-chrome] Agent Chrome up on ${HOST}:${PORT} (profile: ${profileDir}).`);
+      console.log(`[launch-chrome] Agent Chrome up on ${HOST}:${PORT}${headless ? ' (headless)' : ''} (profile: ${profileDir}).`);
       return;
     }
     await new Promise((r) => setTimeout(r, 300));
