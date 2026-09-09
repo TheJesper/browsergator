@@ -261,23 +261,36 @@ export function createMcpServer(gateway: BrowserGateway, session: SessionReferen
   server.registerTool(
     'screenshot',
     {
-      description: 'Capture a PNG or JPEG screenshot of one explicit page.',
+      description:
+        'Capture a PNG or JPEG screenshot of one explicit page. Full page by default; pass `clip` (viewport-relative x/y/width/height) OR an element locator (`selector`/`uid`) to capture only a region.',
       inputSchema: {
         pageId: z.string().min(1),
         format: z.enum(['png', 'jpeg']).default('png'),
-        quality: z.number().int().min(0).max(100).optional()
+        quality: z.number().int().min(0).max(100).optional(),
+        clip: z
+          .object({
+            x: z.number(),
+            y: z.number(),
+            width: z.number().positive(),
+            height: z.number().positive()
+          })
+          .optional(),
+        selector: z.string().min(1).max(2000).optional(),
+        uid: z.string().min(1).max(128).optional()
       },
       annotations: { readOnlyHint: true, idempotentHint: true }
     },
-    async ({ pageId, format, quality }) => {
+    async ({ pageId, format, quality, clip, selector, uid }) => {
       try {
-        const shot = await gateway.screenshot(pageId, format, quality);
+        const locator = selector !== undefined || uid !== undefined ? { selector, uid } : undefined;
+        const shot = await gateway.screenshot(pageId, { format, quality, clip, locator });
+        const summary = { pageId: shot.pageId, mimeType: shot.mimeType, ...(shot.clip ? { clip: shot.clip } : {}) };
         return {
           content: [
             { type: 'image', data: shot.data, mimeType: shot.mimeType },
-            { type: 'text', text: JSON.stringify({ pageId: shot.pageId, mimeType: shot.mimeType }) }
+            { type: 'text', text: JSON.stringify(summary) }
           ],
-          structuredContent: { pageId: shot.pageId, mimeType: shot.mimeType }
+          structuredContent: summary
         };
       } catch (error) {
         return errorResult(error);

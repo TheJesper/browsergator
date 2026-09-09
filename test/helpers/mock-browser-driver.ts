@@ -12,6 +12,7 @@ import type {
   NavigationOptions,
   NavigationResult,
   ResponseBodyResult,
+  ScreenshotOptions,
   ScreenshotResult,
   WaitForOptions,
   WaitResult
@@ -175,12 +176,16 @@ export class MockBrowserDriver implements BrowserDriver {
     return { pageId, nodes: [{ role: 'document' }], truncated: false };
   }
 
-  async screenshot(pageId: string, format: 'png' | 'jpeg'): Promise<ScreenshotResult> {
+  async screenshot(pageId: string, options: ScreenshotOptions): Promise<ScreenshotResult> {
     this.requireTab(pageId);
+    const format = options.format ?? 'png';
+    // Mock element clip: any locator resolves to a fixed rect so tests can assert it.
+    const clip = options.clip ?? (options.locator ? { x: 10, y: 20, width: 100, height: 50 } : undefined);
     return {
       pageId,
       mimeType: format === 'png' ? 'image/png' : 'image/jpeg',
-      data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII='
+      data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=',
+      ...(clip ? { clip } : {})
     };
   }
 

@@ -16,6 +16,8 @@ import type {
   NavigationOptions,
   NavigationResult,
   ResponseBodyResult,
+  ScreenshotClip,
+  ScreenshotOptions,
   ScreenshotResult,
   WaitForOptions,
   WaitResult
@@ -285,19 +287,32 @@ export class WebSocketCdpDriver implements BrowserDriver {
     return { pageId, nodes, truncated: allNodes.length > nodes.length };
   }
 
-  async screenshot(
-    pageId: string,
-    format: 'png' | 'jpeg',
-    quality?: number
-  ): Promise<ScreenshotResult> {
+  async screenshot(pageId: string, options: ScreenshotOptions): Promise<ScreenshotResult> {
     const sessionId = this.requireSession(pageId);
+    const format = options.format ?? 'png';
     const params: Record<string, unknown> = { format, fromSurface: true, captureBeyondViewport: true };
-    if (format === 'jpeg' && quality !== undefined) params['quality'] = quality;
+    if (format === 'jpeg' && options.quality !== undefined) params['quality'] = options.quality;
+
+    let clip: ScreenshotClip | undefined = options.clip;
+    if (!clip && options.locator) {
+      clip = await this.elementRect(sessionId, options.locator);
+    }
+    if (clip) {
+      if (clip.width <= 0 || clip.height <= 0) {
+        throw new GatewayError('INVALID_SCREENSHOT_CLIP', 'Screenshot clip must have positive width and height', {
+          pageId,
+          clip
+        });
+      }
+      params['clip'] = { x: clip.x, y: clip.y, width: clip.width, height: clip.height, scale: 1 };
+    }
+
     const result = await this.send('Page.captureScreenshot', params, sessionId);
     return {
       pageId,
       mimeType: format === 'png' ? 'image/png' : 'image/jpeg',
-      data: String(result['data'])
+      data: String(result['data']),
+      ...(clip ? { clip } : {})
     };
   }
 
@@ -432,6 +447,23 @@ export class WebSocketCdpDriver implements BrowserDriver {
     );
     if (result['ok'] !== true) throw new GatewayError('ELEMENT_NOT_INTERACTABLE', 'Element has no visible bounds');
     return { x: Number(result['x']), y: Number(result['y']) };
+  }
+
+  private async elementRect(sessionId: string, locator: ElementLocator): Promise<ScreenshotClip> {
+    const result = await this.evaluateInteraction(
+      sessionId,
+      locator,
+      `const element = this; element.scrollIntoView({ block: 'center', inline: 'center' }); const rect = element.getBoundingClientRect(); return { ok: rect.width > 0 && rect.height > 0, x: rect.left, y: rect.top, width: rect.width, height: rect.height };`
+    );
+    if (result['ok'] !== true) {
+      throw new GatewayError('ELEMENT_NOT_FOUND', 'Element has no visible bounds to capture');
+    }
+    return {
+      x: Number(result['x']),
+      y: Number(result['y']),
+      width: Number(result['width']),
+      height: Number(result['height'])
+    };
   }
 
   private async connect(): Promise<void> {

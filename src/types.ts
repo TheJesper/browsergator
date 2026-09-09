@@ -45,10 +45,28 @@ export interface AccessibilitySnapshot {
   truncated: boolean;
 }
 
+export interface ScreenshotClip {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface ScreenshotOptions {
+  format?: 'png' | 'jpeg';
+  quality?: number;
+  /** Explicit viewport-relative region to capture. Mutually exclusive with `locator`. */
+  clip?: ScreenshotClip;
+  /** Capture only the bounding box of this element. Mutually exclusive with `clip`. */
+  locator?: ElementLocator;
+}
+
 export interface ScreenshotResult {
   pageId: string;
   mimeType: 'image/png' | 'image/jpeg';
   data: string;
+  /** Present when the capture was clipped to a region or element. */
+  clip?: ScreenshotClip;
 }
 
 export interface EvaluateResult {
@@ -123,7 +141,7 @@ export interface BrowserDriver {
   drag(pageId: string, from: ElementLocator, to: ElementLocator): Promise<InteractionResult>;
   handleDialog(pageId: string, accept: boolean, promptText?: string): Promise<{ pageId: string; accepted: boolean }>;
   snapshot(pageId: string, maxNodes: number): Promise<AccessibilitySnapshot>;
-  screenshot(pageId: string, format: 'png' | 'jpeg', quality?: number): Promise<ScreenshotResult>;
+  screenshot(pageId: string, options: ScreenshotOptions): Promise<ScreenshotResult>;
   getResponseBody(pageId: string, requestId: string): Promise<ResponseBodyResult>;
   inspectPage(pageId: string): Promise<{ url: string; title: string }>;
   evaluate(pageId: string, expression: string): Promise<unknown>;

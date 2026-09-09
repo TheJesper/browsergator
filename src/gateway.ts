@@ -9,6 +9,7 @@ import type {
   DriverTab,
   ElementLocator,
   NavigationOptions,
+  ScreenshotOptions,
   WaitForOptions
 } from './types.js';
 import type { AuditEvent, AuditSink } from './core/audit-log.js';
@@ -228,11 +229,10 @@ export class BrowserGateway {
 
   async screenshot(
     pageId: string,
-    format: 'png' | 'jpeg',
-    quality?: number
+    options: ScreenshotOptions
   ): ReturnType<BrowserDriver['screenshot']> {
     await this.requireTab(pageId);
-    return this.driver.screenshot(pageId, format, quality);
+    return this.driver.screenshot(pageId, options);
   }
 
   /** Classify a page's environment tier (local/test/remote/prod) for write-safety gating. */

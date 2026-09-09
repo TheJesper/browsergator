@@ -74,6 +74,9 @@ list_tabs                                  -> find the tab you want, note its pa
 open_tab { url }                           -> or create a new one (returns pageId)
 navigate { pageId, url, waitUntil }        -> go somewhere
 snapshot { pageId }                        -> read the accessibility tree
+screenshot { pageId }                      -> full-page PNG/JPEG
+screenshot { pageId, clip:{x,y,width,height} }  -> capture a region only
+screenshot { pageId, selector }            -> capture just one element (auto-clips to its box)
 evaluate { pageId, expression }            -> read a value from the page
 click / fill / type_text / press_key { pageId, ... }  -> drive it (queued per tab)
 classify_environment { pageId }            -> check local/test/prod before risky writes
