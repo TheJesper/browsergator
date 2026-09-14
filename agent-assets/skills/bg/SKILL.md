@@ -1,6 +1,6 @@
 ---
 name: bg
-description: "Connect to and drive the shared Browsergator browser -- one always-on Chrome that many agents share over MCP. Use when you need to open/close/read/drive browser tabs, or when the user says 'use the shared browser', 'connect to browsergator', or '/bg'. Any agent can work on any tab; coordination (per-tab FIFO + leases) prevents collisions."
+description: "Connect to and drive the shared Browsergator browser -- one always-on Chrome that many agents share over MCP. Use when a task needs a REAL browser: a logged-in session, JS-rendered content, clicking/typing, or a screenshot. For plain information lookup, use your own native web search/fetch tools instead -- they are far cheaper. Any agent can work on any tab; coordination (per-tab FIFO + leases) prevents collisions."
 triggers:
   - "/bg"
   - "use the shared browser"
@@ -16,7 +16,31 @@ that many agents share over MCP. Agents are ephemeral clients; the browser and g
 running. You can add, remove, read, and drive tabs -- the same tab or different tabs as other
 agents.
 
-## If the browser is down (READ THIS FIRST)
+## FIRST: do you actually need a browser?
+
+Driving a real browser costs far more tokens and wall-clock than a headless fetch, and it
+occupies a resource other agents are sharing. **Reach for your own native tools first.**
+
+**Use your native web search / web fetch (or `curl`) when the task is:**
+
+- looking something up -- docs, prices, news, an API reference, "what is X"
+- reading a public page, article, README, or JSON/RSS feed
+- anything an HTTP GET would answer
+
+**Use the shared browser (this skill) only when you genuinely need a real browser:**
+
+- the page is behind a **login** and the shared Chrome already holds that session
+  (Gmail, Avanza, Kivra, App Store Connect, Nordnet, WINT, Sellpy, Vinted, ...)
+- the content is **rendered by JavaScript** and is absent from the raw HTML
+- you must **interact**: click, type, submit, scroll, drag, pick from a dropdown
+- you need a **screenshot**, the accessibility tree, console output, or network traffic
+- the site **blocks plain HTTP clients** (bot walls, heavy anti-scraping)
+- you need real page state: cookies, `localStorage`, a redirect chain
+
+If a plain fetch would have answered it, the browser was the wrong tool. When a fetch gets
+blocked or comes back empty, *then* escalate to the browser -- and say why you escalated.
+
+## If the browser is down
 
 If `list_tabs` fails with "not connected", or you cannot reach the gateway, the shared Chrome
 is not up. **Do NOT invent your own `chrome --remote-debugging-port` command.** Improvising a
@@ -56,6 +80,7 @@ repo for the exact `codex mcp add` / `claude mcp add-json` / `gemini mcp add` co
 
 ## Golden rules
 
+0. **Native search/fetch first.** The browser is for real-browser work, not for lookups.
 1. **`list_tabs` FIRST.** Never assume a tab exists. Discover current tabs and their `pageId`s.
 2. **Reference tabs by explicit `pageId`.** Every page-scoped tool needs `pageId`.
 3. **Pass your identity** on coordinated calls: `agentId`, `taskId`, `leaseOwnerId`. These are

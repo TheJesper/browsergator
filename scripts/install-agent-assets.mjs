@@ -131,7 +131,22 @@ function instructionBlock() {
 ## Shared browser (Browsergator)
 
 A single always-on Chrome is shared by every agent on this machine, fronted by the
-**browser-gateway** MCP server. Whenever you need to open, read, or drive a web page:
+**browser-gateway** MCP server.
+
+**First, check whether you need a browser at all.** Driving a real browser costs far more
+tokens and time than a headless fetch, and it occupies a resource other agents share:
+
+- **Plain information lookup -> use your own native web search / web fetch (or \`curl\`).**
+  Docs, prices, news, an API reference, a public page or JSON feed: anything an HTTP GET
+  would answer does not need a browser.
+- **Use the shared browser only for real-browser work:** a page behind a login the shared
+  Chrome already holds (Gmail, Avanza, Kivra, App Store Connect, Nordnet, WINT, Sellpy,
+  ...), JavaScript-rendered content missing from the raw HTML, interaction (click, type,
+  submit, scroll), screenshots or the accessibility tree, console/network inspection, sites
+  that block plain HTTP clients, or real page state (cookies, localStorage, redirects).
+- If a fetch comes back blocked or empty, *then* escalate to the browser, and say why.
+
+When you do need a page opened, read, or driven:
 
 - **Use the \`browser-gateway\` MCP tools. Never launch your own browser** (no Playwright
   install, no headless Chrome, no \`chrome-devtools-mcp\` plugin) -- a second browser breaks
