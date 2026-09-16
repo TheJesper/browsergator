@@ -133,18 +133,24 @@ function instructionBlock() {
 A single always-on Chrome is shared by every agent on this machine, fronted by the
 **browser-gateway** MCP server.
 
-**First, check whether you need a browser at all.** Driving a real browser costs far more
-tokens and time than a headless fetch, and it occupies a resource other agents share:
+**First, weigh which tool fits.** Reading a web page is usually a job for your own native web
+search / web fetch (or \`curl\`) -- headless, fast, cheap. The shared browser is heavier and
+shared with other agents, so treat it as the escalation rather than the starting point.
 
-- **Plain information lookup -> use your own native web search / web fetch (or \`curl\`).**
-  Docs, prices, news, an API reference, a public page or JSON feed: anything an HTTP GET
-  would answer does not need a browser.
-- **Use the shared browser only for real-browser work:** a page behind a login the shared
-  Chrome already holds (Gmail, Avanza, Kivra, App Store Connect, Nordnet, WINT, Sellpy,
-  ...), JavaScript-rendered content missing from the raw HTML, interaction (click, type,
-  submit, scroll), screenshots or the accessibility tree, console/network inspection, sites
-  that block plain HTTP clients, or real page state (cookies, localStorage, redirects).
-- If a fetch comes back blocked or empty, *then* escalate to the browser, and say why.
+- **The browser earns its cost when the page needs a browser to exist:** it is behind a login
+  the shared Chrome already holds (Gmail, Avanza, Kivra, App Store Connect, Nordnet, WINT,
+  Sellpy, ...); the content is built by JavaScript and is not in the HTML a fetch returns; you
+  have to act on the page (click, type, submit, scroll); you need what only a live page has
+  (screenshot, accessibility tree, console, network traffic, cookies, localStorage, redirect
+  chain); or plain HTTP clients get turned away by a bot wall or challenge page.
+- **Or when a human needs to see it.** Demoing a flow, checking a form together, handing over
+  a half-finished session, letting someone confirm with their own eyes -- a real reason for a
+  visible browser even when a fetch could have grabbed the bytes.
+- **Otherwise a fetch is the better first move.** "What does this page say", "what is the
+  price", "read me the docs": try native, and if it comes back blocked, empty or obviously
+  JS-shaped, escalate to the browser and say why. Falling back is cheap; opening a browser you
+  did not need is not.
+- Neither tool is banned. You judge which one fits the page in front of you.
 
 When you do need a page opened, read, or driven:
 

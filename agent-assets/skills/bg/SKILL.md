@@ -1,6 +1,6 @@
 ---
 name: bg
-description: "Connect to and drive the shared Browsergator browser -- one always-on Chrome that many agents share over MCP. Use when a task needs a REAL browser: a logged-in session, JS-rendered content, clicking/typing, or a screenshot. For plain information lookup, use your own native web search/fetch tools instead -- they are far cheaper. Any agent can work on any tab; coordination (per-tab FIFO + leases) prevents collisions."
+description: "Connect to and drive the shared Browsergator browser -- one always-on Chrome that many agents share over MCP. Fits when a page needs a real browser: a logged-in session, JS-built content, clicking/typing, a screenshot, a site that turns plain HTTP away -- or when a human is working alongside you and needs to see it. For simply reading a public page, your own native web search/fetch is usually the better first move. Any agent can work on any tab; coordination (per-tab FIFO + leases) prevents collisions."
 triggers:
   - "/bg"
   - "use the shared browser"
@@ -16,29 +16,34 @@ that many agents share over MCP. Agents are ephemeral clients; the browser and g
 running. You can add, remove, read, and drive tabs -- the same tab or different tabs as other
 agents.
 
-## FIRST: do you actually need a browser?
+## FIRST: native fetch, or the browser?
 
-Driving a real browser costs far more tokens and wall-clock than a headless fetch, and it
-occupies a resource other agents are sharing. **Reach for your own native tools first.**
+Reading a web page is usually a job for your own native web search / web fetch (or `curl`).
+That path is headless, fast, and cheap. The shared browser is a heavier, *shared* resource --
+so treat it as the escalation, not the starting point.
 
-**Use your native web search / web fetch (or `curl`) when the task is:**
+**The browser earns its cost when the page needs an actual browser to exist:**
 
-- looking something up -- docs, prices, news, an API reference, "what is X"
-- reading a public page, article, README, or JSON/RSS feed
-- anything an HTTP GET would answer
+- it sits behind a **login** the shared Chrome already holds (Gmail, Avanza, Kivra,
+  App Store Connect, Nordnet, WINT, Sellpy, ...)
+- the content is **built by JavaScript** and simply is not in the HTML a fetch returns
+- you have to **act on the page**: click, type, submit, scroll, pick from a dropdown
+- you need what only a live page has: a **screenshot**, the accessibility tree, console
+  output, network traffic, cookies, `localStorage`, a redirect chain
+- plain HTTP clients get **turned away** (bot wall, anti-scraping, a challenge page)
 
-**Use the shared browser (this skill) only when you genuinely need a real browser:**
+**Or when a human needs to see it.** Working alongside someone -- demoing a flow, checking a
+form together, letting them take over a half-finished session, confirming with their own eyes
+that something looks right -- is a real reason to use a visible browser even when a fetch
+could technically have fetched the bytes.
 
-- the page is behind a **login** and the shared Chrome already holds that session
-  (Gmail, Avanza, Kivra, App Store Connect, Nordnet, WINT, Sellpy, Vinted, ...)
-- the content is **rendered by JavaScript** and is absent from the raw HTML
-- you must **interact**: click, type, submit, scroll, drag, pick from a dropdown
-- you need a **screenshot**, the accessibility tree, console output, or network traffic
-- the site **blocks plain HTTP clients** (bot walls, heavy anti-scraping)
-- you need real page state: cookies, `localStorage`, a redirect chain
+**The rest of the time, a fetch is the better first move.** "What does this page say", "what
+is the current price", "read me the docs for X" -- try native, and if it comes back blocked,
+empty, or obviously JS-shaped, escalate to the browser and mention why you escalated.
+Falling back that way is cheap; opening a browser you did not need is not.
 
-If a plain fetch would have answered it, the browser was the wrong tool. When a fetch gets
-blocked or comes back empty, *then* escalate to the browser -- and say why you escalated.
+You are the one judging it. Neither tool is banned -- the question is only which one fits the
+page in front of you.
 
 ## If the browser is down
 
@@ -80,7 +85,8 @@ repo for the exact `codex mcp add` / `claude mcp add-json` / `gemini mcp add` co
 
 ## Golden rules
 
-0. **Native search/fetch first.** The browser is for real-browser work, not for lookups.
+0. **Check the fit first.** A plain read usually suits a native fetch; the browser suits pages
+   that need a browser, or a human watching. See the section above.
 1. **`list_tabs` FIRST.** Never assume a tab exists. Discover current tabs and their `pageId`s.
 2. **Reference tabs by explicit `pageId`.** Every page-scoped tool needs `pageId`.
 3. **Pass your identity** on coordinated calls: `agentId`, `taskId`, `leaseOwnerId`. These are
