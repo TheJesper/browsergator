@@ -302,12 +302,13 @@ export function createMcpServer(gateway: BrowserGateway, session: SessionReferen
     'evaluate',
     {
       description:
-        'Run JavaScript in one explicit page and return the (redacted) result. Set write=true for any mutating script (DOM changes, POST, storage writes). A mutating evaluate on a non-local environment (test/ci/qa/staging/prod or any remote host) is BLOCKED unless confirm=true -- ask the user to approve first. Reads are allowed on any environment.',
+        'Run JavaScript in one explicit page and return the (redacted) result. Set write=true for any mutating script (DOM changes, POST, storage writes). A mutating evaluate on a non-local environment (test/ci/qa/staging/prod or any remote host) is BLOCKED unless confirm=true -- ask the user to approve first. Reads are allowed on any environment. Pass frameUrl to run INSIDE a specific (possibly cross-origin) iframe -- match by the frame origin/URL (exact, prefix, or substring); omit to run in the top frame.',
       inputSchema: {
         pageId: z.string().min(1),
         expression: z.string().min(1).max(20000),
         write: z.boolean().default(false),
         confirm: z.boolean().default(false),
+        frameUrl: z.string().min(1).max(2000).optional(),
         ...mutationShape
       },
       annotations: { readOnlyHint: false, idempotentHint: false }
@@ -317,7 +318,7 @@ export function createMcpServer(gateway: BrowserGateway, session: SessionReferen
         gateway.evaluate(
           args.pageId,
           args.expression,
-          { write: args.write, confirm: args.confirm },
+          { write: args.write, confirm: args.confirm, ...(args.frameUrl ? { frameUrl: args.frameUrl } : {}) },
           {
             context: agentContext(args, session.clientSessionId),
             ...(args.leaseId ? { leaseId: args.leaseId } : {}),

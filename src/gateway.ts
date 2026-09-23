@@ -250,7 +250,7 @@ export class BrowserGateway {
   async evaluate(
     pageId: string,
     expression: string,
-    options: { write: boolean; confirm: boolean },
+    options: { write: boolean; confirm: boolean; frameUrl?: string },
     metadata: MutationMetadata
   ): Promise<{ pageId: string; value: unknown; environment: EnvironmentDecision }> {
     const tab = await this.requireTab(pageId);
@@ -258,7 +258,7 @@ export class BrowserGateway {
 
     if (!options.write) {
       // Read-only evaluate: no lease, no environment gate. Output redacted.
-      const value = await this.driver.evaluate(pageId, expression);
+      const value = await this.driver.evaluate(pageId, expression, options.frameUrl);
       return { pageId, value: redact(value), environment };
     }
 
@@ -277,7 +277,7 @@ export class BrowserGateway {
       'evaluate_write',
       metadata,
       { tier: environment.tier, host: environment.host, expressionHash: hash(expression) },
-      () => this.driver.evaluate(pageId, expression)
+      () => this.driver.evaluate(pageId, expression, options.frameUrl)
     );
     return { pageId, value: redact(value), environment };
   }

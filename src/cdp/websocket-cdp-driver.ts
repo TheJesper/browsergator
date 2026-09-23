@@ -67,6 +67,9 @@ export class WebSocketCdpDriver implements BrowserDriver {
   private readonly pageBySession = new Map<string, string>();
   private readonly attaching = new Map<string, Promise<void>>();
   private readonly activeRequests = new Map<string, Set<string>>();
+  /** Per-page execution contexts (frames): pageId -> [{ contextId, url, name }]. Populated by
+   *  Runtime.executionContextCreated so evaluate() can target a specific (cross-origin) frame. */
+  private readonly contextsByPage = new Map<string, Array<{ contextId: number; url: string; name: string }>>();
   private readonly dialogs = new Set<string>();
   private readonly events = new EventEmitter();
 
@@ -345,11 +348,43 @@ export class WebSocketCdpDriver implements BrowserDriver {
     return { url: String(value?.url ?? ''), title: String(value?.title ?? '') };
   }
 
-  async evaluate(pageId: string, expression: string): Promise<unknown> {
+  async evaluate(pageId: string, expression: string, frameUrl?: string): Promise<unknown> {
     const sessionId = this.requireSession(pageId);
+    // Frame targeting: if frameUrl is given, resolve it to a specific execution context
+    // (contextId) so JS runs INSIDE that (possibly cross-origin) iframe, not the top frame.
+    let contextId: number | undefined;
+    if (frameUrl) {
+      const contexts = this.contextsByPage.get(pageId) ?? [];
+      // Multiple contexts can share an origin (re-created on navigation, workers, detached
+      // frames, or several same-origin iframes -- Adobe Experience Cloud nests many
+      // analytics.adobe.com frames). A single "most recent" pick can land on a blank/detached
+      // context. So gather ALL matches (newest first) and probe each for real content, using
+      // the first that has a live document body. Falls back to newest if none respond.
+      const matches = (pred: (c: { url: string; name: string }) => boolean) =>
+        contexts.filter(pred).reverse();
+      const tiers = [
+        matches((c) => c.url === frameUrl),
+        matches((c) => !!c.url && c.url.startsWith(frameUrl)),
+        matches((c) => !!c.url && c.url.includes(frameUrl)),
+        matches((c) => !!c.name && c.name.includes(frameUrl))
+      ];
+      const candidates = tiers.find((t) => t.length > 0) ?? [];
+      if (candidates.length === 0) {
+        throw new GatewayError('FRAME_NOT_FOUND', `No execution context matched frameUrl "${frameUrl}"`, {
+          pageId,
+          availableFrames: contexts.map((c) => c.url || c.name).filter(Boolean)
+        });
+      }
+      contextId = await this.resolveLiveContext(sessionId, candidates);
+    }
     const result = await this.send(
       'Runtime.evaluate',
-      { expression, returnByValue: true, awaitPromise: true },
+      {
+        expression,
+        returnByValue: true,
+        awaitPromise: true,
+        ...(contextId !== undefined ? { contextId } : {})
+      },
       sessionId
     );
     const exception = result['exceptionDetails'] as
@@ -363,6 +398,46 @@ export class WebSocketCdpDriver implements BrowserDriver {
       );
     }
     return result['result']?.value;
+  }
+
+  /**
+   * Given candidate execution contexts (newest first) that all matched a frameUrl, pick the one
+   * with a live, non-blank document. Same-origin iframes (e.g. Adobe's nested analytics frames)
+   * produce several contexts sharing one origin; only some hold the real content. We probe each
+   * with a cheap body-length read and return the first with content, preferring the most recent.
+   * If none respond (probe errors), fall back to the newest candidate so behavior degrades to the
+   * previous "most recent" heuristic rather than failing.
+   */
+  private async resolveLiveContext(
+    sessionId: string,
+    candidates: ReadonlyArray<{ contextId: number }>
+  ): Promise<number> {
+    const first = candidates[0];
+    if (!first) throw new GatewayError('FRAME_NOT_FOUND', 'No candidate execution contexts', {});
+    if (candidates.length === 1) return first.contextId;
+    let best: { contextId: number; len: number } | undefined;
+    for (const c of candidates) {
+      try {
+        const probe = await this.send(
+          'Runtime.evaluate',
+          {
+            expression:
+              '(() => { try { return (document && document.body) ? document.body.innerText.length : 0; } catch { return 0; } })()',
+            returnByValue: true,
+            awaitPromise: true,
+            contextId: c.contextId
+          },
+          sessionId
+        );
+        const len = Number(probe['result']?.value ?? 0);
+        // First non-blank context wins (candidates are newest-first) -- return immediately.
+        if (len > 0) return c.contextId;
+        if (!best || len > best.len) best = { contextId: c.contextId, len };
+      } catch {
+        // Detached/destroyed context -- skip it.
+      }
+    }
+    return best?.contextId ?? first.contextId;
   }
 
   async readStorage(pageId: string): Promise<{ local: Record<string, string>; session: Record<string, string>; cookies: string }> {
@@ -565,6 +640,7 @@ export class WebSocketCdpDriver implements BrowserDriver {
       this.sessionByPage.delete(pageId);
       this.targets.delete(pageId);
       this.activeRequests.delete(pageId);
+      this.contextsByPage.delete(pageId);
       this.dialogs.delete(pageId);
       this.emitEvent('lifecycle', method, pageId, params);
       return;
@@ -591,6 +667,21 @@ export class WebSocketCdpDriver implements BrowserDriver {
       this.dialogs.add(pageId);
     } else if (method === 'Page.javascriptDialogClosed') {
       this.dialogs.delete(pageId);
+    } else if (method === 'Runtime.executionContextCreated') {
+      const ctx = params['context'] as { id?: number; origin?: string; name?: string; auxData?: { frameId?: string } } | undefined;
+      if (ctx?.id !== undefined) {
+        const list = this.contextsByPage.get(pageId) ?? [];
+        // De-dup by contextId, then record url (origin) + name so frameUrl can resolve it.
+        const next = list.filter((c) => c.contextId !== ctx.id);
+        next.push({ contextId: ctx.id, url: String(ctx.origin ?? ''), name: String(ctx.name ?? '') });
+        this.contextsByPage.set(pageId, next);
+      }
+    } else if (method === 'Runtime.executionContextDestroyed') {
+      const destroyedId = Number(params['executionContextId']);
+      const list = this.contextsByPage.get(pageId);
+      if (list) this.contextsByPage.set(pageId, list.filter((c) => c.contextId !== destroyedId));
+    } else if (method === 'Runtime.executionContextsCleared') {
+      this.contextsByPage.delete(pageId);
     }
 
     const kind = eventKind(method);

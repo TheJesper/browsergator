@@ -144,7 +144,7 @@ export interface BrowserDriver {
   screenshot(pageId: string, options: ScreenshotOptions): Promise<ScreenshotResult>;
   getResponseBody(pageId: string, requestId: string): Promise<ResponseBodyResult>;
   inspectPage(pageId: string): Promise<{ url: string; title: string }>;
-  evaluate(pageId: string, expression: string): Promise<unknown>;
+  evaluate(pageId: string, expression: string, frameUrl?: string): Promise<unknown>;
   readStorage(pageId: string): Promise<{ local: Record<string, string>; session: Record<string, string>; cookies: string }>;
   onEvent(listener: (event: BrowserEvent) => void): () => void;
 }
