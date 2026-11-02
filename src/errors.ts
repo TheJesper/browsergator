@@ -20,6 +20,9 @@ export type GatewayErrorCode =
   | 'WRITE_CONFIRM_REQUIRED'
   | 'INVALID_FETCH_URL'
   | 'FETCH_BODY_TOO_LARGE'
+  | 'CONTEXT_NOT_FOUND'
+  | 'CONTEXT_OWNER_MISMATCH'
+  | 'CONTEXT_HAS_ACTIVE_LEASES'
   | 'INTERNAL_ERROR';
 
 export class GatewayError extends Error {

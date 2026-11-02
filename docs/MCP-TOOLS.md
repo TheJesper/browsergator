@@ -2,7 +2,7 @@
 
 All tools operating on an existing page require its explicit Chrome target ID in `pageId`. `fetch_rendered_page` is the exception: it creates its own temporary page for the supplied URL and closes only that page. Tool failures return a structured JSON object and set MCP `isError`.
 
-`open_tab` creates one individual tab only. No tool creates or changes Chrome tab groups or browser contexts implicitly. Grouping must always be an explicit, separately authorized request.
+`open_tab` creates one individual tab only. It never creates or changes Chrome tab groups. `create_browser_context` and `dispose_browser_context` are the only explicit browser-context lifecycle operations; no context is created implicitly.
 
 `fetch_rendered_page` is a one-call convenience for rendered-page fetching. It creates an owned blank tab, fully attaches observation, obtains its own short lease, and navigates the requested URL once through the existing FIFO coordinator. Within the original deadline it waits for bounded network-idle navigation and a committed HTTP(S) document, then rechecks the captured document identity. Network idle is a capture condition, not a guarantee of arbitrary SPA completeness or menu content. It never treats the initial `about:blank` body as a successful fetch; if navigation does not settle before the deadline, it returns a typed failure and closes only its own page. Redirects may change the final URL. Observed transport metadata is bound to the final main-frame loader and document request; URL fragments are excluded only from HTTP-response matching, never from receipt URLs. Missing or ambiguous observation remains null. It returns rendered `html` with final URL, observed document status (nullable), byte count, SHA-256 and capture time. It accepts only HTTP(S) URLs without embedded credentials, enforces a response-size cap, and does not click, submit forms, solve challenges, or read browser storage. Cloudflare/CAPTCHA pages are returned as ordinary page content for the caller to classify; the tool does not bypass them. This fetch tool returns page HTML to the authenticated caller; audit logs record only URL, hash, size and status.
 
@@ -18,6 +18,8 @@ All tools operating on an existing page require its explicit Chrome target ID in
 ## Mutations
 
 - `open_tab`: creates a new page target. It does not reuse an existing tab.
+- `create_browser_context`: creates an explicitly owned, incognito-like CDP browser context with a bounded TTL.
+- `dispose_browser_context`: disposes an owned context and its pages; active leases require `force=true`.
 - `fetch_rendered_page`: one-call temporary-page rendered fetch with content receipt; see safety and size limits above.
 - `close_tab`: per-page FIFO mutation; denied for protected tabs unless authorized.
 - `navigate`: per-page FIFO mutation with automatic short lease behavior.
@@ -42,4 +44,4 @@ Mutation metadata uses required `agentId`, `taskId`, and `leaseOwnerId`, optiona
 
 ## Error codes
 
-`TAB_NOT_FOUND`, `TAB_PROTECTED`, `LEASE_CONFLICT`, `LEASE_EXPIRED`, `BROWSER_DISCONNECTED`, `NEEDS_HUMAN`, `DIALOG_NOT_OPEN`, `WAIT_TIMEOUT`, `RESPONSE_BODY_UNAVAILABLE`, `AUTH_REQUIRED`, `INVALID_CONFIG`, `INVALID_SELECTOR`, `ELEMENT_NOT_FOUND`, `ELEMENT_NOT_INTERACTABLE`, `IDEMPOTENCY_CONFLICT`, `INVALID_FETCH_URL`, `FETCH_BODY_TOO_LARGE`, and `INTERNAL_ERROR`.
+`TAB_NOT_FOUND`, `TAB_PROTECTED`, `LEASE_CONFLICT`, `LEASE_EXPIRED`, `BROWSER_DISCONNECTED`, `NEEDS_HUMAN`, `DIALOG_NOT_OPEN`, `WAIT_TIMEOUT`, `RESPONSE_BODY_UNAVAILABLE`, `AUTH_REQUIRED`, `INVALID_CONFIG`, `INVALID_SELECTOR`, `ELEMENT_NOT_FOUND`, `ELEMENT_NOT_INTERACTABLE`, `IDEMPOTENCY_CONFLICT`, `INVALID_FETCH_URL`, `FETCH_BODY_TOO_LARGE`, `CONTEXT_NOT_FOUND`, `CONTEXT_OWNER_MISMATCH`, `CONTEXT_HAS_ACTIVE_LEASES`, and `INTERNAL_ERROR`.

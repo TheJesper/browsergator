@@ -11,6 +11,7 @@ import type {
   InteractionResult,
   NavigationOptions,
   NavigationResult,
+  OpenTabOptions,
   ResponseBodyResult,
   ScreenshotOptions,
   ScreenshotResult,
@@ -38,6 +39,9 @@ export class MockBrowserDriver implements BrowserDriver {
   private connected = true;
   private browserSessionCounter = 1;
   private nextPage = 1;
+  private nextContext = 1;
+  private nextWindow = 1;
+  readonly browserContexts = new Set<string>();
   private readonly events = new EventEmitter();
 
   constructor(tabs: DriverTab[] = []) {
@@ -67,15 +71,34 @@ export class MockBrowserDriver implements BrowserDriver {
     return [...this.tabs.values()].map((tab) => ({ ...tab }));
   }
 
-  async openTab(url: string): Promise<DriverTab> {
+  async createBrowserContext(): Promise<{ browserContextId: string }> {
+    this.assertConnected();
+    const browserContextId = `context-${this.nextContext++}`;
+    this.browserContexts.add(browserContextId);
+    return { browserContextId };
+  }
+
+  async disposeBrowserContext(browserContextId: string): Promise<void> {
+    this.assertConnected();
+    if (!browserContextId || browserContextId === 'default') {
+      throw new GatewayError('INTERNAL_ERROR', 'The default browser context cannot be disposed');
+    }
+    for (const [pageId, tab] of this.tabs) {
+      if (tab.browserContextId === browserContextId) this.tabs.delete(pageId);
+    }
+    this.browserContexts.delete(browserContextId);
+  }
+
+  async openTab(url: string, options: OpenTabOptions = {}): Promise<DriverTab> {
     this.assertConnected();
     const tab: DriverTab = {
       pageId: `page-${this.nextPage++}`,
-      browserContextId: 'default',
+      browserContextId: options.browserContextId ?? 'default',
       type: 'page',
       title: titleFor(url),
       url,
-      attached: true
+      attached: true,
+      ...(options.newWindow ? { windowId: this.nextWindow++ } : {})
     };
     this.tabs.set(tab.pageId, tab);
     return { ...tab };

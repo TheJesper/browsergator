@@ -29,6 +29,30 @@ describe('BrowserGateway integration with mock CDP', () => {
     await gateway.start();
   });
 
+  it('creates an owned context, opens a new window in it, and disposes it', async () => {
+    const metadata = { context: { agentId: 'agent-a', taskId: 'context-1', leaseOwnerId: 'owner-a', clientSessionId: 's1' } };
+    const context = await gateway.createBrowserContext({ owner: 'agent-a', ttlMs: 10_000, name: 'isolated' }, metadata);
+    const page = await gateway.openTab('about:blank', metadata, { browserContextId: context.browserContextId, newWindow: true });
+    expect(page).toMatchObject({ browserContextId: context.browserContextId, windowId: 1 });
+    expect((await gateway.listTabs(undefined, context.browserContextId)).map((tab) => tab.pageId)).toEqual([page.pageId]);
+    await expect(gateway.disposeBrowserContext(context.browserContextId, {}, metadata)).resolves.toEqual({
+      disposed: true,
+      closedPages: [page.pageId]
+    });
+    expect(driver.browserContexts.has(context.browserContextId)).toBe(false);
+  });
+
+  it('blocks context disposal while a page lease is active unless forced', async () => {
+    const metadata = { context: { agentId: 'agent-a', taskId: 'context-2', leaseOwnerId: 'owner-a', clientSessionId: 's1' } };
+    const context = await gateway.createBrowserContext({ owner: 'agent-a' }, metadata);
+    const page = await gateway.openTab('about:blank', metadata, { browserContextId: context.browserContextId });
+    await gateway.claimTab(page.pageId, metadata.context);
+    await expect(gateway.disposeBrowserContext(context.browserContextId, {}, metadata))
+      .rejects.toMatchObject({ code: 'CONTEXT_HAS_ACTIVE_LEASES' });
+    await expect(gateway.disposeBrowserContext(context.browserContextId, { force: true }, metadata))
+      .resolves.toMatchObject({ disposed: true, closedPages: [page.pageId] });
+  });
+
   it('runs different tabs in parallel and same-tab mutations FIFO', async () => {
     driver.navigationDelayMs = 40;
     const a = {

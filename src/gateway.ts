@@ -4,11 +4,13 @@ import type { GatewayConfig } from './config.js';
 import { asGatewayError, GatewayError } from './errors.js';
 import type {
   AgentContext,
+  BrowserContext,
   BrowserDriver,
   BrowserEvent,
   DriverTab,
   ElementLocator,
   NavigationOptions,
+  OpenTabOptions,
   ScreenshotOptions,
   WaitForOptions
 } from './types.js';
@@ -77,6 +79,8 @@ export class BrowserGateway {
   private readonly lifecycleEvents = new Map<string, RingBuffer<BrowserEvent>>();
   private readonly requestOwners = new Map<string, string>();
   private readonly requestOrder = new Map<string, RingBuffer<string>>();
+  private readonly contexts = new Map<string, BrowserContext>();
+  private contextCleanupTimer?: NodeJS.Timeout;
   private removeEventListener?: () => void;
 
   constructor(
@@ -90,6 +94,8 @@ export class BrowserGateway {
 
   async start(): Promise<void> {
     this.leases.startCleanup();
+    this.contextCleanupTimer = setInterval(() => void this.cleanupExpiredContexts(), this.config.contextCleanupIntervalMs);
+    this.contextCleanupTimer.unref();
     this.removeEventListener = this.driver.onEvent((event) => this.observe(event));
     await this.driver.start();
   }
@@ -98,6 +104,8 @@ export class BrowserGateway {
     this.removeEventListener?.();
     this.removeEventListener = undefined;
     this.leases.stopCleanup();
+    if (this.contextCleanupTimer) clearInterval(this.contextCleanupTimer);
+    this.contextCleanupTimer = undefined;
     await this.driver.stop();
   }
 
@@ -115,10 +123,10 @@ export class BrowserGateway {
     };
   }
 
-  async listTabs(agentId?: string): Promise<TabView[]> {
+  async listTabs(agentId?: string, browserContextId?: string): Promise<TabView[]> {
     const tabs = await this.driver.listTabs();
     const browserSessionId = this.driver.status().browserSessionId;
-    return tabs.map((tab) => {
+    return tabs.filter((tab) => !browserContextId || tab.browserContextId === browserContextId).map((tab) => {
       const decision = this.policy.inspect(tab.url, agentId);
       return {
         ...tab,
@@ -131,13 +139,16 @@ export class BrowserGateway {
     });
   }
 
-  async openTab(url: string, metadata: MutationMetadata): Promise<DriverTab> {
+  async openTab(url: string, metadata: MutationMetadata, options: OpenTabOptions = {}): Promise<DriverTab> {
     const operation = async (): Promise<DriverTab> => {
       this.policy.assertMutationAllowed(url, metadata.context.agentId);
+      this.assertContextAccess(options.browserContextId, metadata.context.agentId);
       try {
-        const tab = await this.driver.openTab(url);
+        const tab = await this.driver.openTab(url, options);
         await this.writeAudit('open_tab', 'success', metadata.context, tab.pageId, {
-          destinationOrigin: safeOrigin(url)
+          destinationOrigin: safeOrigin(url),
+          ...(options.browserContextId ? { browserContextId: options.browserContextId } : {}),
+          ...(options.newWindow ? { newWindow: true } : {})
         });
         return tab;
       } catch (error) {
@@ -147,7 +158,75 @@ export class BrowserGateway {
         throw error;
       }
     };
-    return this.idempotent(metadata, { url }, operation);
+    return this.idempotent(metadata, { url, ...options }, operation);
+  }
+
+  async createBrowserContext(
+    input: { owner: string; ttlMs?: number; incognito?: boolean; name?: string },
+    metadata: MutationMetadata
+  ): Promise<BrowserContext> {
+    if (!input.owner.trim()) throw new GatewayError('CONTEXT_OWNER_MISMATCH', 'Context owner is required');
+    if (input.owner !== metadata.context.agentId) {
+      throw new GatewayError('CONTEXT_OWNER_MISMATCH', 'Context owner must match agentId', {
+        owner: input.owner,
+        agentId: metadata.context.agentId
+      });
+    }
+    if (input.incognito === false) {
+      throw new GatewayError('INVALID_CONFIG', 'Custom browser contexts are incognito-like; incognito=false is unsupported');
+    }
+    const ttlMs = Math.min(Math.max(100, input.ttlMs ?? 1_800_000), 86_400_000);
+    const created = await this.driver.createBrowserContext();
+    const now = Date.now();
+    const context: BrowserContext = {
+      browserContextId: created.browserContextId,
+      owner: input.owner,
+      incognito: true,
+      ...(input.name ? { name: input.name } : {}),
+      createdAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + ttlMs).toISOString()
+    };
+    this.contexts.set(context.browserContextId, context);
+    await this.writeAudit('create_browser_context', 'success', metadata.context, undefined, {
+      browserContextId: context.browserContextId,
+      owner: context.owner,
+      expiresAt: context.expiresAt
+    });
+    return context;
+  }
+
+  async disposeBrowserContext(
+    browserContextId: string,
+    input: { force?: boolean },
+    metadata: MutationMetadata
+  ): Promise<{ disposed: true; closedPages: string[] }> {
+    const context = this.contexts.get(browserContextId);
+    if (!context) throw new GatewayError('CONTEXT_NOT_FOUND', 'No managed browser context exists', { browserContextId });
+    if (context.owner !== metadata.context.agentId) {
+      throw new GatewayError('CONTEXT_OWNER_MISMATCH', 'Only the context owner may dispose it', {
+        browserContextId,
+        owner: context.owner,
+        agentId: metadata.context.agentId
+      });
+    }
+    const pages = (await this.driver.listTabs()).filter((tab) => tab.browserContextId === browserContextId);
+    const active = pages.map((tab) => this.leases.get(tab.pageId)).filter((lease): lease is NonNullable<typeof lease> => Boolean(lease));
+    if (active.length && !input.force) {
+      throw new GatewayError('CONTEXT_HAS_ACTIVE_LEASES', 'Context contains actively leased pages', {
+        browserContextId,
+        pageIds: active.map((lease) => lease.pageId)
+      });
+    }
+    if (input.force) for (const lease of active) this.leases.releaseIfOwned(lease.pageId, lease.leaseId);
+    await this.driver.disposeBrowserContext(browserContextId);
+    this.contexts.delete(browserContextId);
+    const closedPages = pages.map((page) => page.pageId);
+    await this.writeAudit('dispose_browser_context', 'success', metadata.context, undefined, {
+      browserContextId,
+      closedPages,
+      force: Boolean(input.force)
+    });
+    return { disposed: true, closedPages };
   }
 
   /**
@@ -689,6 +768,52 @@ export class BrowserGateway {
     const tab = (await this.driver.listTabs()).find((candidate) => candidate.pageId === pageId);
     if (!tab) throw new GatewayError('TAB_NOT_FOUND', 'No page target exists for pageId', { pageId });
     return tab;
+  }
+
+  private assertContextAccess(browserContextId: string | undefined, agentId: string): void {
+    if (!browserContextId || browserContextId === 'default') return;
+    const context = this.contexts.get(browserContextId);
+    if (!context) throw new GatewayError('CONTEXT_NOT_FOUND', 'No managed browser context exists', { browserContextId });
+    if (context.owner !== agentId) {
+      throw new GatewayError('CONTEXT_OWNER_MISMATCH', 'Context belongs to another agent', {
+        browserContextId,
+        owner: context.owner,
+        agentId
+      });
+    }
+  }
+
+  private async cleanupExpiredContexts(): Promise<void> {
+    const now = Date.now();
+    for (const context of [...this.contexts.values()]) {
+      if (Date.parse(context.expiresAt) > now) continue;
+      const pages = (await this.driver.listTabs().catch(() => []))
+        .filter((tab) => tab.browserContextId === context.browserContextId);
+      for (const lease of this.leases.list().filter((entry) => pages.some((page) => page.pageId === entry.pageId))) {
+        this.leases.releaseIfOwned(lease.pageId, lease.leaseId);
+      }
+      try {
+        await this.driver.disposeBrowserContext(context.browserContextId);
+        this.contexts.delete(context.browserContextId);
+        await this.audit.write({
+          action: 'dispose_browser_context',
+          outcome: 'success',
+          agentId: context.owner,
+          taskId: 'context-ttl-cleanup',
+          leaseOwnerId: 'gateway',
+          details: { browserContextId: context.browserContextId, closedPages: pages.map((page) => page.pageId), expired: true }
+        });
+      } catch (error) {
+        await this.audit.write({
+          action: 'dispose_browser_context',
+          outcome: 'error',
+          agentId: context.owner,
+          taskId: 'context-ttl-cleanup',
+          leaseOwnerId: 'gateway',
+          details: { browserContextId: context.browserContextId, error: asGatewayError(error).toJSON() }
+        });
+      }
+    }
   }
 
   private observe(event: BrowserEvent): void {

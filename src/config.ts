@@ -13,6 +13,7 @@ const schema = z.object({
   maxLeaseTtlMs: z.coerce.number().int().min(100).default(60_000),
   eventBufferSize: z.coerce.number().int().min(10).max(10_000).default(500),
   maxResponseBodyBytes: z.coerce.number().int().min(1024).max(10_485_760).default(1_048_576),
+  contextCleanupIntervalMs: z.coerce.number().int().min(100).max(3_600_000).default(10_000),
   protectedPatterns: z.array(z.string()).default(['*/login*', '*/signin*', '*/auth*', '*/checkout*']),
   protectedAgents: z.array(z.string()).default([]),
   dataDir: z.string().default(resolve(process.cwd(), '.data'))
@@ -31,6 +32,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
       maxLeaseTtlMs: env['BROWSER_GATEWAY_MAX_LEASE_TTL_MS'],
       eventBufferSize: env['BROWSER_GATEWAY_EVENT_BUFFER_SIZE'],
       maxResponseBodyBytes: env['BROWSER_GATEWAY_MAX_RESPONSE_BODY_BYTES'],
+      contextCleanupIntervalMs: env['BROWSER_GATEWAY_CONTEXT_CLEANUP_INTERVAL_MS'],
       protectedPatterns: csv(env['BROWSER_GATEWAY_PROTECTED_PATTERNS']),
       protectedAgents: csv(env['BROWSER_GATEWAY_PROTECTED_AGENTS']),
       dataDir: env['BROWSER_GATEWAY_DATA_DIR']

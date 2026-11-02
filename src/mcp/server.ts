@@ -47,21 +47,70 @@ export function createMcpServer(gateway: BrowserGateway, session: SessionReferen
     'list_tabs',
     {
       description: 'List Chrome page targets. Page-specific operations must use the returned explicit pageId.',
-      inputSchema: { agentId: z.string().min(1).max(128).optional() },
+      inputSchema: {
+        agentId: z.string().min(1).max(128).optional(),
+        browserContextId: z.string().min(1).max(256).optional()
+      },
       annotations: { readOnlyHint: true, idempotentHint: true }
     },
-    async ({ agentId }) => toolResult(() => gateway.listTabs(agentId))
+    async ({ agentId, browserContextId }) => toolResult(() => gateway.listTabs(agentId, browserContextId))
   );
 
   server.registerTool(
     'open_tab',
     {
-      description: 'Open a new Chrome tab without reusing or navigating an existing tab.',
-      inputSchema: { url: z.string().url(), ...mutationShape },
+      description: 'Open one individual Chrome tab. Optionally target an explicitly-created incognito browser context or a new window; never creates tab groups.',
+      inputSchema: {
+        url: z.string().url(),
+        browserContextId: z.string().min(1).max(256).optional(),
+        newWindow: z.boolean().default(false),
+        ...mutationShape
+      },
       annotations: { destructiveHint: false, idempotentHint: true }
     },
     async (args) =>
-      toolResult(() => gateway.openTab(args.url, mutationMetadata(args, session.clientSessionId)))
+      toolResult(() => gateway.openTab(
+        args.url,
+        mutationMetadata(args, session.clientSessionId),
+        { ...(args.browserContextId ? { browserContextId: args.browserContextId } : {}), newWindow: args.newWindow }
+      ))
+  );
+
+  server.registerTool(
+    'create_browser_context',
+    {
+      description: 'Create an explicit incognito-like browser context owned by agentId. Contexts are ephemeral and expire by TTL.',
+      inputSchema: {
+        owner: z.string().min(1).max(128),
+        ttlMs: z.number().int().min(100).max(86_400_000).default(1_800_000),
+        incognito: z.boolean().default(true),
+        name: z.string().min(1).max(128).optional(),
+        ...identityShape
+      },
+      annotations: { destructiveHint: false, idempotentHint: false }
+    },
+    async (args) => toolResult(() => gateway.createBrowserContext(
+      { owner: args.owner, ttlMs: args.ttlMs, incognito: args.incognito, ...(args.name ? { name: args.name } : {}) },
+      { context: agentContext(args, session.clientSessionId) }
+    ))
+  );
+
+  server.registerTool(
+    'dispose_browser_context',
+    {
+      description: 'Dispose one explicitly-owned browser context and all its pages. Without force, active leases block disposal.',
+      inputSchema: {
+        browserContextId: z.string().min(1).max(256),
+        force: z.boolean().default(false),
+        ...identityShape
+      },
+      annotations: { destructiveHint: true, idempotentHint: false }
+    },
+    async (args) => toolResult(() => gateway.disposeBrowserContext(
+      args.browserContextId,
+      { force: args.force },
+      { context: agentContext(args, session.clientSessionId) }
+    ))
   );
 
   server.registerTool(

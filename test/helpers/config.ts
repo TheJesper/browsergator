@@ -11,6 +11,7 @@ export function testConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
     maxLeaseTtlMs: 10_000,
     eventBufferSize: 50,
     maxResponseBodyBytes: 1_048_576,
+    contextCleanupIntervalMs: 10_000,
     protectedPatterns: ['*/login*', '*/signin*', '*/auth*', '*/checkout*'],
     protectedAgents: [],
     dataDir: resolve(process.cwd(), '.tmp', 'test-data'),

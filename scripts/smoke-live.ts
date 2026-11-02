@@ -31,6 +31,7 @@ async function main(): Promise<void> {
     maxLeaseTtlMs: 60_000,
     eventBufferSize: 500,
     maxResponseBodyBytes: 1_048_576,
+    contextCleanupIntervalMs: 10_000,
     protectedPatterns: ['*/login*', '*/signin*', '*/auth*', '*/checkout*'],
     protectedAgents: [],
     dataDir: resolve(process.cwd(), '.tmp', 'live-smoke')

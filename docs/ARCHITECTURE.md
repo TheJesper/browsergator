@@ -37,6 +37,8 @@ The singleton process owns all queues, leases, idempotency records, MCP transpor
 
 The gateway keeps seven identifiers separate: MCP client session, `agentId`, `taskId`, `browserSessionId`, `browserContextId`, `pageId`, and `leaseOwnerId`. A client session is transport state and a best-effort cleanup hook, not agent authority. Lease equality uses the explicit lease owner plus agent and task. Chrome connection epochs receive a gateway-generated browser session ID; targets expose their CDP browser context and page ID.
 
+Browser contexts are explicit, owner-bound, incognito-like CDP contexts with an in-memory TTL. `open_tab` can target one and can request a CDP `newWindow`; no operation creates Chrome tab groups implicitly. The default context remains available when `browserContextId` is omitted.
+
 ## CDP strategy
 
 The driver fetches `/json/version`, opens the advertised browser WebSocket, enables target discovery, and uses flattened `Target.attachToTarget` sessions. Commands carry the target session ID over the single socket. This supports parallel page traffic without one WebSocket per client and keeps event observation independent of connected agents.

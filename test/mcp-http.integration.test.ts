@@ -98,6 +98,34 @@ describe('Streamable HTTP MCP singleton', () => {
     expect((await gateway.listTabs()).map((tab) => tab.pageId)).toEqual(['p1', 'p2']);
   });
 
+  it('exposes explicit browser context and new-window lifecycle tools', async () => {
+    const client = await connectClient('contexts');
+    const created = await client.client.callTool({
+      name: 'create_browser_context',
+      arguments: { owner: 'agent-context', agentId: 'agent-context', taskId: 'context-task', leaseOwnerId: 'context-owner', ttlMs: 10_000 }
+    });
+    expect(created.isError).not.toBe(true);
+    const context = created.structuredContent as { browserContextId: string };
+    const opened = await client.client.callTool({
+      name: 'open_tab',
+      arguments: {
+        url: 'about:blank', browserContextId: context.browserContextId, newWindow: true,
+        agentId: 'agent-context', taskId: 'context-task', leaseOwnerId: 'context-owner'
+      }
+    });
+    expect(opened.isError).not.toBe(true);
+    expect(opened.structuredContent).toMatchObject({ browserContextId: context.browserContextId, windowId: 1 });
+    const disposed = await client.client.callTool({
+      name: 'dispose_browser_context',
+      arguments: {
+        browserContextId: context.browserContextId,
+        agentId: 'agent-context', taskId: 'context-task', leaseOwnerId: 'context-owner'
+      }
+    });
+    expect(disposed.isError).not.toBe(true);
+    expect(disposed.structuredContent).toMatchObject({ disposed: true });
+  });
+
   it('serializes two MCP clients on the same tab and cleans session leases', async () => {
     const first = await connectClient('first');
     const second = await connectClient('second');
