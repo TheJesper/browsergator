@@ -39,7 +39,7 @@ export function createMcpServer(gateway: BrowserGateway, session: SessionReferen
     { name: 'browser-gateway', version: '0.2.0' },
     {
       instructions:
-        'Use an explicit pageId for every page-scoped operation. For every coordinated or audited operation, pass agentId, taskId, and leaseOwnerId; these identify the logical caller independently of the MCP client session. A single MCP client may contain multiple subagents. Never infer a current tab. Prefer run_atomic for short mutations and release explicit leases promptly.'
+        'Use an explicit pageId for every operation on an existing page. fetch_rendered_page creates and closes its own temporary page from a URL. For every coordinated or audited operation, pass agentId, taskId, and leaseOwnerId; these identify the logical caller independently of the MCP client session. A single MCP client may contain multiple subagents. Never infer a current tab. Prefer run_atomic for short mutations and release explicit leases promptly.'
     }
   );
 
@@ -62,6 +62,26 @@ export function createMcpServer(gateway: BrowserGateway, session: SessionReferen
     },
     async (args) =>
       toolResult(() => gateway.openTab(args.url, mutationMetadata(args, session.clientSessionId)))
+  );
+
+  server.registerTool(
+    'fetch_rendered_page',
+    {
+      description:
+        'Fetch one URL through the shared browser: create a temporary tab, wait for its body, return rendered HTML plus final URL, observed document status, content hash and timestamp, then close only that tab. Does not click, submit, bypass challenges, or read browser storage.',
+      inputSchema: {
+        url: z.string().url(),
+        timeoutMs: z.number().int().min(100).max(60_000).default(20_000),
+        maxBytes: z.number().int().min(1_024).max(8_388_608).default(8_388_608),
+        ...identityShape
+      },
+      annotations: { destructiveHint: false, idempotentHint: false }
+    },
+    async (args) => toolResult(() => gateway.fetchRenderedPage(
+      args.url,
+      { timeoutMs: args.timeoutMs, maxBytes: args.maxBytes },
+      { context: agentContext(args, session.clientSessionId) }
+    ))
   );
 
   server.registerTool(

@@ -703,9 +703,9 @@ export class WebSocketCdpDriver implements BrowserDriver {
   }
 
   private ensureAttached(target: CdpTargetInfo): Promise<void> {
-    if (this.sessionByPage.has(target.targetId)) return Promise.resolve();
     const current = this.attaching.get(target.targetId);
     if (current) return current;
+    if (this.sessionByPage.has(target.targetId)) return Promise.resolve();
     const attaching = this.attach(target).finally(() => this.attaching.delete(target.targetId));
     this.attaching.set(target.targetId, attaching);
     return attaching;

@@ -205,6 +205,9 @@ export class MockBrowserDriver implements BrowserDriver {
     this.requireTab(pageId);
     const scripted = this.evaluateResults.get(expression);
     if (scripted !== undefined) return scripted;
+    if (expression === '({url:location.href,readyState:document.readyState})') {
+      return { url: this.requireTab(pageId).url, readyState: 'complete' };
+    }
     return this.defaultEvaluateResult;
   }
 

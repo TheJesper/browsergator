@@ -74,6 +74,30 @@ describe('Streamable HTTP MCP singleton', () => {
     expect(driver.maxActiveGlobal).toBe(2);
   });
 
+  it('exposes one-call rendered fetch with a content receipt', async () => {
+    const client = await connectClient('fetcher');
+    const html = '<html><body><main>Rendered</main></body></html>';
+    driver.defaultEvaluateResult = { url: 'https://fetch.example/menu', title: 'Menu', html };
+    const result = await client.client.callTool({
+      name: 'fetch_rendered_page',
+      arguments: {
+        url: 'https://fetch.example/menu',
+        maxBytes: 2_000,
+        agentId: 'agent-fetch',
+        taskId: 'task-fetch',
+        leaseOwnerId: 'lease-fetch'
+      }
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      requestedUrl: 'https://fetch.example/menu',
+      finalUrl: 'https://fetch.example/menu',
+      html,
+      contentBytes: Buffer.byteLength(html)
+    });
+    expect((await gateway.listTabs()).map((tab) => tab.pageId)).toEqual(['p1', 'p2']);
+  });
+
   it('serializes two MCP clients on the same tab and cleans session leases', async () => {
     const first = await connectClient('first');
     const second = await connectClient('second');

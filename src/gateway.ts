@@ -54,6 +54,18 @@ export interface RunAtomicInput {
   };
 }
 
+export interface RenderedFetchResult {
+  requestedUrl: string;
+  finalUrl: string;
+  title: string;
+  html: string;
+  contentSha256: string;
+  contentBytes: number;
+  statusCode: number | null;
+  contentType: string | null;
+  capturedAt: string;
+}
+
 export class BrowserGateway {
   readonly leases: LeaseManager;
   readonly queue = new PerTabFifo();
@@ -138,11 +150,189 @@ export class BrowserGateway {
     return this.idempotent(metadata, { url }, operation);
   }
 
+  /**
+   * Fetch one HTTP(S) page through the shared browser and return its rendered
+   * DOM. Creates/closes only its own temporary page; never clicks, submits,
+   * solves challenges, or reads browser storage.
+   */
+  async fetchRenderedPage(
+    url: string,
+    options: { timeoutMs: number; maxBytes: number },
+    metadata: MutationMetadata
+  ): Promise<RenderedFetchResult> {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new GatewayError('INVALID_FETCH_URL', 'A valid HTTP(S) URL is required');
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+      throw new GatewayError('INVALID_FETCH_URL', 'Only credential-free HTTP(S) URLs are allowed');
+    }
+    this.policy.assertMutationAllowed(parsed.href, metadata.context.agentId);
+
+    const deadline = Date.now() + options.timeoutMs;
+    const remainingMs = (): number => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new GatewayError('WAIT_TIMEOUT', 'Rendered fetch deadline expired');
+      return remaining;
+    };
+    let page: DriverTab | undefined;
+    let leaseId: string | undefined;
+    let operationErrorCode: string | undefined;
+    let operationFailure: unknown;
+    let cleanupFailure: GatewayError | undefined;
+    let result: RenderedFetchResult | undefined;
+    try {
+      const existingPageIds = new Set((await this.listTabs(metadata.context.agentId)).map((tab) => tab.pageId));
+      remainingMs();
+      // Attach and enable observation before the one requested navigation.
+      // Ordinary open_tab keeps its existing behavior.
+      page = await this.openTab('about:blank', metadata);
+      if (existingPageIds.has(page.pageId)) {
+        page = undefined; // Never close a target that existed before this request.
+        throw new GatewayError('INTERNAL_ERROR', 'Temporary fetch did not create a distinct page');
+      }
+      const lease = await this.claimTab(page.pageId, metadata.context,
+        Math.min(remainingMs(), this.config.maxLeaseTtlMs));
+      leaseId = lease.leaseId;
+      await this.navigate(page.pageId, parsed.href,
+        { waitUntil: 'networkidle', timeoutMs: remainingMs() }, { ...metadata, leaseId });
+      remainingMs();
+      await this.waitForCommittedDocument(page.pageId, deadline);
+      const document = await this.driver.evaluate(
+        page.pageId,
+        '({url:location.href,title:document.title,html:document.documentElement.outerHTML})'
+      ) as { url?: unknown; title?: unknown; html?: unknown } | null;
+      if (!document || typeof document.url !== 'string' || typeof document.html !== 'string') {
+        throw new GatewayError('INTERNAL_ERROR', 'Rendered document was unavailable');
+      }
+      const inspected = await this.driver.inspectPage(page.pageId);
+      remainingMs();
+      if (!isCommittedHttpUrl(document.url) || !isCommittedHttpUrl(inspected.url)
+        || document.url !== inspected.url || !document.html.trim()) {
+        throw new GatewayError('INTERNAL_ERROR', 'Rendered document identity or content was incomplete');
+      }
+      const contentBytes = Buffer.byteLength(document.html, 'utf8');
+      if (contentBytes > options.maxBytes) {
+        throw new GatewayError('FETCH_BODY_TOO_LARGE', 'Rendered document exceeds the requested byte limit', {
+          contentBytes,
+          maxBytes: options.maxBytes
+        });
+      }
+      const withoutFragment = (value: unknown): string | undefined => {
+        if (typeof value !== 'string' || !isCommittedHttpUrl(value)) return undefined;
+        const observed = new URL(value);
+        observed.hash = '';
+        return observed.href;
+      };
+      const finalDocumentUrl = withoutFragment(inspected.url);
+      const mainFrame = this.lifecycleList(page.pageId, this.config.eventBufferSize)
+        .filter((event) => event.method === 'Page.frameNavigated')
+        .map((event) => event.data['frame'] as Record<string, unknown> | undefined)
+        .reverse().find((frame) => frame && frame['parentId'] === undefined);
+      const frameBound = mainFrame && typeof mainFrame['id'] === 'string'
+        && typeof mainFrame['loaderId'] === 'string' && mainFrame['loaderId'].length > 0
+        && withoutFragment(mainFrame['url']) === finalDocumentUrl;
+      const network = this.networkList(page.pageId, this.config.eventBufferSize);
+      const responses = network
+        .filter((event) => event.method === 'Network.responseReceived')
+        .map((event) => ({
+          data: event.data,
+          response: event.data['response'] as Record<string, unknown> | undefined
+        }))
+        .filter(({ data, response }) => frameBound && data['type'] === 'Document'
+          && data['frameId'] === mainFrame['id'] && data['loaderId'] === mainFrame['loaderId']
+          && typeof data['requestId'] === 'string'
+          && withoutFragment(response?.['url']) === finalDocumentUrl
+          && network.some((event) => event.method === 'Network.requestWillBeSent'
+            && event.data['type'] === 'Document' && event.data['requestId'] === data['requestId']
+            && event.data['frameId'] === data['frameId'] && event.data['loaderId'] === data['loaderId']
+            && withoutFragment((event.data['request'] as Record<string, unknown> | undefined)?.['url']) === finalDocumentUrl));
+      const response = responses.length === 1 ? responses[0]?.response : undefined;
+      const headers = response?.['headers'] as Record<string, unknown> | undefined;
+      const contentTypeEntry = Object.entries(headers ?? {})
+        .find(([key]) => key.toLowerCase() === 'content-type')?.[1];
+      const status = response?.['status'];
+      const contentType = typeof contentTypeEntry === 'string'
+        ? contentTypeEntry
+        : typeof response?.['mimeType'] === 'string' ? response['mimeType'] : null;
+      result = {
+        requestedUrl: parsed.href,
+        finalUrl: inspected.url,
+        title: typeof document.title === 'string' ? document.title : inspected.title,
+        html: document.html,
+        contentSha256: createHash('sha256').update(document.html, 'utf8').digest('hex'),
+        contentBytes,
+        statusCode: typeof status === 'number' && Number.isInteger(status) ? status : null,
+        contentType,
+        capturedAt: new Date().toISOString()
+      };
+      await this.writeAudit('fetch_rendered_page', 'success', metadata.context, page.pageId, {
+        requestedUrl: result.requestedUrl,
+        finalUrl: result.finalUrl,
+        contentSha256: result.contentSha256,
+        contentBytes: result.contentBytes,
+        statusCode: result.statusCode
+      });
+    } catch (error) {
+      const failure = Date.now() >= deadline
+        ? new GatewayError('WAIT_TIMEOUT', 'Rendered fetch deadline expired') : error;
+      operationErrorCode = asGatewayError(failure).code;
+      await this.writeAuditError('fetch_rendered_page', metadata.context, page?.pageId, failure);
+      operationFailure = failure;
+    } finally {
+      if (page && leaseId) {
+        await this.releaseTab(page.pageId, leaseId, metadata.context).catch(() => undefined);
+      }
+      if (page) {
+        try {
+          await this.closeTab(page.pageId, metadata);
+        } catch (error) {
+          cleanupFailure = new GatewayError(
+            'INTERNAL_ERROR',
+            'Rendered fetch cleanup is unknown; the owned temporary page may remain open',
+            {
+              pageId: page.pageId,
+              cleanup: 'unknown',
+              closeErrorCode: asGatewayError(error).code,
+              ...(operationErrorCode ? { operationErrorCode } : {})
+            }
+          );
+          await this.writeAuditError('fetch_rendered_page_cleanup', metadata.context,
+            page.pageId, cleanupFailure).catch(() => undefined);
+          // Defer throwing until after finally so cleanup uncertainty cannot be
+          // silently overridden by a return or an earlier operation error.
+        }
+      }
+    }
+    if (cleanupFailure) throw cleanupFailure;
+    if (operationFailure) throw operationFailure;
+    if (!result) throw new GatewayError('INTERNAL_ERROR', 'Rendered fetch produced no result');
+    return result;
+  }
+
   async closeTab(pageId: string, metadata: MutationMetadata): Promise<{ pageId: string; closed: true }> {
     return this.mutate(pageId, 'close_tab', metadata, {}, async () => {
       await this.driver.closeTab(pageId);
       return { pageId, closed: true as const };
     });
+  }
+
+  private async waitForCommittedDocument(pageId: string, deadline: number): Promise<void> {
+    const expression = '({url:location.href,readyState:document.readyState})';
+    while (Date.now() < deadline) {
+      const state = await this.driver.evaluate(pageId, expression) as {
+        url?: unknown;
+        readyState?: unknown;
+      } | null;
+      if (Date.now() <= deadline && state && typeof state.url === 'string' && isCommittedHttpUrl(state.url)
+        && (state.readyState === 'interactive' || state.readyState === 'complete')) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.min(50, Math.max(1, deadline - Date.now()))));
+    }
+    throw new GatewayError('WAIT_TIMEOUT', 'Timed out waiting for a committed HTTP document', { pageId });
   }
 
   async navigate(
@@ -583,6 +773,16 @@ function safeOrigin(value: string): string {
     return new URL(value).origin;
   } catch {
     return '[INVALID_URL]';
+  }
+}
+
+function isCommittedHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:')
+      && parsed.hostname.length > 0;
+  } catch {
+    return false;
   }
 }
 

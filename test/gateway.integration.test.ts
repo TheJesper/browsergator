@@ -1,9 +1,23 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BrowserGateway } from '../src/gateway.js';
 import { MemoryAuditLog } from '../src/core/audit-log.js';
 import { MockBrowserDriver, mockTab } from './helpers/mock-browser-driver.js';
 import { testConfig } from './helpers/config.js';
+
+function emitDocument(driver: MockBrowserDriver, pageId: string, url: string,
+  { frameId = 'main', loaderId = 'loader', requestId = 'document', parentId, status = 200 }:
+  { frameId?: string; loaderId?: string; requestId?: string; parentId?: string; status?: number } = {}) {
+  const documentUrl = new URL(url);
+  documentUrl.hash = '';
+  driver.emit({ timestamp: new Date().toISOString(), kind: 'lifecycle', method: 'Page.frameNavigated', pageId,
+    data: { frame: { id: frameId, loaderId, url, ...(parentId ? { parentId } : {}) } } });
+  driver.emit({ timestamp: new Date().toISOString(), kind: 'network', method: 'Network.requestWillBeSent', pageId,
+    data: { type: 'Document', frameId, loaderId, requestId, request: { url: documentUrl.href } } });
+  driver.emit({ timestamp: new Date().toISOString(), kind: 'network', method: 'Network.responseReceived', pageId,
+    data: { type: 'Document', frameId, loaderId, requestId,
+      response: { url: documentUrl.href, status, mimeType: 'text/html', headers: { 'content-type': 'text/html; charset=utf-8' } } } });
+}
 
 describe('BrowserGateway integration with mock CDP', () => {
   let driver: MockBrowserDriver;
@@ -156,6 +170,215 @@ describe('BrowserGateway integration with mock CDP', () => {
     expect(first).toEqual(replay);
     expect(driver.navigationOrder.filter((entry) => entry.includes(':start:'))).toHaveLength(1);
     expect(gateway.leases.get('p1')).toBeUndefined();
+  });
+
+  it('fetches a rendered document through one owned temporary page and receipts its content', async () => {
+    const html = '<html><body><main>Rendered menu</main></body></html>';
+    driver.evaluateResults.set('({url:location.href,readyState:document.readyState})', {
+      url: 'https://menu.example/lunch', readyState: 'complete'
+    });
+    driver.defaultEvaluateResult = {
+      url: 'https://menu.example/lunch',
+      title: 'Lunch',
+      html
+    };
+    const navigate = driver.navigate.bind(driver);
+    driver.navigate = async (pageId, url, options) => {
+      const result = await navigate(pageId, url, options);
+      emitDocument(driver, pageId, url);
+      return result;
+    };
+    const before = (await gateway.listTabs()).map((tab) => tab.pageId);
+    const result = await gateway.fetchRenderedPage(
+      'https://menu.example/lunch',
+      { timeoutMs: 1_000, maxBytes: 1_024 },
+      { context: { agentId: 'fetcher', taskId: 'fetch-1', leaseOwnerId: 'owner-1', clientSessionId: 's1' } }
+    );
+    expect(result).toMatchObject({
+      requestedUrl: 'https://menu.example/lunch',
+      finalUrl: 'https://menu.example/lunch',
+      title: 'Lunch',
+      html,
+      contentBytes: Buffer.byteLength(html),
+      statusCode: 200,
+      contentType: 'text/html; charset=utf-8'
+    });
+    expect(result.contentSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect((await gateway.listTabs()).map((tab) => tab.pageId)).toEqual(before);
+    expect(gateway.leases.get('page-1')).toBeUndefined();
+  });
+
+  it('opens only a blank target, awaits settled navigation once, then captures the SPA', async () => {
+    const requested = 'https://menu.example/#/store-listing';
+    const html = '<html><body><main>Hydrated menu</main></body></html>';
+    const opened: string[] = [];
+    const open = driver.openTab.bind(driver);
+    driver.openTab = async (url) => { opened.push(url); return open(url); };
+    const navigate = driver.navigate.bind(driver);
+    const navigations: Array<{ waitUntil: string; timeoutMs: number }> = [];
+    driver.navigate = async (pageId, url, options) => {
+      expect(gateway.leases.get(pageId)).toBeDefined();
+      navigations.push(options);
+      const result = await navigate(pageId, url, options);
+      driver.defaultEvaluateResult = { url, title: 'Menu', html };
+      emitDocument(driver, pageId, url);
+      // Same-URL subframe response must not override the main document.
+      emitDocument(driver, pageId, url, { frameId: 'child', parentId: 'main', loaderId: 'child-load', requestId: 'child-doc', status: 451 });
+      return result;
+    };
+    const result = await gateway.fetchRenderedPage(requested, { timeoutMs: 1_000, maxBytes: 1_024 },
+      { context: { agentId: 'fetcher', taskId: 'spa', leaseOwnerId: 'owner-spa', clientSessionId: 's1' } });
+    expect(opened).toEqual(['about:blank']);
+    expect(navigations).toHaveLength(1);
+    expect(navigations[0]).toMatchObject({ waitUntil: 'networkidle' });
+    expect(navigations[0]!.timeoutMs).toBeLessThanOrEqual(1_000);
+    expect(result).toMatchObject({ requestedUrl: requested, finalUrl: requested, html, statusCode: 200 });
+    expect((await gateway.listTabs()).map((tab) => tab.pageId)).toEqual(['p1', 'p2']);
+  });
+
+  it('does not infer main-document metadata from only a same-URL subframe', async () => {
+    const url = 'https://menu.example/lunch';
+    driver.defaultEvaluateResult = { url, title: 'Menu', html: '<html><body>Menu</body></html>' };
+    const navigate = driver.navigate.bind(driver);
+    driver.navigate = async (pageId, target, options) => {
+      const result = await navigate(pageId, target, options);
+      emitDocument(driver, pageId, url, { frameId: 'child', parentId: 'main' });
+      return result;
+    };
+    const result = await gateway.fetchRenderedPage(url, { timeoutMs: 1_000, maxBytes: 1_024 },
+      { context: { agentId: 'fetcher', taskId: 'child-only', leaseOwnerId: 'owner-child', clientSessionId: 's1' } });
+    expect(result.statusCode).toBeNull();
+    expect(result.contentType).toBeNull();
+  });
+
+  it('does not restart the original timeout after opening or accept a late settled result', async () => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const open = driver.openTab.bind(driver);
+    driver.openTab = async (url) => { now += 40; return open(url); };
+    const navigate = driver.navigate.bind(driver);
+    driver.navigate = async (pageId, url, options) => {
+      expect(options.timeoutMs).toBe(60);
+      const result = await navigate(pageId, url, options);
+      now += 61;
+      return result;
+    };
+    try {
+      await expect(gateway.fetchRenderedPage('https://menu.example/lunch', { timeoutMs: 100, maxBytes: 1_024 },
+        { context: { agentId: 'fetcher', taskId: 'deadline', leaseOwnerId: 'owner-time', clientSessionId: 's1' } }
+      )).rejects.toMatchObject({ code: 'WAIT_TIMEOUT' });
+      expect(driver.navigationOrder.filter((entry) => entry.includes(':start:'))).toHaveLength(1);
+      expect((await gateway.listTabs()).map((tab) => tab.pageId)).toEqual(['p1', 'p2']);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('waits past an initial blank document and accepts a committed redirect', async () => {
+    const html = '<html><body><main>Redirected menu</main></body></html>';
+    const readinessExpression = '({url:location.href,readyState:document.readyState})';
+    let readinessReads = 0;
+    const evaluate = driver.evaluate.bind(driver);
+    driver.evaluate = async (pageId, expression) => {
+      if (expression === readinessExpression) {
+        readinessReads += 1;
+        if (readinessReads === 1) return { url: 'about:blank', readyState: 'complete' };
+        const tab = driver.tabs.get(pageId)!;
+        tab.url = 'https://menu.example/current-week';
+        tab.title = 'Current week';
+        return { url: tab.url, readyState: 'interactive' };
+      }
+      if (expression.includes('document.documentElement.outerHTML')) {
+        return { url: 'https://menu.example/current-week', title: 'Current week', html };
+      }
+      return evaluate(pageId, expression);
+    };
+    const result = await gateway.fetchRenderedPage(
+      'https://menu.example/lunch',
+      { timeoutMs: 1_000, maxBytes: 1_024 },
+      { context: { agentId: 'fetcher', taskId: 'fetch-redirect', leaseOwnerId: 'owner-redirect', clientSessionId: 's1' } }
+    );
+    expect(readinessReads).toBe(2);
+    expect(result.finalUrl).toBe('https://menu.example/current-week');
+    expect(result.html).toBe(html);
+  });
+
+  it('reports unknown cleanup when an allowed request redirects to a protected URL', async () => {
+    const protectedDriver = new MockBrowserDriver([mockTab('p1'), mockTab('p2')]);
+    const audit = new MemoryAuditLog();
+    const protectedGateway = new BrowserGateway(
+      testConfig({ protectedPatterns: ['*/secure*'] }), protectedDriver, audit
+    );
+    await protectedGateway.start();
+    const finalUrl = 'https://menu.example/secure/redirect-target';
+    const html = '<html><body>Redirected content</body></html>';
+    protectedDriver.defaultEvaluateResult = { url: finalUrl, title: 'Redirected', html };
+    const navigate = protectedDriver.navigate.bind(protectedDriver);
+    protectedDriver.navigate = async (pageId, url, options) => {
+      const result = await navigate(pageId, url, options);
+      protectedDriver.tabs.get(pageId)!.url = finalUrl;
+      emitDocument(protectedDriver, pageId, finalUrl);
+      return { ...result, url: finalUrl, title: 'Redirected' };
+    };
+
+    await expect(protectedGateway.fetchRenderedPage(
+      'https://menu.example/public-menu',
+      { timeoutMs: 1_000, maxBytes: 1_024 },
+      { context: { agentId: 'fetcher', taskId: 'redirect-cleanup', leaseOwnerId: 'owner-cleanup', clientSessionId: 's1' } }
+    )).rejects.toMatchObject({
+      code: 'INTERNAL_ERROR',
+      details: { pageId: 'page-1', cleanup: 'unknown', closeErrorCode: 'TAB_PROTECTED' }
+    });
+
+    expect((await protectedGateway.listTabs()).map((tab) => tab.pageId).sort())
+      .toEqual(['p1', 'p2', 'page-1']);
+    expect(audit.events).toContainEqual(expect.objectContaining({
+      action: 'fetch_rendered_page_cleanup', outcome: 'error', pageId: 'page-1', errorCode: 'INTERNAL_ERROR'
+    }));
+  });
+
+  it('fails closed when the temporary target remains about:blank', async () => {
+    driver.evaluateResults.set('({url:location.href,readyState:document.readyState})', {
+      url: 'about:blank', readyState: 'complete'
+    });
+    await expect(gateway.fetchRenderedPage(
+      'https://menu.example/lunch',
+      { timeoutMs: 20, maxBytes: 1_024 },
+      { context: { agentId: 'fetcher', taskId: 'fetch-blank-timeout', leaseOwnerId: 'owner-blank', clientSessionId: 's1' } }
+    )).rejects.toMatchObject({ code: 'WAIT_TIMEOUT' });
+    expect((await gateway.listTabs()).map((tab) => tab.pageId)).toEqual(['p1', 'p2']);
+    expect(gateway.leases.get('page-1')).toBeUndefined();
+  });
+
+  it('rejects a final snapshot that regresses to about:blank', async () => {
+    const readinessExpression = '({url:location.href,readyState:document.readyState})';
+    driver.evaluateResults.set(readinessExpression, {
+      url: 'https://menu.example/lunch', readyState: 'complete'
+    });
+    driver.defaultEvaluateResult = {
+      url: 'about:blank', title: '', html: '<html><head></head><body></body></html>'
+    };
+    await expect(gateway.fetchRenderedPage(
+      'https://menu.example/lunch',
+      { timeoutMs: 1_000, maxBytes: 1_024 },
+      { context: { agentId: 'fetcher', taskId: 'fetch-regressed', leaseOwnerId: 'owner-regressed', clientSessionId: 's1' } }
+    )).rejects.toMatchObject({ code: 'INTERNAL_ERROR' });
+    expect((await gateway.listTabs()).map((tab) => tab.pageId)).toEqual(['p1', 'p2']);
+  });
+
+  it('refuses oversized rendered fetches and still closes its temporary page', async () => {
+    driver.evaluateResults.set('({url:location.href,readyState:document.readyState})', {
+      url: 'https://menu.example/lunch', readyState: 'complete'
+    });
+    driver.defaultEvaluateResult = {
+      url: 'https://menu.example/lunch', title: 'Lunch', html: '<html>too large</html>'
+    };
+    await expect(gateway.fetchRenderedPage(
+      'https://menu.example/lunch',
+      { timeoutMs: 1_000, maxBytes: 4 },
+      { context: { agentId: 'fetcher', taskId: 'fetch-2', leaseOwnerId: 'owner-2', clientSessionId: 's2' } }
+    )).rejects.toMatchObject({ code: 'FETCH_BODY_TOO_LARGE' });
+    expect((await gateway.listTabs()).map((tab) => tab.pageId)).toEqual(['p1', 'p2']);
   });
 
   it('redacts observed network headers and retrieves a retained response body', async () => {

@@ -18,6 +18,8 @@ export type GatewayErrorCode =
   | 'EVALUATE_FAILED'
   | 'FRAME_NOT_FOUND'
   | 'WRITE_CONFIRM_REQUIRED'
+  | 'INVALID_FETCH_URL'
+  | 'FETCH_BODY_TOO_LARGE'
   | 'INTERNAL_ERROR';
 
 export class GatewayError extends Error {
