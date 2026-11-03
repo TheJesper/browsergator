@@ -17,6 +17,7 @@ All tools operating on an existing page require its explicit Chrome target ID in
 
 ## Mutations
 
+- `restart_gateway`: requests a clean supervised gateway restart. The caller must send `confirm=true` after obtaining user approval. The launcher exits and respawns the gateway against the same configured CDP endpoint; Chrome itself is never started, stopped, or replaced.
 - `open_tab`: creates a new page target. It does not reuse an existing tab.
 - `create_browser_context`: creates an explicitly owned, incognito-like CDP browser context with a bounded TTL.
 - `dispose_browser_context`: disposes an owned context and its pages; active leases require `force=true`.

@@ -23,6 +23,8 @@ export type GatewayErrorCode =
   | 'CONTEXT_NOT_FOUND'
   | 'CONTEXT_OWNER_MISMATCH'
   | 'CONTEXT_HAS_ACTIVE_LEASES'
+  | 'RESTART_CONFIRM_REQUIRED'
+  | 'RESTART_NOT_AVAILABLE'
   | 'INTERNAL_ERROR';
 
 export class GatewayError extends Error {

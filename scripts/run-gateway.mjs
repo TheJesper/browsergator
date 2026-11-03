@@ -31,28 +31,38 @@ if (!dev && !existsSync(entry)) {
 const nodeBin = process.execPath;
 // For --dev, use `--import tsx` (Node 22+) so a global tsx install is not required.
 const args = dev ? ['--import', 'tsx', entry] : [entry];
+let stopping = false;
+let child;
 
-const child = spawn(nodeBin, args, {
-  cwd: root,
-  stdio: 'inherit', // foreground; logs stream to the terminal
-  env: process.env // .env is loaded by the gateway entrypoint before loadConfig()
-});
+const startChild = () => {
+  child = spawn(nodeBin, args, {
+    cwd: root,
+    stdio: 'inherit', // foreground; logs stream to the terminal
+    env: { ...process.env, BROWSER_GATEWAY_SUPERVISED: '1' }
+  });
+  child.once('error', (error) => {
+    console.error(`[run-gateway] Failed to start gateway: ${error.message}`);
+    process.exit(1);
+  });
+  child.once('exit', (code, signal) => {
+    if (stopping) {
+      process.exit(signal ? 1 : code ?? 0);
+      return;
+    }
+    if (!signal && code === 75) {
+      console.error('[run-gateway] Gateway requested restart; reconnecting to the same Chrome/CDP endpoint');
+      startChild();
+      return;
+    }
+    process.exit(signal ? 1 : code ?? 0);
+  });
+};
+
+startChild();
 
 const forward = (signal) => {
+  stopping = true;
   if (!child.killed) child.kill(signal);
 };
 process.on('SIGINT', () => forward('SIGINT'));
 process.on('SIGTERM', () => forward('SIGTERM'));
-
-child.on('exit', (code, signal) => {
-  if (signal) {
-    // Re-raise the signal semantics with a conventional exit code.
-    process.exit(1);
-  }
-  process.exit(code ?? 0);
-});
-
-child.on('error', (error) => {
-  console.error(`[run-gateway] Failed to start gateway: ${error.message}`);
-  process.exit(1);
-});

@@ -9,7 +9,7 @@ import type { Request, Response, NextFunction, Express } from 'express';
 import type { GatewayConfig } from '../config.js';
 import type { BrowserGateway } from '../gateway.js';
 import { log } from '../core/logger.js';
-import { createMcpServer, type SessionReference } from '../mcp/server.js';
+import { createMcpServer, type GatewayControl, type SessionReference } from '../mcp/server.js';
 
 interface SessionEntry {
   transport: StreamableHTTPServerTransport;
@@ -23,7 +23,8 @@ export class GatewayHttpServer {
 
   constructor(
     private readonly gateway: BrowserGateway,
-    private readonly config: GatewayConfig
+    private readonly config: GatewayConfig,
+    private readonly control?: GatewayControl
   ) {
     this.app = createMcpExpressApp({ host: config.host });
     this.configureRoutes();
@@ -121,7 +122,7 @@ export class GatewayHttpServer {
           })
         );
       };
-      const server = createMcpServer(this.gateway, reference);
+      const server = createMcpServer(this.gateway, reference, this.control);
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (error) {

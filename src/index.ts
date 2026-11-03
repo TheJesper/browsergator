@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { loadConfig } from './config.js';
+import { GatewayError } from './errors.js';
 import { JsonlAuditLog } from './core/audit-log.js';
 import { loadDotenv } from './core/dotenv.js';
 import { log } from './core/logger.js';
@@ -21,8 +22,8 @@ async function main(): Promise<void> {
   await audit.initialize();
   const driver = new WebSocketCdpDriver(config.browserUrl);
   const gateway = new BrowserGateway(config, driver, audit);
-  const http = new GatewayHttpServer(gateway, config);
   let shuttingDown = false;
+  let restartRequested = false;
 
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
@@ -32,6 +33,27 @@ async function main(): Promise<void> {
     await gateway.stop().catch((error) => log('error', 'Gateway shutdown failed', { error }));
     await lock.release().catch((error) => log('error', 'Singleton lock release failed', { error }));
   };
+
+  const requestRestart = async (context: { agentId: string; taskId: string }, reason?: string) => {
+    if (process.env['BROWSER_GATEWAY_SUPERVISED'] !== '1') {
+      throw new GatewayError('RESTART_NOT_AVAILABLE', 'Gateway restart requires the run-gateway supervisor');
+    }
+    if (!restartRequested) {
+      restartRequested = true;
+      log('warn', 'Gateway restart approved by MCP caller', {
+        agentId: context.agentId,
+        taskId: context.taskId,
+        ...(reason ? { reason } : {})
+      });
+      setTimeout(() => void shutdown('MCP restart').finally(() => process.exit(75)), 300).unref();
+    }
+    return {
+      accepted: true as const,
+      message: 'Gateway restart accepted. Chrome/CDP will remain untouched; the supervisor will reconnect this process to the same browser.'
+    };
+  };
+
+  const http = new GatewayHttpServer(gateway, config, { requestRestart });
 
   process.once('SIGINT', () => void shutdown('SIGINT').finally(() => process.exit(0)));
   process.once('SIGTERM', () => void shutdown('SIGTERM').finally(() => process.exit(0)));

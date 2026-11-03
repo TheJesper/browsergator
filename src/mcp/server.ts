@@ -10,6 +10,10 @@ export interface SessionReference {
   clientSessionId: string;
 }
 
+export interface GatewayControl {
+  requestRestart(context: AgentContext, reason?: string): Promise<{ accepted: true; message: string }>;
+}
+
 const identityShape = {
   agentId: z.string().min(1).max(128),
   taskId: z.string().min(1).max(128),
@@ -34,7 +38,11 @@ const locatorSchema = z
   .object(locatorShape)
   .refine((value) => Boolean(value.uid || value.selector || value.text), 'locator requires uid, selector, or text');
 
-export function createMcpServer(gateway: BrowserGateway, session: SessionReference): McpServer {
+export function createMcpServer(
+  gateway: BrowserGateway,
+  session: SessionReference,
+  control?: GatewayControl
+): McpServer {
   const server = new McpServer(
     { name: 'browser-gateway', version: '0.2.0' },
     {
@@ -54,6 +62,29 @@ export function createMcpServer(gateway: BrowserGateway, session: SessionReferen
       annotations: { readOnlyHint: true, idempotentHint: true }
     },
     async ({ agentId, browserContextId }) => toolResult(() => gateway.listTabs(agentId, browserContextId))
+  );
+
+  server.registerTool(
+    'restart_gateway',
+    {
+      description:
+        'Restart the Browsergator gateway process after explicit user approval. Requires confirm=true. Chrome is never started, stopped, or replaced; the supervisor reconnects to the same CDP endpoint after a clean shutdown.',
+      inputSchema: {
+        confirm: z.boolean().default(false),
+        reason: z.string().max(500).optional(),
+        ...identityShape
+      },
+      annotations: { destructiveHint: true, idempotentHint: false }
+    },
+    async (args) => toolResult(async () => {
+      if (!args.confirm) {
+        throw new GatewayError('RESTART_CONFIRM_REQUIRED', 'Restart requires explicit confirm=true after user approval');
+      }
+      if (!control) {
+        throw new GatewayError('RESTART_NOT_AVAILABLE', 'Gateway restart is unavailable because no supervisor control is attached');
+      }
+      return control.requestRestart(agentContext(args, session.clientSessionId), args.reason);
+    })
   );
 
   server.registerTool(

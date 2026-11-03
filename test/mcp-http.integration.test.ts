@@ -21,7 +21,9 @@ describe('Streamable HTTP MCP singleton', () => {
     driver.navigationDelayMs = 50;
     gateway = new BrowserGateway(config, driver, new MemoryAuditLog());
     await gateway.start();
-    http = new GatewayHttpServer(gateway, config);
+    http = new GatewayHttpServer(gateway, config, {
+      requestRestart: async () => ({ accepted: true, message: 'restart queued' })
+    });
     const address = await http.listen(0);
     endpoint = new URL(`http://${address.host}:${address.port}/mcp`);
   });
@@ -41,6 +43,29 @@ describe('Streamable HTTP MCP singleton', () => {
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })
     });
     expect(unauthorized.status).toBe(401);
+  });
+
+  it('requires explicit confirmation before requesting a gateway restart', async () => {
+    const client = await connectClient('restart');
+    const denied = await client.client.callTool({
+      name: 'restart_gateway',
+      arguments: { agentId: 'agent-restart', taskId: 'task-restart', leaseOwnerId: 'owner-restart' }
+    });
+    expect(denied.isError).toBe(true);
+    expect(denied.structuredContent).toMatchObject({ error: { code: 'RESTART_CONFIRM_REQUIRED' } });
+
+    const accepted = await client.client.callTool({
+      name: 'restart_gateway',
+      arguments: {
+        confirm: true,
+        reason: 'load updated gateway build',
+        agentId: 'agent-restart',
+        taskId: 'task-restart',
+        leaseOwnerId: 'owner-restart'
+      }
+    });
+    expect(accepted.isError).not.toBe(true);
+    expect(accepted.structuredContent).toEqual({ accepted: true, message: 'restart queued' });
   });
 
   it('lets two independent MCP clients mutate different tabs concurrently', async () => {
