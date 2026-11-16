@@ -16,6 +16,7 @@ import type {
   InteractionResult,
   NavigationOptions,
   NavigationResult,
+  OpenTabOptions,
   ResponseBodyResult,
   ScreenshotClip,
   ScreenshotOptions,
@@ -145,25 +146,70 @@ export class WebSocketCdpDriver implements BrowserDriver {
       }));
   }
 
-  async openTab(url: string): Promise<DriverTab> {
+  async createBrowserContext(): Promise<{ browserContextId: string }> {
     this.assertConnected();
-    const result = await this.send('Target.createTarget', { url });
-    const pageId = String(result['targetId']);
-    const target: CdpTargetInfo = {
+    const result = await this.send('Target.createBrowserContext');
+    const browserContextId = String(result['browserContextId'] ?? '');
+    if (!browserContextId) {
+      throw new GatewayError('INTERNAL_ERROR', 'CDP omitted browserContextId when creating browser context');
+    }
+    return { browserContextId };
+  }
+
+  async disposeBrowserContext(browserContextId: string): Promise<void> {
+    this.assertConnected();
+    if (!browserContextId || browserContextId === 'default') {
+      throw new GatewayError('INTERNAL_ERROR', 'The default browser context cannot be disposed');
+    }
+    await this.send('Target.disposeBrowserContext', { browserContextId });
+  }
+
+  async openTab(url: string, options: OpenTabOptions = {}): Promise<DriverTab> {
+    this.assertConnected();
+    const browserContextId = options.browserContextId && options.browserContextId !== 'default'
+      ? options.browserContextId
+      : undefined;
+    const result = await this.send('Target.createTarget', {
+      url,
+      ...(browserContextId ? { browserContextId } : {}),
+      ...(options.newWindow ? { newWindow: true } : {})
+    });
+    const rawPageId = result['targetId'];
+    if (!rawPageId) throw new GatewayError('INTERNAL_ERROR', 'CDP omitted targetId when creating page target');
+    const pageId = String(rawPageId);
+    const fallbackTarget: CdpTargetInfo = {
       targetId: pageId,
-      browserContextId: 'default',
+      ...(browserContextId ? { browserContextId } : {}),
       type: 'page',
       title: '',
       url
     };
-    this.targets.set(pageId, target);
+    let target = this.targets.get(pageId) ?? fallbackTarget;
+    try {
+      const targetInfo = await this.send('Target.getTargetInfo', { targetId: pageId });
+      target = this.upsertTarget(targetInfo['targetInfo'] as CdpTargetInfo) ?? target;
+    } catch {
+      // Target creation can race target discovery. Keep event-discovered metadata,
+      // falling back to the requested context only when discovery has not arrived.
+      this.targets.set(pageId, target);
+    }
     await this.ensureAttached(target);
     const inspected = await this.inspectPage(pageId).catch(() => ({ url, title: '' }));
+    let windowId: number | undefined;
+    if (options.newWindow) {
+      const windowResult = await this.send('Browser.getWindowForTarget', { targetId: pageId });
+      const rawWindowId = windowResult['windowId'];
+      if (rawWindowId === undefined || !Number.isFinite(Number(rawWindowId))) {
+        throw new GatewayError('INTERNAL_ERROR', 'CDP omitted windowId for new browser window');
+      }
+      windowId = Number(rawWindowId);
+    }
     return {
       pageId,
       browserContextId: this.targets.get(pageId)?.browserContextId ?? 'default',
       type: 'page',
       ...inspected,
+      ...(windowId === undefined ? {} : { windowId }),
       attached: true
     };
   }
@@ -764,9 +810,9 @@ export class WebSocketCdpDriver implements BrowserDriver {
   }
 
   private ensureAttached(target: CdpTargetInfo): Promise<void> {
-    if (this.sessionByPage.has(target.targetId)) return Promise.resolve();
     const current = this.attaching.get(target.targetId);
     if (current) return current;
+    if (this.sessionByPage.has(target.targetId)) return Promise.resolve();
     const attaching = this.attach(target).finally(() => this.attaching.delete(target.targetId));
     this.attaching.set(target.targetId, attaching);
     return attaching;

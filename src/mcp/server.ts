@@ -10,6 +10,10 @@ export interface SessionReference {
   clientSessionId: string;
 }
 
+export interface GatewayControl {
+  requestRestart(context: AgentContext, reason?: string): Promise<{ accepted: true; message: string }>;
+}
+
 const identityShape = {
   agentId: z.string().min(1).max(128),
   taskId: z.string().min(1).max(128),
@@ -34,12 +38,16 @@ const locatorSchema = z
   .object(locatorShape)
   .refine((value) => Boolean(value.uid || value.selector || value.text), 'locator requires uid, selector, or text');
 
-export function createMcpServer(gateway: BrowserGateway, session: SessionReference): McpServer {
+export function createMcpServer(
+  gateway: BrowserGateway,
+  session: SessionReference,
+  control?: GatewayControl
+): McpServer {
   const server = new McpServer(
     { name: 'browser-gateway', version: '0.2.0' },
     {
       instructions:
-        'Use an explicit pageId for every page-scoped operation. For every coordinated or audited operation, pass agentId, taskId, and leaseOwnerId; these identify the logical caller independently of the MCP client session. A single MCP client may contain multiple subagents. Never infer a current tab. Prefer run_atomic for short mutations and release explicit leases promptly.'
+        'Use an explicit pageId for every operation on an existing page. fetch_rendered_page creates and closes its own temporary page from a URL. For every coordinated or audited operation, pass agentId, taskId, and leaseOwnerId; these identify the logical caller independently of the MCP client session. A single MCP client may contain multiple subagents. Never infer a current tab. Prefer run_atomic for short mutations and release explicit leases promptly.'
     }
   );
 
@@ -47,21 +55,113 @@ export function createMcpServer(gateway: BrowserGateway, session: SessionReferen
     'list_tabs',
     {
       description: 'List Chrome page targets. Page-specific operations must use the returned explicit pageId.',
-      inputSchema: { agentId: z.string().min(1).max(128).optional() },
+      inputSchema: {
+        agentId: z.string().min(1).max(128).optional(),
+        browserContextId: z.string().min(1).max(256).optional()
+      },
       annotations: { readOnlyHint: true, idempotentHint: true }
     },
-    async ({ agentId }) => toolResult(() => gateway.listTabs(agentId))
+    async ({ agentId, browserContextId }) => toolResult(() => gateway.listTabs(agentId, browserContextId))
+  );
+
+  server.registerTool(
+    'restart_gateway',
+    {
+      description:
+        'Restart the Browsergator gateway process after explicit user approval. Requires confirm=true. Chrome is never started, stopped, or replaced; the supervisor reconnects to the same CDP endpoint after a clean shutdown.',
+      inputSchema: {
+        confirm: z.boolean().default(false),
+        reason: z.string().max(500).optional(),
+        ...identityShape
+      },
+      annotations: { destructiveHint: true, idempotentHint: false }
+    },
+    async (args) => toolResult(async () => {
+      if (!args.confirm) {
+        throw new GatewayError('RESTART_CONFIRM_REQUIRED', 'Restart requires explicit confirm=true after user approval');
+      }
+      if (!control) {
+        throw new GatewayError('RESTART_NOT_AVAILABLE', 'Gateway restart is unavailable because no supervisor control is attached');
+      }
+      return control.requestRestart(agentContext(args, session.clientSessionId), args.reason);
+    })
   );
 
   server.registerTool(
     'open_tab',
     {
-      description: 'Open a new Chrome tab without reusing or navigating an existing tab.',
-      inputSchema: { url: z.string().url(), ...mutationShape },
+      description: 'Open one individual Chrome tab. Optionally target an explicitly-created incognito browser context or a new window; never creates tab groups.',
+      inputSchema: {
+        url: z.string().url(),
+        browserContextId: z.string().min(1).max(256).optional(),
+        newWindow: z.boolean().default(false),
+        ...mutationShape
+      },
       annotations: { destructiveHint: false, idempotentHint: true }
     },
     async (args) =>
-      toolResult(() => gateway.openTab(args.url, mutationMetadata(args, session.clientSessionId)))
+      toolResult(() => gateway.openTab(
+        args.url,
+        mutationMetadata(args, session.clientSessionId),
+        { ...(args.browserContextId ? { browserContextId: args.browserContextId } : {}), newWindow: args.newWindow }
+      ))
+  );
+
+  server.registerTool(
+    'create_browser_context',
+    {
+      description: 'Create an explicit incognito-like browser context owned by agentId. Contexts are ephemeral and expire by TTL.',
+      inputSchema: {
+        owner: z.string().min(1).max(128),
+        ttlMs: z.number().int().min(100).max(86_400_000).default(1_800_000),
+        incognito: z.boolean().default(true),
+        name: z.string().min(1).max(128).optional(),
+        ...identityShape
+      },
+      annotations: { destructiveHint: false, idempotentHint: false }
+    },
+    async (args) => toolResult(() => gateway.createBrowserContext(
+      { owner: args.owner, ttlMs: args.ttlMs, incognito: args.incognito, ...(args.name ? { name: args.name } : {}) },
+      { context: agentContext(args, session.clientSessionId) }
+    ))
+  );
+
+  server.registerTool(
+    'dispose_browser_context',
+    {
+      description: 'Dispose one explicitly-owned browser context and all its pages. Without force, active leases block disposal.',
+      inputSchema: {
+        browserContextId: z.string().min(1).max(256),
+        force: z.boolean().default(false),
+        ...identityShape
+      },
+      annotations: { destructiveHint: true, idempotentHint: false }
+    },
+    async (args) => toolResult(() => gateway.disposeBrowserContext(
+      args.browserContextId,
+      { force: args.force },
+      { context: agentContext(args, session.clientSessionId) }
+    ))
+  );
+
+  server.registerTool(
+    'fetch_rendered_page',
+    {
+      description:
+        'Fetch one URL through the shared browser: create a temporary tab, wait for its body, return rendered HTML plus final URL, observed document status, content hash and timestamp, then close only that tab. Does not click, submit, bypass challenges, or read browser storage.',
+      inputSchema: {
+        url: z.string().url(),
+        timeoutMs: z.number().int().min(100).max(60_000).default(20_000),
+        maxBytes: z.number().int().min(1_024).max(8_388_608).default(8_388_608),
+        ...identityShape
+      },
+      annotations: { destructiveHint: false, idempotentHint: false }
+    },
+    async (args) => toolResult(() => gateway.fetchRenderedPage(
+      args.url,
+      { timeoutMs: args.timeoutMs, maxBytes: args.maxBytes },
+      { context: agentContext(args, session.clientSessionId) }
+    ))
   );
 
   server.registerTool(

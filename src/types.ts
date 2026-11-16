@@ -9,10 +9,27 @@ export interface AgentContext {
 export interface DriverTab {
   pageId: string;
   browserContextId: string;
+  windowId?: number;
   type: string;
   title: string;
   url: string;
   attached: boolean;
+}
+
+export interface OpenTabOptions {
+  /** Omit or use `default` for Chrome's default browser context. */
+  browserContextId?: string;
+  /** Ask Chrome to create a separate browser window for the target. */
+  newWindow?: boolean;
+}
+
+export interface BrowserContext {
+  browserContextId: string;
+  owner: string;
+  incognito: true;
+  name?: string;
+  createdAt: string;
+  expiresAt: string;
 }
 
 export interface BrowserVersion {
@@ -128,7 +145,9 @@ export interface BrowserDriver {
   stop(): Promise<void>;
   status(): BrowserConnectionStatus;
   listTabs(): Promise<DriverTab[]>;
-  openTab(url: string): Promise<DriverTab>;
+  createBrowserContext(): Promise<{ browserContextId: string }>;
+  disposeBrowserContext(browserContextId: string): Promise<void>;
+  openTab(url: string, options?: OpenTabOptions): Promise<DriverTab>;
   closeTab(pageId: string): Promise<void>;
   navigate(pageId: string, url: string, options: NavigationOptions): Promise<NavigationResult>;
   click(pageId: string, locator: ElementLocator): Promise<InteractionResult>;

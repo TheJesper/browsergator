@@ -21,7 +21,9 @@ describe('Streamable HTTP MCP singleton', () => {
     driver.navigationDelayMs = 50;
     gateway = new BrowserGateway(config, driver, new MemoryAuditLog());
     await gateway.start();
-    http = new GatewayHttpServer(gateway, config);
+    http = new GatewayHttpServer(gateway, config, {
+      requestRestart: async () => ({ accepted: true, message: 'restart queued' })
+    });
     const address = await http.listen(0);
     endpoint = new URL(`http://${address.host}:${address.port}/mcp`);
   });
@@ -41,6 +43,29 @@ describe('Streamable HTTP MCP singleton', () => {
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })
     });
     expect(unauthorized.status).toBe(401);
+  });
+
+  it('requires explicit confirmation before requesting a gateway restart', async () => {
+    const client = await connectClient('restart');
+    const denied = await client.client.callTool({
+      name: 'restart_gateway',
+      arguments: { agentId: 'agent-restart', taskId: 'task-restart', leaseOwnerId: 'owner-restart' }
+    });
+    expect(denied.isError).toBe(true);
+    expect(denied.structuredContent).toMatchObject({ error: { code: 'RESTART_CONFIRM_REQUIRED' } });
+
+    const accepted = await client.client.callTool({
+      name: 'restart_gateway',
+      arguments: {
+        confirm: true,
+        reason: 'load updated gateway build',
+        agentId: 'agent-restart',
+        taskId: 'task-restart',
+        leaseOwnerId: 'owner-restart'
+      }
+    });
+    expect(accepted.isError).not.toBe(true);
+    expect(accepted.structuredContent).toEqual({ accepted: true, message: 'restart queued' });
   });
 
   it('lets two independent MCP clients mutate different tabs concurrently', async () => {
@@ -72,6 +97,58 @@ describe('Streamable HTTP MCP singleton', () => {
     expect(one.isError).not.toBe(true);
     expect(two.isError).not.toBe(true);
     expect(driver.maxActiveGlobal).toBe(2);
+  });
+
+  it('exposes one-call rendered fetch with a content receipt', async () => {
+    const client = await connectClient('fetcher');
+    const html = '<html><body><main>Rendered</main></body></html>';
+    driver.defaultEvaluateResult = { url: 'https://fetch.example/menu', title: 'Menu', html };
+    const result = await client.client.callTool({
+      name: 'fetch_rendered_page',
+      arguments: {
+        url: 'https://fetch.example/menu',
+        maxBytes: 2_000,
+        agentId: 'agent-fetch',
+        taskId: 'task-fetch',
+        leaseOwnerId: 'lease-fetch'
+      }
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      requestedUrl: 'https://fetch.example/menu',
+      finalUrl: 'https://fetch.example/menu',
+      html,
+      contentBytes: Buffer.byteLength(html)
+    });
+    expect((await gateway.listTabs()).map((tab) => tab.pageId)).toEqual(['p1', 'p2']);
+  });
+
+  it('exposes explicit browser context and new-window lifecycle tools', async () => {
+    const client = await connectClient('contexts');
+    const created = await client.client.callTool({
+      name: 'create_browser_context',
+      arguments: { owner: 'agent-context', agentId: 'agent-context', taskId: 'context-task', leaseOwnerId: 'context-owner', ttlMs: 10_000 }
+    });
+    expect(created.isError).not.toBe(true);
+    const context = created.structuredContent as { browserContextId: string };
+    const opened = await client.client.callTool({
+      name: 'open_tab',
+      arguments: {
+        url: 'about:blank', browserContextId: context.browserContextId, newWindow: true,
+        agentId: 'agent-context', taskId: 'context-task', leaseOwnerId: 'context-owner'
+      }
+    });
+    expect(opened.isError).not.toBe(true);
+    expect(opened.structuredContent).toMatchObject({ browserContextId: context.browserContextId, windowId: 1 });
+    const disposed = await client.client.callTool({
+      name: 'dispose_browser_context',
+      arguments: {
+        browserContextId: context.browserContextId,
+        agentId: 'agent-context', taskId: 'context-task', leaseOwnerId: 'context-owner'
+      }
+    });
+    expect(disposed.isError).not.toBe(true);
+    expect(disposed.structuredContent).toMatchObject({ disposed: true });
   });
 
   it('serializes two MCP clients on the same tab and cleans session leases', async () => {
