@@ -44,3 +44,62 @@ Scroll, uploads/downloads, richer dialog/CAPTCHA resume UX, request interception
 ## Acceptance criteria
 
 All quality gates pass; two simulated MCP clients can mutate different tabs concurrently; same-tab mutations execute FIFO; reads are not held behind that FIFO; leases expire and clean up on client loss; logical ownership survives a reconnect; protected tabs reject unauthorized mutations; the stdio adapter reaches the shared HTTP singleton; and a mock CDP disconnect/reconnect is observable.
+
+## Proposed operational hardening
+
+Status: requirements proposal, not implementation or a claim that every criterion
+below currently fails. Extend the existing diagnostics, leases and reconnect path;
+do not introduce a second browser driver or recovery service.
+
+### BG-OP-01 / P0: distinguish gateway liveness from browser readiness
+
+Observation: HTTP liveness can recover while readiness remains `not_ready` and an
+MCP call reports `BROWSER_DISCONNECTED`. A browser evaluation or CDP timeout alone
+does not identify whether the fault is in the page, Chrome, transport or gateway.
+The underlying cause must be diagnosed separately.
+
+Acceptance criteria:
+
+- `/healthz` answers within one second in a mock-CDP test where upstream browser
+  calls never resolve. It must not depend on a successful CDP round trip.
+- `/readyz` distinguishes connecting, connected, disconnected and recovering,
+  including a bounded, redacted reason and the last successful connection time.
+  Preserve existing status-field compatibility.
+- Diagnostic output distinguishes HTTP/MCP handshake failures, page-command
+  timeouts and browser disconnects. Do not report browser availability based only
+  on the gateway's HTTP health.
+- Recovery preserves unrelated tabs. A listening-but-unresponsive browser endpoint
+  must not be interpreted as permission to spawn another Chrome/profile.
+- A reconnect remains observable and bounded. When automatic recovery cannot
+  succeed, report the specific operator action required rather than looping
+  silently or returning success-shaped results.
+
+### BG-OP-02 / P0: bounded calls and explicit partial completion
+
+Acceptance criteria:
+
+- Connect, initialization, tool execution and client shutdown each have a finite
+  deadline and a distinguishable failure stage.
+- When a sequence fails after earlier mutations, the client can identify completed,
+  failed and not-attempted operations. Previously captured evidence is preserved.
+- An MCP error produces a controlled client failure, not a secondary unhandled
+  shutdown failure that hides the original error. Exercise this with disconnects,
+  timeouts and interrupted client processes on supported operating systems.
+- Document one diagnostic/recovery path through the gateway. Do not recommend
+  bypassing coordination with direct CDP when the gateway is unavailable.
+
+### BG-OP-03 / P1: cleanup ownership survives an interruption
+
+Acceptance criteria:
+
+- Reconnect diagnostics expose browser-session identity alongside page identity.
+  Clients re-list tabs and verify origin/ownership before reusing a saved page ID.
+- A client can retain a minimal, local cleanup journal for its own modified
+  preferences and dispatch wrappers. Exclude credentials and unrelated storage.
+- An interrupted cleanup is reported as pending, not completed. Retain the backup
+  until restoration and read-back verification succeed.
+- Gateway recovery must not close unrelated tabs, assume ownership of other
+  clients' leases, or automatically clear origin-wide preferences.
+- Test browser disconnect before restore, restore failure, expired lease and a
+  replaced page/session. Cleanup must not claim success merely because a tab is
+  missing.

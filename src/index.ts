@@ -19,7 +19,13 @@ async function main(): Promise<void> {
 
   const audit = new JsonlAuditLog(join(config.dataDir, 'audit.jsonl'));
   await audit.initialize();
-  const driver = new WebSocketCdpDriver(config.browserUrl);
+  const driver = new WebSocketCdpDriver(config.browserUrl, 15_000, {
+    enabled: config.autoLaunchChrome,
+    host: '127.0.0.1',
+    ...(config.chromeBin ? { bin: config.chromeBin } : {}),
+    ...(config.chromeProfile ? { profileDir: config.chromeProfile } : {}),
+    headless: config.chromeHeadless
+  });
   const gateway = new BrowserGateway(config, driver, audit);
   const http = new GatewayHttpServer(gateway, config);
   let shuttingDown = false;

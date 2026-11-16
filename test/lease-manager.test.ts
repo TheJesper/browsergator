@@ -58,4 +58,27 @@ describe('LeaseManager', () => {
     expect(leases.releaseClientSession('client-session-1')).toEqual([]);
     expect(leases.get('p1')).toBeDefined();
   });
+
+  it('force-releases a stuck lease regardless of owner (the unlock escape hatch)', () => {
+    const leases = new LeaseManager(500, 2_000);
+    const owner = { agentId: 'a', taskId: 't', leaseOwnerId: 'owner-a', clientSessionId: 's1' };
+
+    const lease = leases.claim('p1', owner);
+    // A different caller cannot release it the normal way...
+    expect(leases.forceRelease('p1')?.leaseId).toBe(lease.leaseId);
+    // ...but after a force-release the page is free to claim again by anyone.
+    expect(leases.get('p1')).toBeUndefined();
+    expect(() =>
+      leases.claim('p1', { agentId: 'b', taskId: 't2', leaseOwnerId: 'owner-b', clientSessionId: 's2' })
+    ).not.toThrow();
+  });
+
+  it('force-releases every lease at once', () => {
+    const leases = new LeaseManager(500, 2_000);
+    const owner = { agentId: 'a', taskId: 't', leaseOwnerId: 'owner-a', clientSessionId: 's1' };
+    leases.claim('p1', owner);
+    leases.claim('p2', owner);
+    expect(leases.forceReleaseAll().map((l) => l.pageId).sort()).toEqual(['p1', 'p2']);
+    expect(leases.list()).toHaveLength(0);
+  });
 });

@@ -26,6 +26,8 @@ async function main(): Promise<void> {
     host: '127.0.0.1',
     port: 8788,
     browserUrl: process.env['BROWSER_GATEWAY_BROWSER_URL'] ?? 'http://127.0.0.1:9222',
+    autoLaunchChrome: true,
+    chromeHeadless: process.env['BROWSERGATOR_CHROME_HEADLESS'] === '1',
     token,
     leaseTtlMs: 15_000,
     maxLeaseTtlMs: 60_000,
