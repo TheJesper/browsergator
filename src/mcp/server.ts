@@ -428,6 +428,32 @@ export function createMcpServer(gateway: BrowserGateway, session: SessionReferen
   );
 
   server.registerTool(
+    'force_release_tab',
+    {
+      description:
+        'Force-unlock one page when it is stuck "leased by another task" and you cannot release it normally (lost leaseId after a crash or reconnect). Bypasses ownership. Use when claim_tab keeps returning LEASE_CONFLICT.',
+      inputSchema: { pageId: z.string().min(1), ...identityShape },
+      annotations: { destructiveHint: true, idempotentHint: true }
+    },
+    async (args) =>
+      toolResult(() =>
+        gateway.forceReleaseTab(args.pageId, agentContext(args, session.clientSessionId))
+      )
+  );
+
+  server.registerTool(
+    'force_release_all',
+    {
+      description:
+        'Force-unlock EVERY leased page. The "unlock everything" escape hatch for a wedged gateway where multiple tabs are stuck locked. Bypasses ownership on all leases.',
+      inputSchema: { ...identityShape },
+      annotations: { destructiveHint: true, idempotentHint: true }
+    },
+    async (args) =>
+      toolResult(() => gateway.forceReleaseAll(agentContext(args, session.clientSessionId)))
+  );
+
+  server.registerTool(
     'run_atomic',
     {
       description: 'Atomically claim, policy-check, navigate, verify, and release within one page FIFO slot.',

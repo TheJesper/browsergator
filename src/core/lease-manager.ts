@@ -24,7 +24,7 @@ export class LeaseManager {
     private readonly now: () => number = Date.now
   ) {}
 
-  startCleanup(intervalMs = Math.min(this.defaultTtlMs, 5_000)): void {
+  startCleanup(intervalMs = Math.min(this.defaultTtlMs, 1_000)): void {
     if (this.cleanupTimer) return;
     this.cleanupTimer = setInterval(() => this.cleanupExpired(), Math.max(100, intervalMs));
     this.cleanupTimer.unref();
@@ -118,6 +118,25 @@ export class LeaseManager {
     if (!lease || lease.leaseId !== leaseId) return false;
     this.leases.delete(pageId);
     return true;
+  }
+
+  /**
+   * Force a lease off a page regardless of owner or leaseId. This is the escape hatch for the
+   * "tab locked / open in another browser" dead-end: when an agent lost its leaseId (crash,
+   * reconnect, identity drift) the tab would otherwise stay locked until TTL. Admin-level,
+   * intentionally bypasses sameOwner. Returns the lease that was removed, if any.
+   */
+  forceRelease(pageId: string): RuntimeLease | undefined {
+    const lease = this.leases.get(pageId);
+    if (lease) this.leases.delete(pageId);
+    return lease;
+  }
+
+  /** Force-release every lease. Used by a "stop all / unlock everything" control. */
+  forceReleaseAll(): RuntimeLease[] {
+    const all = [...this.leases.values()];
+    this.leases.clear();
+    return all;
   }
 
   releaseClientSession(clientSessionId: string): RuntimeLease[] {

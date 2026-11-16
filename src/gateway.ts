@@ -393,6 +393,29 @@ export class BrowserGateway {
     }
   }
 
+  /**
+   * Force a stuck lease off a page without needing to own it. The escape hatch for the
+   * "tab locked / open in another browser" dead-end when an agent lost its leaseId.
+   * Returns the pageIds that were unlocked.
+   */
+  async forceReleaseTab(pageId: string, context: AgentContext): Promise<{ released: string[] }> {
+    const lease = this.leases.forceRelease(pageId);
+    await this.writeAudit('force_release_tab', 'success', context, pageId, {
+      hadLease: Boolean(lease),
+      ...(lease ? { previousOwner: lease.agentId, previousTask: lease.taskId } : {})
+    });
+    return { released: lease ? [pageId] : [] };
+  }
+
+  /** Force-release every lease -- a "unlock everything" control for a wedged gateway. */
+  async forceReleaseAll(context: AgentContext): Promise<{ released: string[] }> {
+    const all = this.leases.forceReleaseAll();
+    await this.writeAudit('force_release_all', 'success', context, undefined, {
+      count: all.length
+    });
+    return { released: all.map((l) => l.pageId) };
+  }
+
   async runAtomic(input: RunAtomicInput): Promise<Record<string, unknown>> {
     const fingerprint = hash({
       pageId: input.pageId,

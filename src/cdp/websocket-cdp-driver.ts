@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import WebSocket, { type RawData } from 'ws';
 
 import { GatewayError } from '../errors.js';
+import { ensureChrome, portFromBrowserUrl, type ChromeLaunchOptions } from './launch-chrome.js';
 import type {
   AccessibilitySnapshot,
   BrowserConnectionStatus,
@@ -72,10 +73,16 @@ export class WebSocketCdpDriver implements BrowserDriver {
   private readonly contextsByPage = new Map<string, Array<{ contextId: number; url: string; name: string }>>();
   private readonly dialogs = new Set<string>();
   private readonly events = new EventEmitter();
+  private healthTimer?: NodeJS.Timeout;
 
   constructor(
     private readonly browserUrl: string,
-    private readonly commandTimeoutMs = 15_000
+    private readonly commandTimeoutMs = 15_000,
+    /** When set, the driver owns its Chrome session: it auto-launches a dedicated
+     *  debuggable Chrome whenever the debug port is absent, and self-heals after a crash. */
+    private readonly launchOptions?: Omit<ChromeLaunchOptions, 'port'> & { enabled: boolean },
+    /** Active heartbeat interval; detects a dead-but-open socket the passive readyState misses. */
+    private readonly healthPingMs = 10_000
   ) {}
 
   async start(): Promise<void> {
@@ -91,6 +98,7 @@ export class WebSocketCdpDriver implements BrowserDriver {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    this.stopHealthPing();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
     this.rejectPending(new GatewayError('BROWSER_DISCONNECTED', 'CDP driver stopped'));
@@ -348,7 +356,7 @@ export class WebSocketCdpDriver implements BrowserDriver {
     return { url: String(value?.url ?? ''), title: String(value?.title ?? '') };
   }
 
-  async evaluate(pageId: string, expression: string, frameUrl?: string): Promise<unknown> {
+  async evaluate(pageId: string, expression: string, frameUrl?: string, timeoutMs?: number): Promise<unknown> {
     const sessionId = this.requireSession(pageId);
     // Frame targeting: if frameUrl is given, resolve it to a specific execution context
     // (contextId) so JS runs INSIDE that (possibly cross-origin) iframe, not the top frame.
@@ -385,7 +393,8 @@ export class WebSocketCdpDriver implements BrowserDriver {
         awaitPromise: true,
         ...(contextId !== undefined ? { contextId } : {})
       },
-      sessionId
+      sessionId,
+      timeoutMs
     );
     const exception = result['exceptionDetails'] as
       | { exception?: { description?: string }; text?: string }
@@ -550,6 +559,19 @@ export class WebSocketCdpDriver implements BrowserDriver {
   }
 
   private async connectOnce(): Promise<void> {
+    // Gateway owns its session: if the debug port is absent, launch our own dedicated
+    // Chrome (isolated profile) before attaching. Idempotent + single-flight — never
+    // spawns a second browser, never touches the user's normal profile.
+    if (this.launchOptions?.enabled) {
+      await ensureChrome({
+        port: portFromBrowserUrl(this.browserUrl),
+        ...(this.launchOptions.host ? { host: this.launchOptions.host } : {}),
+        ...(this.launchOptions.bin ? { bin: this.launchOptions.bin } : {}),
+        ...(this.launchOptions.profileDir ? { profileDir: this.launchOptions.profileDir } : {}),
+        ...(this.launchOptions.headless !== undefined ? { headless: this.launchOptions.headless } : {})
+      });
+    }
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.commandTimeoutMs);
     let metadata: { webSocketDebuggerUrl?: string };
@@ -603,6 +625,45 @@ export class WebSocketCdpDriver implements BrowserDriver {
       browser: this.version.browser,
       pages: [...this.targets.values()].filter((t) => t.type === 'page').length
     });
+    this.startHealthPing();
+  }
+
+  /**
+   * Active heartbeat. The passive `socket.readyState === OPEN` check can report
+   * "connected" against a Chrome that has silently wedged (process alive, CDP dead).
+   * A periodic lightweight Browser.getVersion proves the pipe really works; on failure
+   * we force a disconnect, which triggers the reconnect loop (and auto-relaunch).
+   */
+  private startHealthPing(): void {
+    this.stopHealthPing();
+    if (this.healthPingMs <= 0) return;
+    this.healthTimer = setInterval(() => {
+      if (!this.isConnected()) return;
+      void this.send('Browser.getVersion')
+        .then(() => undefined)
+        .catch((error) => {
+          log('warn', 'Health ping failed; forcing reconnect', {
+            error: error instanceof Error ? error.message : String(error)
+          });
+          const socket = this.socket;
+          // Drop the wedged socket; close -> handleDisconnect -> scheduleReconnect -> relaunch.
+          if (socket) {
+            try {
+              socket.terminate();
+            } catch {
+              this.handleDisconnect('health ping failed');
+            }
+          } else {
+            this.handleDisconnect('health ping failed');
+          }
+        });
+    }, this.healthPingMs);
+    this.healthTimer.unref();
+  }
+
+  private stopHealthPing(): void {
+    if (this.healthTimer) clearInterval(this.healthTimer);
+    this.healthTimer = undefined;
   }
 
   private handleMessage(raw: RawData): void {
@@ -735,16 +796,18 @@ export class WebSocketCdpDriver implements BrowserDriver {
   private send(
     method: string,
     params: Record<string, unknown> = {},
-    sessionId?: string
+    sessionId?: string,
+    timeoutMs?: number
   ): Promise<Record<string, any>> {
     this.assertConnected();
     const id = this.nextId++;
     const payload = JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) });
+    const cmdTimeout = timeoutMs ?? this.commandTimeoutMs;
     return new Promise<Record<string, any>>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`CDP command timed out: ${method}`));
-      }, this.commandTimeoutMs);
+      }, cmdTimeout);
       this.pending.set(id, { resolve, reject, timer });
       this.socket!.send(payload, (error) => {
         if (error) {
@@ -811,6 +874,7 @@ export class WebSocketCdpDriver implements BrowserDriver {
 
   private handleDisconnect(reason: string): void {
     if (this.socket?.readyState === WebSocket.OPEN) return;
+    this.stopHealthPing();
     this.socket = undefined;
     this.browserSessionId = undefined;
     this.connectedAt = undefined;

@@ -8,6 +8,18 @@ const schema = z.object({
   host: z.enum(['127.0.0.1', 'localhost', '::1']).default('127.0.0.1'),
   port: z.coerce.number().int().min(1).max(65535).default(8788),
   browserUrl: z.string().url().default('http://127.0.0.1:9222'),
+  /** Gateway owns its Chrome session: auto-launch a dedicated debuggable Chrome when the
+   *  debug port is absent, and self-heal after a crash. On by default. */
+  autoLaunchChrome: z
+    .union([z.boolean(), z.enum(['0', '1', 'true', 'false'])])
+    .transform((v) => v === true || v === '1' || v === 'true')
+    .default(true),
+  chromeBin: z.string().optional(),
+  chromeProfile: z.string().optional(),
+  chromeHeadless: z
+    .union([z.boolean(), z.enum(['0', '1', 'true', 'false'])])
+    .transform((v) => v === true || v === '1' || v === 'true')
+    .default(false),
   token: z.string().min(24, 'BROWSER_GATEWAY_TOKEN must contain at least 24 characters'),
   leaseTtlMs: z.coerce.number().int().min(100).default(15_000),
   maxLeaseTtlMs: z.coerce.number().int().min(100).default(60_000),
@@ -26,6 +38,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
       host: env['BROWSER_GATEWAY_HOST'],
       port: env['BROWSER_GATEWAY_PORT'],
       browserUrl: env['BROWSER_GATEWAY_BROWSER_URL'],
+      autoLaunchChrome: env['BROWSER_GATEWAY_AUTO_LAUNCH_CHROME'],
+      chromeBin: env['BROWSER_GATEWAY_CHROME_BIN'] ?? env['BROWSERGATOR_CHROME_BIN'],
+      chromeProfile: env['BROWSER_GATEWAY_CHROME_PROFILE'] ?? env['BROWSERGATOR_CHROME_PROFILE'],
+      chromeHeadless: env['BROWSER_GATEWAY_CHROME_HEADLESS'] ?? env['BROWSERGATOR_CHROME_HEADLESS'],
       token: env['BROWSER_GATEWAY_TOKEN'],
       leaseTtlMs: env['BROWSER_GATEWAY_LEASE_TTL_MS'],
       maxLeaseTtlMs: env['BROWSER_GATEWAY_MAX_LEASE_TTL_MS'],

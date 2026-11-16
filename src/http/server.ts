@@ -90,12 +90,26 @@ export class GatewayHttpServer {
       const sessionId = headerValue(req, 'mcp-session-id');
       if (sessionId) {
         const existing = this.sessions.get(sessionId);
-        if (!existing) {
-          res.status(404).json(jsonRpcError(-32001, 'Session not found'));
+        if (existing) {
+          await existing.transport.handleRequest(req, res, req.body);
           return;
         }
-        await existing.transport.handleRequest(req, res, req.body);
-        return;
+        // Unknown session id. This is the #1 cause of "-32001 Session not found": the gateway
+        // process restarted (or the transport was closed) so this in-memory map no longer knows
+        // the id the client is replaying. HARDENING: instead of a dead-end 404, recover.
+        //  - If this is an initialize request, fall through to the init path below and mint a
+        //    fresh session transparently -- the client reconnects without ever seeing an error.
+        //  - Otherwise, tell the client the session is gone with the protocol's own signal so it
+        //    re-initializes, rather than a bare 404 that just looks broken.
+        if (!isInitializeRequest(req.body)) {
+          log('info', 'Unknown MCP session id -- asking client to re-initialize', { sessionId });
+          res
+            .status(404)
+            .setHeader('mcp-session-id', '')
+            .json(jsonRpcError(-32001, 'Session expired -- please re-initialize'));
+          return;
+        }
+        // initialize with a stale id -> drop the stale id and create a new session below.
       }
       if (!isInitializeRequest(req.body)) {
         res.status(400).json(jsonRpcError(-32000, 'Initialization or valid session ID required'));

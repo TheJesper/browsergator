@@ -6,6 +6,8 @@ export function testConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
     host: '127.0.0.1',
     port: 8788,
     browserUrl: 'http://127.0.0.1:9222',
+    autoLaunchChrome: true,
+    chromeHeadless: false,
     token: 'test-token-that-is-at-least-24-characters',
     leaseTtlMs: 1_000,
     maxLeaseTtlMs: 10_000,
