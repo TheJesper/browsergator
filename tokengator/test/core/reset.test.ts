@@ -1,0 +1,741 @@
+import { describe, expect, it } from 'vitest';
+
+import { addAccount, type AccountInput, type MeterInput } from '../../src/core/accounts.js';
+import { viewMeter } from '../../src/core/forecast.js';
+import {
+  MAX_SAMPLES,
+  ReadingError,
+  anchorMeter,
+  applyReading,
+  applyReadingToState,
+  nextBoundary,
+  nominalWindowMs,
+  previousBoundary,
+  rollMeter,
+  rollState,
+  staleAfterMs,
+  windowLengthMs,
+  windowStartFor
+} from '../../src/core/reset.js';
+import { DAY, HOUR, MINUTE, MONTH, iso, zonedParts } from '../../src/core/time.js';
+import { emptyState, type Account, type Meter, type Reading, type ResetRule, type State } from '../../src/core/types.js';
+
+const LA = 'America/Los_Angeles';
+const utc = (y: number, mo: number, d: number, h = 0, mi = 0): number => Date.UTC(y, mo - 1, d, h, mi, 0);
+/** Thursday 19 November 2026, 10:00 UTC. */
+const NOW = utc(2026, 11, 19, 10, 0);
+const WEEK = 7 * DAY;
+const WEEKLY: ResetRule = { kind: 'interval', hours: 168 };
+
+function one(
+  input: MeterInput,
+  nowMs = NOW,
+  extra: Partial<AccountInput> = {}
+): { state: State; account: Account; meter: Meter } {
+  const { state, account } = addAccount(emptyState(), { label: 'Test', meters: [input], ...extra }, nowMs);
+  return { state, account, meter: account.meters[0] as Meter };
+}
+
+function expectReadingError(run: () => unknown, field: string): ReadingError {
+  let caught: unknown;
+  try {
+    run();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(ReadingError);
+  const error = caught as ReadingError;
+  expect(error.field).toBe(field);
+  expect(error.message.length).toBeGreaterThan(0);
+  return error;
+}
+
+describe('nextBoundary and previousBoundary', () => {
+  describe('monthly', () => {
+    it('ends on day 30 at the configured time when the rule says day 31 and the month has 30 days', () => {
+      // Scenario: Monthly day beyond the month's length.
+      const rule: ResetRule = { kind: 'monthly', day: 31, time: '09:00', tz: 'UTC' };
+      expect(iso(nextBoundary(rule, NOW) as number)).toBe('2026-11-30T09:00:00.000Z');
+    });
+
+    it('clamps day 31 to the last day of February, leap years included', () => {
+      const rule: ResetRule = { kind: 'monthly', day: 31, time: '00:00', tz: 'UTC' };
+      expect(iso(nextBoundary(rule, utc(2026, 2, 10)) as number)).toBe('2026-02-28T00:00:00.000Z');
+      expect(iso(nextBoundary(rule, utc(2028, 2, 10)) as number)).toBe('2028-02-29T00:00:00.000Z');
+      expect(iso(previousBoundary(rule, utc(2026, 3, 10)) as number)).toBe('2026-02-28T00:00:00.000Z');
+    });
+
+    it('walks month ends in order over a year', () => {
+      const rule: ResetRule = { kind: 'monthly', day: 31, time: '00:00', tz: 'UTC' };
+      const seen: string[] = [];
+      let at = NOW;
+      for (let n = 0; n < 7; n += 1) {
+        at = nextBoundary(rule, at) as number;
+        seen.push(iso(at).slice(0, 10));
+      }
+      expect(seen).toEqual(['2026-11-30', '2026-12-31', '2027-01-31', '2027-02-28', '2027-03-31', '2027-04-30', '2027-05-31']);
+    });
+
+    it('is strictly after for next and at-or-before for previous', () => {
+      const rule: ResetRule = { kind: 'monthly', day: 31, time: '00:00', tz: 'UTC' };
+      const boundary = utc(2026, 11, 30);
+      expect(nextBoundary(rule, boundary)).toBe(utc(2026, 12, 31));
+      expect(nextBoundary(rule, boundary - 1)).toBe(boundary);
+      expect(previousBoundary(rule, boundary)).toBe(boundary);
+      expect(previousBoundary(rule, boundary - 1)).toBe(utc(2026, 10, 31));
+    });
+
+    it('uses the wall clock of the rule zone', () => {
+      const rule: ResetRule = { kind: 'monthly', day: 1, time: '00:00', tz: 'Europe/Stockholm' };
+      // Midnight on 1 December in Stockholm (CET) is 23:00 UTC on 30 November.
+      expect(iso(nextBoundary(rule, NOW) as number)).toBe('2026-11-30T23:00:00.000Z');
+      expect(iso(previousBoundary(rule, NOW) as number)).toBe('2026-10-31T23:00:00.000Z');
+    });
+
+    it('rolls over the year end', () => {
+      const rule: ResetRule = { kind: 'monthly', day: 1, time: '00:00', tz: 'UTC' };
+      expect(iso(nextBoundary(rule, utc(2026, 12, 15)) as number)).toBe('2027-01-01T00:00:00.000Z');
+      expect(iso(previousBoundary(rule, utc(2027, 1, 1) - 1) as number)).toBe('2026-12-01T00:00:00.000Z');
+    });
+  });
+
+  describe('daily', () => {
+    const rule: ResetRule = { kind: 'daily', time: '00:00', tz: LA };
+
+    it('stays at 00:00 Los Angeles time across the spring-forward change', () => {
+      // Scenario: Daily reset across a daylight-saving change.
+      const noonBefore = utc(2026, 3, 7, 20, 0); // 12:00 PST on 7 March
+      const first = nextBoundary(rule, noonBefore) as number;
+      const second = nextBoundary(rule, first) as number;
+      const third = nextBoundary(rule, second) as number;
+      expect([iso(first), iso(second), iso(third)]).toEqual([
+        '2026-03-08T08:00:00.000Z',
+        '2026-03-09T07:00:00.000Z',
+        '2026-03-10T07:00:00.000Z'
+      ]);
+      expect(second - first).toBe(23 * HOUR);
+      for (const at of [first, second, third]) {
+        expect(zonedParts(at, LA)).toMatchObject({ hour: 0, minute: 0 });
+      }
+    });
+
+    it('stays at 00:00 Los Angeles time across the fall-back change', () => {
+      const first = nextBoundary(rule, utc(2026, 10, 31, 20, 0)) as number;
+      const second = nextBoundary(rule, first) as number;
+      expect([iso(first), iso(second)]).toEqual(['2026-11-01T07:00:00.000Z', '2026-11-02T08:00:00.000Z']);
+      expect(second - first).toBe(25 * HOUR);
+      expect(zonedParts(second, LA)).toMatchObject({ day: 2, hour: 0, minute: 0 });
+    });
+
+    it('finds the previous boundary on either side of the change', () => {
+      expect(iso(previousBoundary(rule, utc(2026, 3, 8, 20, 0)) as number)).toBe('2026-03-08T08:00:00.000Z');
+      expect(iso(previousBoundary(rule, utc(2026, 3, 9, 7, 0)) as number)).toBe('2026-03-09T07:00:00.000Z');
+      expect(iso(previousBoundary(rule, utc(2026, 3, 9, 7, 0) - 1) as number)).toBe('2026-03-08T08:00:00.000Z');
+    });
+
+    it('honours the configured time of day', () => {
+      const morning: ResetRule = { kind: 'daily', time: '09:30', tz: 'UTC' };
+      expect(iso(nextBoundary(morning, utc(2026, 11, 19, 9, 0)) as number)).toBe('2026-11-19T09:30:00.000Z');
+      expect(iso(nextBoundary(morning, utc(2026, 11, 19, 9, 30)) as number)).toBe('2026-11-20T09:30:00.000Z');
+      expect(iso(previousBoundary(morning, utc(2026, 11, 19, 9, 0)) as number)).toBe('2026-11-18T09:30:00.000Z');
+    });
+  });
+
+  it('has no calendar for the other rule kinds', () => {
+    const rules: ResetRule[] = [{ kind: 'rolling', hours: 5 }, WEEKLY, { kind: 'once' }, { kind: 'none' }];
+    for (const rule of rules) {
+      expect(nextBoundary(rule, NOW)).toBeNull();
+      expect(previousBoundary(rule, NOW)).toBeNull();
+    }
+  });
+});
+
+describe('window helpers', () => {
+  it('nominalWindowMs follows the rule', () => {
+    expect(nominalWindowMs({ kind: 'rolling', hours: 5 })).toBe(5 * HOUR);
+    expect(nominalWindowMs(WEEKLY)).toBe(WEEK);
+    expect(nominalWindowMs({ kind: 'daily', time: '00:00', tz: 'UTC' })).toBe(DAY);
+    expect(nominalWindowMs({ kind: 'monthly', day: 1, time: '00:00', tz: 'UTC' })).toBe(MONTH);
+    expect(nominalWindowMs({ kind: 'once' })).toBeNull();
+    expect(nominalWindowMs({ kind: 'none' })).toBeNull();
+  });
+
+  it('windowStartFor is one length back, or the previous wall-clock boundary', () => {
+    const end = utc(2026, 11, 30);
+    expect(windowStartFor(WEEKLY, end)).toBe(end - WEEK);
+    expect(windowStartFor({ kind: 'rolling', hours: 5 }, end)).toBe(end - 5 * HOUR);
+    expect(windowStartFor({ kind: 'daily', time: '00:00', tz: 'UTC' }, end)).toBe(end - DAY);
+    expect(windowStartFor({ kind: 'monthly', day: 31, time: '00:00', tz: 'UTC' }, end)).toBe(utc(2026, 10, 31));
+    expect(windowStartFor({ kind: 'once' }, end)).toBeNull();
+    expect(windowStartFor({ kind: 'none' }, end)).toBeNull();
+  });
+
+  it('windowLengthMs is the real span of the current window', () => {
+    const monthly = one({ label: 'Monthly', unit: 'credits', limit: 100, reset: { kind: 'monthly', day: 1, time: '00:00', tz: 'UTC' } }).meter;
+    expect(windowLengthMs(monthly)).toBe(30 * DAY); // November
+    const dstDay = one({ label: 'Daily', reset: { kind: 'daily', time: '00:00', tz: LA } }, utc(2026, 3, 8, 20, 0)).meter;
+    expect(windowLengthMs(dstDay)).toBe(23 * HOUR);
+    const idle = one({ label: 'Session', role: 'throttle', reset: { kind: 'rolling', hours: 5 } }).meter;
+    expect(windowLengthMs(idle)).toBeNull();
+  });
+
+  it('staleAfterMs is 20% of the window, never under 30 minutes or over 48 hours', () => {
+    const weekly = one({ label: 'Weekly', reset: WEEKLY, resetsAt: iso(NOW + DAY) }).meter;
+    expect(staleAfterMs(weekly)).toBeCloseTo(33.6 * HOUR, 3);
+    const session = one({ label: 'Session', reset: { kind: 'rolling', hours: 5 }, resetsAt: iso(NOW + HOUR) }).meter;
+    expect(staleAfterMs(session)).toBe(HOUR);
+    const hourly = one({ label: 'Hourly', reset: { kind: 'interval', hours: 1 }, resetsAt: iso(NOW + 20 * MINUTE) }).meter;
+    expect(staleAfterMs(hourly)).toBe(30 * MINUTE);
+    const monthly = one({ label: 'Monthly', reset: { kind: 'monthly', day: 1, time: '00:00', tz: 'UTC' } }).meter;
+    expect(staleAfterMs(monthly)).toBe(48 * HOUR);
+    const balance = one({ label: 'Balance', reset: { kind: 'none' } }).meter;
+    expect(staleAfterMs(balance)).toBe(48 * HOUR);
+  });
+});
+
+describe('anchorMeter', () => {
+  it('gives a monthly meter its next reset and the start of its window', () => {
+    // Scenario: Create a custom account.
+    const { account, meter } = one(
+      { label: 'Monthly credits', unit: 'credits', limit: 2500, reset: { kind: 'monthly', day: 12, time: '00:00', tz: 'UTC' } },
+      NOW,
+      { label: 'Suno Pro' }
+    );
+    expect(account.label).toBe('Suno Pro');
+    expect(meter).toMatchObject({
+      label: 'Monthly credits',
+      unit: 'credits',
+      limit: 2500,
+      used: 0,
+      role: 'allowance',
+      resetsAt: '2026-12-12T00:00:00.000Z',
+      windowStartedAt: '2026-11-12T00:00:00.000Z'
+    });
+  });
+
+  it('gives a daily meter its next reset', () => {
+    const { meter } = one({ label: 'Daily', reset: { kind: 'daily', time: '00:00', tz: LA } });
+    expect(meter.resetsAt).toBe('2026-11-20T08:00:00.000Z');
+    expect(meter.windowStartedAt).toBe('2026-11-19T08:00:00.000Z');
+  });
+
+  it('leaves rules whose anchor only the provider knows without a reset time', () => {
+    for (const reset of [{ kind: 'rolling', hours: 5 }, WEEKLY, { kind: 'once' }, { kind: 'none' }] as ResetRule[]) {
+      const { meter } = one({ label: 'M', reset });
+      expect(meter.resetsAt).toBeNull();
+      expect(meter.windowStartedAt).toBeNull();
+    }
+  });
+
+  it('fills in the window start when the reset time is known', () => {
+    const { meter } = one({ label: 'Weekly', reset: WEEKLY, resetsAt: '2026-11-20T00:00:00Z' });
+    expect(meter.resetsAt).toBe('2026-11-20T00:00:00.000Z');
+    expect(meter.windowStartedAt).toBe('2026-11-13T00:00:00.000Z');
+  });
+
+  it('returns the same object when there is nothing to anchor', () => {
+    const { meter } = one({ label: 'Weekly', reset: WEEKLY, resetsAt: '2026-11-20T00:00:00Z' });
+    expect(anchorMeter(meter, NOW)).toBe(meter);
+    expect(anchorMeter(meter, NOW + 30 * DAY)).toBe(meter);
+  });
+});
+
+describe('rollMeter', () => {
+  it('leaves a window that has not ended alone', () => {
+    const { meter } = one({ label: 'Weekly', reset: WEEKLY, used: 40, resetsAt: iso(NOW + DAY) });
+    const rolled = rollMeter(meter, NOW);
+    expect(rolled.meter).toBe(meter);
+    expect(rolled.closed).toBeNull();
+  });
+
+  it('interval: enters the next window with nothing used and an estimated marker', () => {
+    // Scenario: Weekly meter passes its reset.
+    const reset = NOW + DAY;
+    const { meter } = one({ label: 'Weekly', reset: WEEKLY, used: 40, resetsAt: iso(reset) });
+    const { meter: rolled, closed } = rollMeter(meter, reset + HOUR);
+    expect(rolled).toMatchObject({
+      used: 0,
+      resetsAt: iso(reset + WEEK),
+      windowStartedAt: iso(reset),
+      estimated: true,
+      samples: [],
+      expired: false
+    });
+    expect(closed).toMatchObject({ endedAt: iso(reset), startedAt: iso(reset - WEEK), used: 40, limit: 100 });
+  });
+
+  it('interval: rolls at the reset instant itself', () => {
+    const reset = NOW + DAY;
+    const { meter } = one({ label: 'Weekly', reset: WEEKLY, used: 40, resetsAt: iso(reset) });
+    expect(rollMeter(meter, reset - 1).meter).toBe(meter);
+    expect(rollMeter(meter, reset).meter.resetsAt).toBe(iso(reset + WEEK));
+  });
+
+  it('interval: lands in the window containing now after several were missed', () => {
+    const reset = NOW + DAY;
+    const { meter } = one({ label: 'Weekly', reset: WEEKLY, used: 40, resetsAt: iso(reset) });
+    const later = reset + 2 * WEEK + 3 * DAY;
+    const { meter: rolled, closed } = rollMeter(meter, later);
+    expect(rolled.windowStartedAt).toBe(iso(reset + 2 * WEEK));
+    expect(rolled.resetsAt).toBe(iso(reset + 3 * WEEK));
+    expect(rolled.used).toBe(0);
+    // Only the window that was actually observed is offered for recording.
+    expect(closed).toMatchObject({ endedAt: iso(reset), used: 40 });
+  });
+
+  it('daily: three missed windows place the meter in the current one and offer only the first for recording', () => {
+    // Scenario: Several windows pass while nothing is running.
+    const { state, meter } = one({ label: 'Daily', unit: 'requests', limit: 50, used: 20, reset: { kind: 'daily', time: '00:00', tz: 'UTC' } });
+    expect(meter.resetsAt).toBe('2026-11-20T00:00:00.000Z');
+    const later = utc(2026, 11, 22, 6, 0); // the windows ending on the 20th, 21st and 22nd have passed
+    const { meter: rolled, closed } = rollMeter(meter, later);
+    expect(rolled).toMatchObject({
+      windowStartedAt: '2026-11-22T00:00:00.000Z',
+      resetsAt: '2026-11-23T00:00:00.000Z',
+      used: 0,
+      estimated: true
+    });
+    expect(closed).toMatchObject({ endedAt: '2026-11-20T00:00:00.000Z', startedAt: '2026-11-19T00:00:00.000Z', used: 20 });
+
+    const next = rollState(state, later);
+    expect(next.cycles).toHaveLength(1);
+    expect(next.cycles[0]).toMatchObject({ endedAt: '2026-11-20T00:00:00.000Z', used: 20 });
+  });
+
+  it('daily: keeps wall-clock midnight when the missed windows span a clock change', () => {
+    const { meter } = one({ label: 'Daily', reset: { kind: 'daily', time: '00:00', tz: LA } }, utc(2026, 3, 7, 20, 0));
+    const { meter: rolled } = rollMeter(meter, utc(2026, 3, 9, 20, 0));
+    expect(rolled.windowStartedAt).toBe('2026-03-09T07:00:00.000Z');
+    expect(rolled.resetsAt).toBe('2026-03-10T07:00:00.000Z');
+  });
+
+  it('monthly: enters the next calendar window', () => {
+    const { meter } = one({ label: 'Monthly', unit: 'requests', limit: 300, used: 120, reset: { kind: 'monthly', day: 1, time: '00:00', tz: 'UTC' } });
+    const { meter: rolled, closed } = rollMeter(meter, utc(2026, 12, 3));
+    expect(rolled).toMatchObject({
+      used: 0,
+      windowStartedAt: '2026-12-01T00:00:00.000Z',
+      resetsAt: '2027-01-01T00:00:00.000Z',
+      estimated: true
+    });
+    expect(closed).toMatchObject({ startedAt: '2026-11-01T00:00:00.000Z', endedAt: '2026-12-01T00:00:00.000Z', used: 120 });
+  });
+
+  it('rolling: becomes idle', () => {
+    const { meter } = one({ label: 'Session', role: 'throttle', reset: { kind: 'rolling', hours: 5 }, used: 80, resetsAt: iso(NOW + HOUR) });
+    expect(meter.windowStartedAt).toBe(iso(NOW - 4 * HOUR));
+    const { meter: rolled, closed } = rollMeter(meter, NOW + 2 * HOUR);
+    expect(rolled).toMatchObject({ used: 0, resetsAt: null, windowStartedAt: null, samples: [] });
+    expect(closed).toBeNull(); // a throttle is never recorded
+    // Idle means idle: more time passing changes nothing.
+    expect(rollMeter(rolled, NOW + 10 * DAY).meter).toBe(rolled);
+  });
+
+  it('once: is marked expired and is no longer advanced', () => {
+    // Scenario: Prepaid credits expire.
+    const expiry = NOW + 3 * DAY;
+    const { meter } = one({ label: 'Credit pack', unit: 'credits', limit: 1000, used: 600, reset: { kind: 'once' }, resetsAt: iso(expiry) });
+    const first = rollMeter(meter, expiry + MINUTE);
+    expect(first.meter).toMatchObject({ expired: true, resetsAt: iso(expiry), used: 600 });
+    expect(first.closed).toMatchObject({ endedAt: iso(expiry), used: 600, limit: 1000 });
+    const second = rollMeter(first.meter, expiry + 400 * DAY);
+    expect(second.meter).toBe(first.meter);
+    expect(second.closed).toBeNull();
+  });
+
+  it('none: has no clock to pass', () => {
+    const { meter } = one({ label: 'Balance', unit: 'usd', limit: 20, used: 5, reset: { kind: 'none' } });
+    const rolled = rollMeter(meter, NOW + 400 * DAY);
+    expect(rolled.meter).toBe(meter);
+    expect(rolled.closed).toBeNull();
+  });
+});
+
+describe('applyReading', () => {
+  const credits = (): Meter =>
+    one({ label: 'Monthly credits', unit: 'credits', limit: 2500, reset: { kind: 'monthly', day: 12, time: '00:00', tz: 'UTC' } }).meter;
+  const requests = (): Meter =>
+    one({ label: 'Premium requests', unit: 'requests', limit: 300, reset: { kind: 'monthly', day: 1, time: '00:00', tz: 'UTC' } }).meter;
+  const percent = (): Meter => one({ label: 'Weekly', reset: WEEKLY, resetsAt: iso(NOW + 2 * DAY) }).meter;
+
+  it('turns a remaining amount into an amount used', () => {
+    // Scenario: Remaining amount.
+    expect(applyReading(credits(), { remaining: 1200 }, NOW).meter.used).toBe(1300);
+  });
+
+  it('turns a percentage into the unit of a counted meter', () => {
+    // Scenario: Percentage on a counted meter.
+    expect(applyReading(requests(), { usedPercent: 40 }, NOW).meter.used).toBe(120);
+    expect(applyReading(requests(), { remainingPercent: 40 }, NOW).meter.used).toBe(180);
+  });
+
+  it('stores 62 for "62% used" on a percentage-only meter with limit 100', () => {
+    // Scenario: Percentage-only meter.
+    const meter = percent();
+    expect(meter.unit).toBe('percent');
+    expect(meter.limit).toBe(100);
+    expect(applyReading(meter, { usedPercent: 62 }, NOW).meter.used).toBe(62);
+    expect(applyReading(meter, { remainingPercent: 38 }, NOW).meter.used).toBe(62);
+  });
+
+  it('stores every whole percentage exactly, without floating-point residue', () => {
+    const meter = percent();
+    for (let n = 0; n <= 100; n += 1) {
+      expect(applyReading(meter, { usedPercent: n }, NOW).meter.used).toBe(n);
+      expect(applyReading(meter, { remainingPercent: n }, NOW).meter.used).toBe(100 - n);
+    }
+    expect(applyReading(meter, { usedPercent: 62.5 }, NOW).meter.used).toBe(62.5);
+  });
+
+  it('keeps an over-limit amount as reported and treats the meter as fully used', () => {
+    // Scenario: Usage beyond the limit.
+    const { state, account, meter } = one({ label: 'Premium requests', unit: 'requests', limit: 300, reset: { kind: 'monthly', day: 1, time: '00:00', tz: 'UTC' } });
+    const next = applyReadingToState(state, account.id, meter.id, { used: 340 }, NOW);
+    const stored = (next.accounts[0] as Account).meters[0] as Meter;
+    expect(stored.used).toBe(340);
+    const view = viewMeter(next.accounts[0] as Account, stored, NOW);
+    expect(view.usedFraction).toBe(1);
+    expect(view.remaining).toBe(0);
+    expect(view.tier).toBe('spent');
+  });
+
+  it('never reports negative usage when more is left than the limit', () => {
+    expect(applyReading(credits(), { remaining: 3000 }, NOW).meter.used).toBe(0);
+  });
+
+  it('stores the time of the reading, clears the estimated marker and keeps a sample', () => {
+    const { meter } = one({ label: 'Weekly', reset: WEEKLY, resetsAt: iso(NOW + 2 * DAY) });
+    expect(meter.updatedAt).toBeNull();
+    const first = applyReading({ ...meter, estimated: true }, { usedPercent: 10 }, NOW).meter;
+    expect(first).toMatchObject({ updatedAt: iso(NOW), estimated: false, samples: [{ t: iso(NOW), used: 10 }] });
+    const second = applyReading(first, { usedPercent: 25 }, NOW + HOUR).meter;
+    expect(second.samples).toEqual([
+      { t: iso(NOW), used: 10 },
+      { t: iso(NOW + HOUR), used: 25 }
+    ]);
+    expect(second.updatedAt).toBe(iso(NOW + HOUR));
+  });
+
+  it('replaces the last sample when readings arrive within a minute of each other', () => {
+    let meter = percent();
+    meter = applyReading(meter, { usedPercent: 10 }, NOW).meter;
+    meter = applyReading(meter, { usedPercent: 11 }, NOW + 20_000).meter;
+    meter = applyReading(meter, { usedPercent: 12 }, NOW + 40_000).meter;
+    expect(meter.samples).toEqual([{ t: iso(NOW + 40_000), used: 12 }]);
+    expect(meter.used).toBe(12);
+  });
+
+  it('bounds the samples of one window', () => {
+    let meter = one({ label: 'Monthly', reset: { kind: 'monthly', day: 1, time: '00:00', tz: 'UTC' } }, utc(2026, 11, 1, 1, 0)).meter;
+    const start = utc(2026, 11, 1, 1, 0);
+    for (let n = 0; n < 600; n += 1) {
+      meter = applyReading(meter, { usedPercent: n / 10 }, start + n * 10 * MINUTE).meter;
+    }
+    expect(meter.samples.length).toBeLessThanOrEqual(MAX_SAMPLES);
+    expect(meter.samples[0]).toEqual({ t: iso(start), used: 0 });
+    expect(meter.samples[meter.samples.length - 1]).toEqual({ t: iso(start + 599 * 10 * MINUTE), used: 59.9 });
+    const times = meter.samples.map((sample) => sample.t);
+    expect(times).toEqual(times.slice().sort());
+  });
+
+  it('records where the reading came from', () => {
+    const next = applyReading(percent(), { usedPercent: 10, source: { kind: 'agent', id: 'claude-code' } }, NOW).meter;
+    expect(next.source).toEqual({ kind: 'agent', id: 'claude-code' });
+  });
+
+  it('accepts a new limit, except on percentage-only meters', () => {
+    expect(applyReading(credits(), { used: 100, limit: 10_000 }, NOW).meter).toMatchObject({ used: 100, limit: 10_000 });
+    expect(applyReading(credits(), { usedPercent: 50, limit: 10_000 }, NOW).meter).toMatchObject({ used: 5000, limit: 10_000 });
+    expect(applyReading(percent(), { usedPercent: 50, limit: 500 }, NOW).meter).toMatchObject({ used: 50, limit: 100 });
+  });
+
+  it('converts a count with its own limit into the unit of a percentage-only meter', () => {
+    // "45 of 200" read off a usage page is 22.5% of the allowance, not 45%.
+    expect(applyReading(percent(), { used: 45, limit: 200 }, NOW).meter).toMatchObject({ used: 22.5, limit: 100 });
+    expect(applyReading(percent(), { remaining: 150, limit: 200 }, NOW).meter).toMatchObject({ used: 25, limit: 100 });
+    expect(applyReading(percent(), { usedPercent: 25, limit: 200 }, NOW).meter).toMatchObject({ used: 25, limit: 100 });
+    expect(applyReading(percent(), { remainingPercent: 25, limit: 200 }, NOW).meter).toMatchObject({ used: 75, limit: 100 });
+    expect(applyReading(percent(), { used: 62, limit: 100 }, NOW).meter).toMatchObject({ used: 62, limit: 100 });
+  });
+
+  it('can move the reset time without touching the amount or the reading time', () => {
+    let meter = percent();
+    meter = applyReading(meter, { usedPercent: 30 }, NOW - HOUR).meter;
+    const moved = applyReading(meter, { resetsAt: iso(NOW + 2 * DAY + 3 * HOUR) }, NOW).meter;
+    expect(moved.resetsAt).toBe(iso(NOW + 2 * DAY + 3 * HOUR));
+    expect(moved.used).toBe(30);
+    expect(moved.updatedAt).toBe(iso(NOW - HOUR));
+    expect(moved.samples).toEqual(meter.samples);
+  });
+
+  describe('invalid readings', () => {
+    // Scenario: Invalid reading.
+    const cases: [string, Reading, string][] = [
+      ['a negative amount used', { used: -1 }, 'used'],
+      ['a negative amount remaining', { remaining: -5 }, 'remaining'],
+      ['a percentage above 100', { usedPercent: 101 }, 'usedPercent'],
+      ['a percentage below 0', { usedPercent: -0.5 }, 'usedPercent'],
+      ['a remaining percentage above 100', { remainingPercent: 140 }, 'remainingPercent'],
+      ['a remaining percentage below 0', { remainingPercent: -1 }, 'remainingPercent'],
+      ['an amount that is not a number', { used: Number.NaN }, 'used'],
+      ['an unparseable reset time', { usedPercent: 10, resetsAt: 'next tuesday-ish' }, 'resetsAt'],
+      ['a reset time in the past', { usedPercent: 10, resetsAt: '2026-11-01T00:00:00Z' }, 'resetsAt'],
+      ['an unparseable window start', { usedPercent: 10, windowStartedAt: 'yesterday' }, 'windowStartedAt'],
+      ['a limit of zero', { used: 5, limit: 0 }, 'limit'],
+      ['nothing at all', {}, 'used']
+    ];
+
+    it.each(cases)('rejects %s, naming the field, and leaves the meter unchanged', (_name, reading, field) => {
+      const { state, account, meter } = one({ label: 'Premium requests', unit: 'requests', limit: 300, used: 12, reset: { kind: 'monthly', day: 1, time: '00:00', tz: 'UTC' } });
+      const before = JSON.stringify(state);
+      const error = expectReadingError(() => applyReadingToState(state, account.id, meter.id, reading, NOW), field);
+      expect(error.message).toContain(field);
+      expect(JSON.stringify(state)).toBe(before);
+      expectReadingError(() => applyReading(meter, reading, NOW), field);
+    });
+
+    it('rejects more than one amount, naming the amount fields', () => {
+      const { meter } = one({ label: 'Premium requests', unit: 'requests', limit: 300, reset: { kind: 'monthly', day: 1, time: '00:00', tz: 'UTC' } });
+      let caught: unknown;
+      try {
+        applyReading(meter, { remaining: 100, usedPercent: 40 }, NOW);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(ReadingError);
+      expect((caught as ReadingError).message).toMatch(/remaining/);
+      expect((caught as ReadingError).message).toMatch(/usedPercent/);
+      expect(['used', 'remaining', 'usedPercent']).toContain((caught as ReadingError).field);
+    });
+
+    it('rejects a reading for a meter that does not exist', () => {
+      const { state, account } = one({ label: 'Weekly', reset: WEEKLY });
+      expectReadingError(() => applyReadingToState(state, account.id, 'test:nope', { usedPercent: 1 }, NOW), 'meter');
+      expectReadingError(() => applyReadingToState(state, 'nope', 'test:weekly', { usedPercent: 1 }, NOW), 'meter');
+    });
+  });
+
+  describe('readings that move the window', () => {
+    it('closes the window ending on the 20th when the provider reports a reset on the 27th', () => {
+      // Scenario: Provider reports a later reset.
+      const { state, account, meter } = one(
+        { label: 'Weekly', reset: WEEKLY, resetsAt: '2026-11-20T00:00:00Z' },
+        utc(2026, 11, 14),
+        { price: { amount: 100, currency: 'USD', period: 'month' } }
+      );
+      const read = applyReadingToState(state, account.id, meter.id, { usedPercent: 55 }, utc(2026, 11, 19, 6, 0));
+      expect(read.cycles).toHaveLength(0);
+
+      const next = applyReadingToState(read, account.id, meter.id, { usedPercent: 4, resetsAt: '2026-11-27T00:00:00Z' }, NOW);
+      expect(next.cycles).toHaveLength(1);
+      expect(next.cycles[0]).toMatchObject({
+        meterId: meter.id,
+        accountId: account.id,
+        startedAt: '2026-11-13T00:00:00.000Z',
+        endedAt: '2026-11-20T00:00:00.000Z',
+        limit: 100,
+        used: 55,
+        confidence: 'measured',
+        currency: 'USD'
+      });
+      expect(next.cycles[0]?.wastedFraction).toBeCloseTo(0.45, 12);
+      const continued = (next.accounts[0] as Account).meters[0] as Meter;
+      expect(continued).toMatchObject({
+        windowStartedAt: '2026-11-20T00:00:00.000Z',
+        resetsAt: '2026-11-27T00:00:00.000Z',
+        used: 4,
+        estimated: false,
+        samples: [{ t: iso(NOW), used: 4 }]
+      });
+    });
+
+    it('treats a reset exactly half a window later as a new window', () => {
+      const { meter } = one({ label: 'Weekly', reset: WEEKLY, used: 30, resetsAt: '2026-11-20T00:00:00Z' });
+      const halfLater = utc(2026, 11, 20) + WEEK / 2;
+      const moved = applyReading(meter, { usedPercent: 5, resetsAt: iso(halfLater) }, NOW);
+      expect(moved.closed).toMatchObject({ endedAt: '2026-11-20T00:00:00.000Z', used: 30 });
+      expect(moved.meter.samples).toHaveLength(1);
+      expect(moved.meter.windowStartedAt).toBe(iso(halfLater - WEEK));
+    });
+
+    it('corrects the reset time and keeps the samples when the difference is under half a window', () => {
+      // Scenario: Small correction to the reset time.
+      let meter = one({ label: 'Weekly', reset: WEEKLY, resetsAt: '2026-11-20T00:00:00Z' }, utc(2026, 11, 14)).meter;
+      meter = applyReading(meter, { usedPercent: 20 }, utc(2026, 11, 15)).meter;
+      meter = applyReading(meter, { usedPercent: 35 }, utc(2026, 11, 17)).meter;
+      const corrected = applyReading(meter, { usedPercent: 50, resetsAt: '2026-11-20T05:00:00Z' }, NOW);
+      expect(corrected.closed).toBeNull();
+      expect(corrected.meter.resetsAt).toBe('2026-11-20T05:00:00.000Z');
+      expect(corrected.meter.windowStartedAt).toBe('2026-11-13T05:00:00.000Z');
+      expect(corrected.meter.samples.map((sample) => sample.used)).toEqual([20, 35, 50]);
+
+    });
+
+    it('still calls it a correction just under half a window away, in either direction', () => {
+      let meter = one({ label: 'Weekly', reset: WEEKLY, resetsAt: '2026-11-24T00:00:00Z' }, utc(2026, 11, 17, 6, 0)).meter;
+      meter = applyReading(meter, { usedPercent: 20 }, utc(2026, 11, 18)).meter;
+      const almost = WEEK / 2 - MINUTE;
+      for (const shift of [almost, -almost]) {
+        const moved = utc(2026, 11, 24) + shift;
+        const again = applyReading(meter, { usedPercent: 30, resetsAt: iso(moved) }, NOW);
+        expect(again.closed).toBeNull();
+        expect(again.meter.resetsAt).toBe(iso(moved));
+        expect(again.meter.samples.map((sample) => sample.used)).toEqual([20, 30]);
+      }
+    });
+
+    it('keeps the usage when the provider reports an earlier reset than the one stored', () => {
+      const { meter } = one({ label: 'Weekly', reset: WEEKLY, used: 30, resetsAt: '2026-11-25T00:00:00Z' });
+      const moved = applyReading(meter, { resetsAt: '2026-11-20T00:00:00Z' }, NOW);
+      expect(moved.closed).toBeNull();
+      expect(moved.meter).toMatchObject({ used: 30, resetsAt: '2026-11-20T00:00:00.000Z', windowStartedAt: '2026-11-13T00:00:00.000Z' });
+    });
+
+    it('rolls a passed window first, so a reading after the reset lands in the new window', () => {
+      const { meter } = one({ label: 'Weekly', reset: WEEKLY, used: 70, resetsAt: '2026-11-20T00:00:00Z' });
+      const after = utc(2026, 11, 20, 8, 0);
+      const { meter: next, closed } = applyReading(meter, { usedPercent: 3, resetsAt: '2026-11-27T00:00:00Z' }, after);
+      expect(closed).toMatchObject({ endedAt: '2026-11-20T00:00:00.000Z', used: 70 });
+      expect(next).toMatchObject({ used: 3, resetsAt: '2026-11-27T00:00:00.000Z', windowStartedAt: '2026-11-20T00:00:00.000Z', estimated: false });
+    });
+
+    it('starts a rolling window at the reading and ends it one window length later', () => {
+      // Scenario: First use of a rolling window.
+      const { meter } = one({ label: 'Session', role: 'throttle', reset: { kind: 'rolling', hours: 5 } });
+      expect(meter.resetsAt).toBeNull();
+      const { meter: started, closed } = applyReading(meter, { usedPercent: 10 }, NOW);
+      expect(closed).toBeNull();
+      expect(started).toMatchObject({ used: 10, windowStartedAt: iso(NOW), resetsAt: iso(NOW + 5 * HOUR) });
+    });
+
+    it('ends a rolling window at the reading\'s own reset time when it has one', () => {
+      const { meter } = one({ label: 'Session', role: 'throttle', reset: { kind: 'rolling', hours: 5 } });
+      const { meter: started } = applyReading(meter, { usedPercent: 10, resetsAt: iso(NOW + 3 * HOUR) }, NOW);
+      expect(started.resetsAt).toBe(iso(NOW + 3 * HOUR));
+      expect(started.windowStartedAt).toBe(iso(NOW - 2 * HOUR));
+    });
+
+    it('does not start a rolling window on a reading that shows no use', () => {
+      const { meter } = one({ label: 'Session', role: 'throttle', reset: { kind: 'rolling', hours: 5 } });
+      const { meter: still } = applyReading(meter, { usedPercent: 0 }, NOW);
+      expect(still.resetsAt).toBeNull();
+      expect(still.updatedAt).toBe(iso(NOW));
+    });
+
+    it('starts a new rolling window on the first reading after the previous one ended', () => {
+      let meter = one({ label: 'Session', role: 'throttle', reset: { kind: 'rolling', hours: 5 } }).meter;
+      meter = applyReading(meter, { usedPercent: 90 }, NOW).meter;
+      const later = NOW + 8 * HOUR;
+      const again = applyReading(meter, { usedPercent: 5 }, later).meter;
+      expect(again).toMatchObject({ used: 5, windowStartedAt: iso(later), resetsAt: iso(later + 5 * HOUR), estimated: false });
+      expect(again.samples).toEqual([{ t: iso(later), used: 5 }]);
+    });
+
+    it('gives an interval meter its missing anchor from a reading', () => {
+      const { meter } = one({ label: 'Weekly', reset: WEEKLY });
+      const { meter: anchored } = applyReading(meter, { usedPercent: 10, resetsAt: '2026-11-23T09:00:00Z' }, NOW);
+      expect(anchored.resetsAt).toBe('2026-11-23T09:00:00.000Z');
+      expect(anchored.windowStartedAt).toBe('2026-11-16T09:00:00.000Z');
+    });
+
+    it('remembers when tracking of a one-off expiry began', () => {
+      const { meter } = one({ label: 'Credit pack', unit: 'credits', limit: 1000, reset: { kind: 'once' } });
+      const { meter: tracked } = applyReading(meter, { remaining: 900, resetsAt: iso(NOW + 30 * DAY) }, NOW);
+      expect(tracked).toMatchObject({ used: 100, resetsAt: iso(NOW + 30 * DAY), windowStartedAt: iso(NOW), expired: false });
+    });
+
+    it('honours an explicit window start', () => {
+      const { meter } = one({ label: 'Weekly', reset: WEEKLY });
+      const { meter: next } = applyReading(
+        meter,
+        { usedPercent: 10, resetsAt: '2026-11-23T09:00:00Z', windowStartedAt: '2026-11-17T09:00:00Z' },
+        NOW
+      );
+      expect(next.windowStartedAt).toBe('2026-11-17T09:00:00.000Z');
+      expect(windowLengthMs(next)).toBe(6 * DAY);
+    });
+  });
+});
+
+describe('rollState', () => {
+  function fixture(): State {
+    let state = emptyState();
+    state = addAccount(
+      state,
+      {
+        label: 'Claude Max',
+        providerId: 'claude',
+        price: { amount: 100, currency: 'USD', period: 'month' },
+        meters: [
+          { label: 'Weekly', reset: WEEKLY, used: 70, resetsAt: iso(NOW + DAY) },
+          { label: 'Session', role: 'throttle', reset: { kind: 'rolling', hours: 5 }, used: 100, resetsAt: iso(NOW + HOUR) }
+        ]
+      },
+      NOW
+    ).state;
+    state = addAccount(
+      state,
+      { label: 'Copilot', meters: [{ label: 'Premium requests', unit: 'requests', limit: 300, used: 90, reset: { kind: 'monthly', day: 1, time: '00:00', tz: 'UTC' } }] },
+      NOW
+    ).state;
+    state = addAccount(
+      state,
+      { label: 'Credit pack', meters: [{ label: 'Credits', unit: 'credits', limit: 1000, used: 250, reset: { kind: 'once' }, resetsAt: iso(NOW + 2 * DAY) }] },
+      NOW
+    ).state;
+    return state;
+  }
+
+  it('returns the same object while nothing is due', () => {
+    const state = fixture();
+    expect(rollState(state, NOW)).toBe(state);
+    expect(rollState(state, NOW + 30 * MINUTE)).toBe(state);
+  });
+
+  it('is idempotent: rolling twice to the same instant changes nothing more', () => {
+    const state = fixture();
+    const later = utc(2026, 12, 20);
+    const once = rollState(state, later);
+    expect(once).not.toBe(state);
+    expect(once.cycles).toHaveLength(3); // weekly, monthly, one-off; the throttle is not recorded
+    const twice = rollState(once, later);
+    expect(twice).toBe(once);
+    expect(JSON.stringify(rollState(JSON.parse(JSON.stringify(once)) as State, later))).toBe(JSON.stringify(once));
+  });
+
+  it('gives the same result in one step as in many', () => {
+    const state = fixture();
+    const later = utc(2026, 12, 20);
+    let stepped = state;
+    for (let at = NOW; at <= later; at += 6 * HOUR) stepped = rollState(stepped, at);
+    stepped = rollState(stepped, later);
+    const direct = rollState(state, later);
+    expect(stepped.accounts).toEqual(direct.accounts);
+    expect(stepped.cycles.map((cycle) => [cycle.meterId, cycle.endedAt, cycle.used])).toEqual(
+      direct.cycles.map((cycle) => [cycle.meterId, cycle.endedAt, cycle.used])
+    );
+  });
+
+  it('records a window once when two processes roll the same stale state', () => {
+    const state = fixture();
+    const later = NOW + 2 * DAY + HOUR;
+    const first = rollState(state, later);
+    // A second process still holds the unrolled meters but reads the cycles the first one saved.
+    const second = rollState({ ...state, cycles: first.cycles }, later + MINUTE);
+    expect(second.cycles).toHaveLength(first.cycles.length);
+    expect(new Set(second.cycles.map((cycle) => `${cycle.meterId}|${cycle.endedAt}`)).size).toBe(second.cycles.length);
+  });
+
+  it('does not mutate its input', () => {
+    const state = fixture();
+    const before = JSON.stringify(state);
+    rollState(state, utc(2027, 3, 1));
+    expect(JSON.stringify(state)).toBe(before);
+  });
+
+  it('keeps cycles sorted by the time they ended', () => {
+    const rolled = rollState(fixture(), utc(2026, 12, 20));
+    const ends = rolled.cycles.map((cycle) => cycle.endedAt);
+    expect(ends).toEqual(ends.slice().sort());
+  });
+});

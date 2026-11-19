@@ -1,0 +1,145 @@
+# Spec Delta
+
+## Purpose
+
+Describes how a person's AI subscriptions are represented: accounts, the meters inside them, the rules by which each meter's window resets, and how new readings and the passage of time change them.
+
+## ADDED Requirements
+
+### Requirement: Accounts hold meters
+The system SHALL represent each subscription as an account with a provider, a label, an optional plan name, an optional price (amount, currency, month or year) and one or more meters. Each meter SHALL have a label, a role (`allowance` or `throttle`), a unit, a limit, an amount used and a reset rule.
+
+#### Scenario: Create a custom account
+- **WHEN** a user creates an account "Suno Pro" with a meter "Monthly credits" of 2,500 credits that resets monthly on day 12
+- **THEN** the account is stored with that meter at 0 used and a reset time on the next 12th
+
+#### Scenario: Reject an account without meters
+- **WHEN** a client submits an account with no meters
+- **THEN** the request is rejected with a message naming the missing meters and nothing is stored
+
+### Requirement: Limits on part of a plan
+The system SHALL let a throttle meter be marked as covering only part of a plan, such as one model family inside a weekly allowance. Such a meter SHALL be shown with its own usage and reset, SHALL never be counted as waste, and SHALL NOT mark the rest of the account as blocked when it is reached.
+
+#### Scenario: A model-family cap is reached
+- **WHEN** an account's "Weekly, Fable models" partial limit reaches 100% while its weekly allowance has 40% left
+- **THEN** the partial limit is shown as blocked and the weekly allowance is not
+
+#### Scenario: A session cap is reached
+- **WHEN** an account's ordinary session throttle reaches 100%
+- **THEN** the account's allowances are marked as blocked until it reopens
+
+### Requirement: Units cover percentage-only providers
+The system SHALL accept meters whose provider exposes only a utilisation percentage by using the `percent` unit with a limit of 100, and SHALL otherwise accept a numeric limit in requests, credits, tokens, characters, minutes, hours, images, US dollars or a generic count with a custom noun.
+
+#### Scenario: Percentage-only meter
+- **WHEN** a meter is created with unit `percent`
+- **THEN** its limit is 100 and readings of "62% used" store 62
+
+#### Scenario: Custom noun
+- **WHEN** a meter is created with unit `count` and the noun "songs"
+- **THEN** amounts are shown as "songs" everywhere the unit is displayed
+
+### Requirement: Reset rules
+The system SHALL support these reset rules: `rolling` (starts on first use, lasts a number of hours, then idle), `interval` (a new window every N hours after the previous one ends), `daily` (a wall-clock time in an IANA time zone), `monthly` (a day of the month and time in an IANA time zone), `once` (a single expiry with no renewal) and `none` (no clock).
+
+#### Scenario: Monthly day beyond the month's length
+- **WHEN** a meter resets monthly on day 31 and the current month has 30 days
+- **THEN** the window ends on day 30 of that month at the configured time
+
+#### Scenario: Daily reset across a daylight-saving change
+- **WHEN** a meter resets daily at 00:00 in America/Los_Angeles and the zone's clocks change during the window
+- **THEN** the next reset is still at 00:00 Los Angeles wall-clock time
+
+#### Scenario: Rolling window is idle until used
+- **WHEN** a rolling 5-hour meter has no active window
+- **THEN** it has no reset time and is reported as idle rather than as wasting quota
+
+#### Scenario: Unknown time zone
+- **WHEN** a reset rule names a time zone the runtime does not recognise
+- **THEN** the request is rejected with a message naming the zone
+
+### Requirement: Readings update a meter
+The system SHALL accept a reading for a meter as an amount used, an amount remaining, a percentage used or a percentage remaining, optionally with a new limit, a reset time or a window start. It SHALL convert the reading to the meter's unit, store the time of the reading, and keep the readings of the current window as samples.
+
+#### Scenario: Remaining amount
+- **WHEN** a meter with limit 2,500 receives a reading of 1,200 remaining
+- **THEN** its amount used becomes 1,300
+
+#### Scenario: Percentage on a counted meter
+- **WHEN** a meter with limit 300 requests receives a reading of 40% used
+- **THEN** its amount used becomes 120
+
+#### Scenario: Usage beyond the limit
+- **WHEN** a reading reports more used than the limit
+- **THEN** the amount is stored as reported and the meter is treated as fully used
+
+#### Scenario: Invalid reading
+- **WHEN** a reading contains a negative amount, a percentage outside 0 to 100, more than one amount, or an unparseable reset time
+- **THEN** it is rejected with a message naming the offending field and the meter is unchanged
+
+### Requirement: Readings can move the window
+The system SHALL treat a reading whose reset time is later than the meter's current reset time by at least half a window as the start of a new window, closing the previous one first. A reading on an idle rolling meter SHALL start a window ending at the reading's reset time, or one window length after the reading when no reset time is given.
+
+#### Scenario: Provider reports a later reset
+- **WHEN** a weekly meter that resets on the 20th receives a reading with a reset time on the 27th
+- **THEN** the window ending on the 20th is closed with the last known usage and the meter continues in the window ending on the 27th
+
+#### Scenario: First use of a rolling window
+- **WHEN** an idle rolling 5-hour meter receives a reading of 10% used with no reset time
+- **THEN** a window starts at the time of the reading and ends 5 hours later
+
+#### Scenario: Small correction to the reset time
+- **WHEN** a reading's reset time differs from the stored one by less than half a window
+- **THEN** the stored reset time is corrected and the window's samples are kept
+
+### Requirement: Windows roll over automatically
+The system SHALL advance a meter whose reset time has passed without waiting for a reading. Interval, daily and monthly meters SHALL enter the next window with nothing used and be marked estimated until a new reading arrives. Rolling meters SHALL become idle. `once` meters SHALL be marked expired.
+
+#### Scenario: Weekly meter passes its reset
+- **WHEN** the reset time of an interval meter passes
+- **THEN** the meter shows 0 used, a reset time one interval later, and an estimated marker
+
+#### Scenario: Several windows pass while nothing is running
+- **WHEN** three windows of a daily meter pass before the system is started again
+- **THEN** the meter is placed in the current window and only the first of the passed windows is eligible to be recorded as a finished cycle
+
+#### Scenario: Prepaid credits expire
+- **WHEN** the expiry of a `once` meter passes
+- **THEN** the meter is marked expired and is no longer advanced
+
+### Requirement: Provider catalog
+The system SHALL ship a catalog of provider presets with their common plans, each plan listing its meters with units, limits, roles and reset rules, a usage-page address and a short note on where to read the numbers. The catalog SHALL cover at least Claude, ChatGPT/Codex, GitHub Copilot, Google Gemini, ElevenLabs and Suno, and SHALL allow fully custom accounts.
+
+#### Scenario: Add from a preset
+- **WHEN** a user adds the catalog's GitHub Copilot Pro plan
+- **THEN** an account is created with a monthly premium-request meter that resets on the first day of each month at 00:00 UTC and the plan's list price
+
+#### Scenario: Presets are a starting point
+- **WHEN** a user edits the limit, price or reset rule of an account created from a preset
+- **THEN** the edited values are stored and the catalog is unchanged
+
+#### Scenario: Reset anchor still needed
+- **WHEN** a preset's reset depends on the user's own billing date and no billing day is given
+- **THEN** the created meter is flagged as needing its reset time until the user or a reading provides it
+
+#### Scenario: Billing day supplied
+- **WHEN** a plan with a billing-cycle meter is added with billing day 12
+- **THEN** that meter resets monthly on the 12th in the user's time zone
+
+### Requirement: Snooze
+The system SHALL let a user snooze an account until a chosen time. A snoozed account SHALL remain visible but SHALL be excluded from the use-first ordering, from alerts and from the totals of value at risk until the time passes.
+
+#### Scenario: Snoozed while travelling
+- **WHEN** an account is snoozed for 3 days
+- **THEN** it does not appear in the "use now" group or trigger a notification during those days, and returns automatically afterwards
+
+### Requirement: Export and import
+The system SHALL export the complete state as one JSON document and SHALL import such a document after validating it, replacing the current state only when validation succeeds.
+
+#### Scenario: Round trip
+- **WHEN** a user exports the state and imports the same document into an empty installation
+- **THEN** the accounts, meters, finished cycles and spend sources are identical
+
+#### Scenario: Invalid document
+- **WHEN** an imported document fails validation
+- **THEN** the current state is kept and the response names the first invalid field

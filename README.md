@@ -198,6 +198,14 @@ We use our Slowgun workflow to contribute directly to the shared project instead
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the quality gates and contribution guidelines.
 
+## Also in this repository: Tokengator
+
+[`tokengator/`](tokengator/README.md) is a separate, self-contained package: a local dashboard, MCP server, command line and agent skill that keeps prepaid AI subscription quota (Claude, ChatGPT/Codex, Copilot, Gemini, ElevenLabs, Suno and others) from expiring unused. It shares no code with the gateway, never touches a browser, and has its own lockfile, tests and CI job.
+
+```bash
+cd tokengator && npm ci && npm run build && npm start    # http://127.0.0.1:4777
+```
+
 ## Publish
 
 The package is prepared for public npm distribution as `browsergator-mcp`:

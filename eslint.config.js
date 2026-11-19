@@ -2,7 +2,8 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist/**', 'coverage/**', '.data/**', '.tmp/**', '**/*-profile/**', '.cache/**'] },
+  // tokengator/ is a self-contained package with its own lint config and scripts.
+  { ignores: ['dist/**', 'coverage/**', '.data/**', '.tmp/**', '**/*-profile/**', '.cache/**', 'tokengator/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

@@ -1,0 +1,61 @@
+{
+  "name": "tokengator",
+  "version": "0.1.0",
+  "private": false,
+  "license": "MIT",
+  "type": "module",
+  "description": "Tokengator: a local dashboard, MCP server and agent skill that keeps prepaid AI quota from expiring unused",
+  "keywords": [
+    "ai-usage",
+    "quota",
+    "claude",
+    "codex",
+    "copilot",
+    "gemini",
+    "elevenlabs",
+    "suno",
+    "mcp",
+    "model-context-protocol",
+    "dashboard"
+  ],
+  "bin": {
+    "tokengator": "dist/cli/main.js"
+  },
+  "files": [
+    "dist",
+    "skill",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:demo": "node scripts/build.mjs --demo",
+    "dev": "node scripts/build.mjs --watch",
+    "start": "node dist/cli/main.js serve",
+    "demo": "node dist/cli/main.js serve --demo",
+    "mcp": "node dist/cli/main.js mcp",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "spec:validate": "openspec validate --all --strict"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@fontsource/ibm-plex-mono": "5.3.0",
+    "@fontsource/ibm-plex-sans": "5.3.0",
+    "@types/node": "22.20.1",
+    "esbuild": "0.28.2",
+    "eslint": "10.9.1",
+    "tsx": "4.23.12",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.68.0",
+    "vitest": "4.1.11"
+  }
+}

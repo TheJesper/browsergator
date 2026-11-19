@@ -1,0 +1,96 @@
+# Spec Delta
+
+## Purpose
+
+The local process that stores the state and serves the dashboard, the HTTP API and the MCP endpoint, together with the command-line interface that starts and drives it.
+
+## ADDED Requirements
+
+### Requirement: Loopback by default
+The service SHALL listen on 127.0.0.1 unless configured otherwise and SHALL refuse to start on a non-loopback address unless an access token is configured.
+
+#### Scenario: Default start
+- **WHEN** the service starts with no configuration
+- **THEN** it listens on 127.0.0.1 port 4777 and prints the address to open
+
+#### Scenario: Exposed without a token
+- **WHEN** the service is told to listen on 0.0.0.0 and no token is set
+- **THEN** it exits with an error explaining that a token is required
+
+### Requirement: Request validation
+The service SHALL reject requests whose Host header is not one of its own addresses, SHALL reject state-changing requests that carry an Origin other than its own, and SHALL accept request bodies only as JSON up to 256 KB.
+
+#### Scenario: DNS rebinding attempt
+- **WHEN** a request arrives with Host `evil.example`
+- **THEN** it is answered with 403 and no data
+
+#### Scenario: Cross-site write
+- **WHEN** a POST arrives with Origin `https://evil.example`
+- **THEN** it is answered with 403 and nothing changes
+
+#### Scenario: Oversized body
+- **WHEN** a request body exceeds 256 KB
+- **THEN** it is answered with 413 and nothing changes
+
+### Requirement: Optional access token
+The service SHALL, when a token is configured, require it on the API, the event stream and the MCP endpoint, as a bearer header or as a session cookie obtained by presenting the token once, SHALL compare tokens in constant time, and SHALL never accept a token in a query string.
+
+#### Scenario: Missing token
+- **WHEN** a token is configured and a request to the API carries none
+- **THEN** it is answered with 401
+
+#### Scenario: Opening the dashboard with the token
+- **WHEN** the dashboard is opened with the token in the address fragment
+- **THEN** the dashboard exchanges it for a same-site, HTTP-only session cookie and removes the fragment from the address
+
+#### Scenario: Token in a query string
+- **WHEN** a request carries the token only as a query parameter
+- **THEN** it is answered with 401
+
+### Requirement: Durable state
+The service SHALL store its state as a single JSON document in the Tokengator home directory, SHALL replace the document atomically on every change, SHALL serialise concurrent writers from different processes so that no update is lost, and SHALL refuse to overwrite a document it cannot parse, keeping it aside and reporting where it is.
+
+#### Scenario: Two writers
+- **WHEN** the service and a CLI command update different meters at the same moment
+- **THEN** both updates are present afterwards
+
+#### Scenario: Corrupt document
+- **WHEN** the stored document is not valid JSON
+- **THEN** the service starts with an empty state, leaves the corrupt file in place under a new name and reports that name
+
+#### Scenario: Change made by another process
+- **WHEN** another process changes the stored document while the service is running
+- **THEN** connected dashboards are told to refresh within five seconds
+
+### Requirement: HTTP API
+The service SHALL provide a JSON API to read the full state, create, update and delete accounts and meters, record readings and quick updates, manage spend sources and entries, read the catalog, export and import state, run collectors and read their status, together with a server-sent event stream that announces every change. Errors SHALL use a consistent JSON shape with a code and a message.
+
+#### Scenario: Read state
+- **WHEN** a client requests the state
+- **THEN** it receives accounts, spend sources, finished cycles, settings and collector status as JSON, with windows already rolled forward to the current time
+
+#### Scenario: Validation error
+- **WHEN** a client submits a meter with a negative limit
+- **THEN** it receives status 400 with a code and a message naming the field
+
+### Requirement: Command line
+The command line SHALL start the service, print the current situation in the terminal, record a quick update, add an account from the catalog, run the stdio MCP server, handle Claude Code status line input, manage collectors, print connection snippets, install the agent skill and report the paths and sources it found.
+
+#### Scenario: Status in the terminal
+- **WHEN** the user runs the status command
+- **THEN** the terminal lists allowance meters in "use first" order with share left, time to reset and value at risk, and exits with code 0
+
+#### Scenario: Machine-readable status
+- **WHEN** the status command is run with the JSON option
+- **THEN** it prints the same information as one JSON document
+
+#### Scenario: Unknown command
+- **WHEN** an unknown command is given
+- **THEN** usage help is printed and the exit code is non-zero
+
+### Requirement: Nothing sensitive in logs
+The service SHALL log to standard error only, SHALL never log credentials, tokens, authorization headers, cookies or request bodies, and SHALL keep standard output of the stdio MCP server free of anything but protocol messages.
+
+#### Scenario: Collector fails with an authorisation error
+- **WHEN** a collector's request is refused by the provider
+- **THEN** the log names the collector and the status code and contains no credential
