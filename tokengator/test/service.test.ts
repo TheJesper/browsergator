@@ -5,6 +5,7 @@ import { CATALOG } from '../src/core/catalog.js';
 import { DAY, HOUR, MINUTE, iso } from '../src/core/time.js';
 import { emptyState, type Account, type Meter, type State } from '../src/core/types.js';
 import {
+  PLAN_UNKNOWN_NOTE,
   AmbiguousTargetError,
   NotFoundError,
   ReadingError,
@@ -556,6 +557,20 @@ describe('TokengatorService', () => {
       clock += HOUR;
       await service.applyCollected('some-collector', [{ providerId: provider.id, meters: [{ key: fed.key, reading: { usedPercent: 20 } }] }], []);
       expect((await store.read()).accounts).toHaveLength(1);
+    });
+
+    it.skipIf(!known)('creates the account without a plan or a price when the source names no plan (review finding)', async () => {
+      const provider = known as (typeof CATALOG)[number];
+      const fed = (provider.plans[0] as (typeof provider.plans)[number]).meters[0] as (typeof provider.plans)[number]['meters'][number];
+      for (const planId of [undefined, 'no-such-plan']) {
+        const fresh = new MemoryStateStore(emptyState());
+        const svc = new TokengatorService(fresh, { now: () => clock, timeZone: 'UTC' });
+        await svc.applyCollected('some-collector', [{ providerId: provider.id, ...(planId ? { planId } : {}), meters: [{ key: fed.key, reading: { usedPercent: 10 } }] }], []);
+        const account = (await fresh.read()).accounts[0] as Account;
+        expect(account).toMatchObject({ providerId: provider.id, label: provider.name, plan: null, price: null, notes: PLAN_UNKNOWN_NOTE });
+        // Only the meter that was reported, with the catalog's name for it.
+        expect(account.meters.map((meter) => [meter.key, meter.label])).toEqual([[fed.key, fed.label]]);
+      }
     });
 
     it.skipIf(!known)('adds an account from a preset, with the label and price the user chose', async () => {

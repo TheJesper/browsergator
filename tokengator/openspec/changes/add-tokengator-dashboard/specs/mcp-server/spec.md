@@ -54,6 +54,10 @@ The MCP server SHALL provide tools to list accounts with their meters and foreca
 - **WHEN** an agent calls `list_catalog` for a provider
 - **THEN** the result includes the address of the provider's usage page and which figures to read from it
 
+#### Scenario: A provider filled by a status line
+- **WHEN** an agent asks the catalog about a provider whose own tool pushes readings through a status line
+- **THEN** the result says so and lists only collector ids that the refresh tool accepts
+
 ### Requirement: Reporting usage
 The MCP server SHALL provide a `report_usage` tool that records a reading for a meter identified by account and meter name, key or id, accepting used or remaining amounts or percentages and an optional reset time or minutes until reset, and a `quick_update` tool that accepts the same one-line form as the dashboard's quick entry.
 

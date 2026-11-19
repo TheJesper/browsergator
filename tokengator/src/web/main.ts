@@ -7,7 +7,7 @@ import { SORT_ORDERS, type MeterView, type Money, type SortOrder } from '../core
 import { formatMoney, formatMoneyTotals, formatPercent } from '../core/format.js';
 import { rememberReminders } from '../core/reminders.js';
 import { formatAge, formatDuration } from '../core/time.js';
-import { CREDIT_VALUE_NOTE, PLAN_VALUE_NOTE, leftText, summaryLine } from '../core/wording.js';
+import { CREDIT_VALUE_NOTE, PLAN_VALUE_NOTE, leftText, lostMoney, summaryLine } from '../core/wording.js';
 import { App, VIEWS, type ViewId } from './app.js';
 import { HttpBackend, MemoryBackend, type Backend } from './backend.js';
 import type { Actions, Ctx } from './ctx.js';
@@ -368,8 +368,7 @@ function start(app: App, fellBack: boolean): void {
           h(
             'dd',
             { title: PLAN_VALUE_NOTE },
-            // An estimate is not given to the cent.
-            s.lostIsEstimate ? `about ${formatMoneyTotals(roundedMoney(s.lost30), currency, formatMoney(0, currency)).replace(/\.00\b/g, '')}` : formatMoneyTotals(s.lost30, currency, formatMoney(0, currency)),
+            lostMoney(s.lost30, currency, s.lostIsEstimate),
             credits(s.creditsLost30),
             s.utilisation30 !== null ? h('small', null, `${formatPercent(s.utilisation30)} used`) : null
           )
@@ -377,9 +376,6 @@ function start(app: App, fellBack: boolean): void {
       )
     );
   }
-
-  /** Every amount of a per-currency total, to the whole unit. */
-  const roundedMoney = (totals: Record<string, number>): Record<string, number> => Object.fromEntries(Object.entries(totals).map(([code, amount]) => [code, Math.round(amount)]));
 
   function renderToolbar(queue: MeterView[]): void {
     const { prefs, state } = app.model;

@@ -11,7 +11,7 @@ export const TIER_LABEL: Record<Tier, string> = {
   hot: 'Running hot',
   'on-pace': 'On pace',
   fresh: 'New window',
-  idle: 'Not started',
+  idle: 'Not running',
   balance: 'Balance',
   spent: 'Used up',
   expired: 'Expired'
@@ -19,7 +19,7 @@ export const TIER_LABEL: Record<Tier, string> = {
 
 /** What the tier means, for headings and legends. */
 export const TIER_HINT: Record<Tier, string> = {
-  'use-now': 'Resets soon with quota still left. Use it or it is gone.',
+  'use-now': 'Resets soon, and at this pace part of it will expire. Use it or it is gone.',
   behind: 'At the current pace part of this will expire unused.',
   hot: 'Burning faster than the window allows. It will run out before the reset.',
   'on-pace': 'On track to be used up around the reset.',
@@ -38,6 +38,8 @@ export const THROTTLE_LABEL: Record<ThrottleState, string> = {
 
 /** The label of whichever state a view has. */
 export function stateLabel(view: MeterView): string {
+  // "Not running" would be wrong for a quota that is being used and only lacks its reset time.
+  if (view.tier === 'idle' && view.needsReset) return 'Reset time unknown';
   if (view.tier !== null) return TIER_LABEL[view.tier];
   return THROTTLE_LABEL[view.throttle ?? 'idle'];
 }
@@ -97,6 +99,16 @@ export function expiredMoney(amount: number | null, currency: string | null, uni
 /** What a plan-share figure is, for tooltips: people read a dollar sign as a charge unless told otherwise. */
 export const PLAN_VALUE_NOTE = 'Your plan fee spread over this window. An estimate for comparing quotas, not a charge or a refund.';
 export const CREDIT_VALUE_NOTE = 'The face value of this credit. It can only be spent where the provider accepts it.';
+
+/**
+ * Money that expired, for display: to the cent when every window behind it was observed, and "about" with
+ * whole units when part of it is an estimate. An estimate given to the cent claims a precision it lacks.
+ */
+export function lostMoney(totals: Money, currency: string, estimate: boolean): string {
+  if (!estimate) return formatMoneyTotals(totals, currency, formatMoney(0, currency));
+  const whole = Object.fromEntries(Object.entries(totals).map(([code, amount]) => [code, Math.round(amount)]));
+  return `about ${formatMoneyTotals(whole, currency, formatMoney(0, currency)).replace(/\.00\b/g, '')}`;
+}
 
 /** One short line: the state and the two numbers that matter for it. */
 export function headline(view: MeterView, nowMs: number, tz?: string): string {
@@ -164,6 +176,7 @@ export function explain(view: MeterView, nowMs: number, tz?: string): string {
       if (view.resetsAtMs !== null) parts.push(`It reopens ${formatMoment(view.resetsAtMs, nowMs, tz)}.`);
     } else if (view.throttle === 'open') {
       parts.push(`${usedText(view)} in the current window. This is a rate limit, not an allowance: nothing is lost when it resets.`);
+      if (view.needsReset) parts.push('Its reset time is not known yet.');
     } else {
       parts.push('No window is running. One opens the next time the account is used.');
     }

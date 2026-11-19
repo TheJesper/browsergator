@@ -53,7 +53,8 @@ export function burnUp(view: MeterView, nowMs: number): HTMLElement {
   const area = `${line} L${x(clampedNow).toFixed(1)} ${y(0).toFixed(1)} L${x(start).toFixed(1)} ${y(0).toFixed(1)} Z`;
 
   const projected = view.tier !== null && view.projectedFraction !== null ? view.projectedFraction : null;
-  const showForecast = projected !== null && view.tier !== 'spent' && view.tier !== 'expired' && nowMs < end;
+  // A window that has only just started has no forecast, and the chart must not draw one either.
+  const showForecast = projected !== null && view.tier !== 'spent' && view.tier !== 'expired' && view.tier !== 'fresh' && nowMs < end;
   const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `Usage over the current window: ${formatPercent(view.usedFraction)} used so far.` });
   svg.appendChild(s('defs', null, hatchPattern(patternId)));
 

@@ -158,8 +158,10 @@ export function viewMeter(account: Account, meter: Meter, nowMs: number): MeterV
   const stale = ageMs === null || ageMs > staleAfterMs(meter);
   const snoozedUntil = toMs(account.snoozedUntil);
   const snoozed = snoozedUntil !== null && snoozedUntil > nowMs;
+  // Fixed and one-off windows need their reset time told. So does a long window "from first use" once it
+  // has been used: its start is in the past, and only the provider's page knows when.
   const needsReset =
-    resetsAtMs === null && (meter.reset.kind === 'interval' || meter.reset.kind === 'once');
+    resetsAtMs === null && (meter.reset.kind === 'interval' || meter.reset.kind === 'once' || (meter.reset.kind === 'rolling' && used > 0));
 
   const base = {
     account,
@@ -186,8 +188,8 @@ export function viewMeter(account: Account, meter: Meter, nowMs: number): MeterV
 
   if (meter.role === 'throttle') {
     let throttle: ThrottleState = 'idle';
-    if (hasClock) throttle = usedFraction >= SPENT_AT ? 'blocked' : 'open';
-    else if (meter.reset.kind === 'none') throttle = usedFraction >= SPENT_AT ? 'blocked' : 'open';
+    // With a reading but no reset time yet, the limit is in use all the same: it is not "idle".
+    if (hasClock || meter.reset.kind === 'none' || (needsReset && used > 0)) throttle = usedFraction >= SPENT_AT ? 'blocked' : 'open';
     return {
       ...base,
       projectedFraction: null,

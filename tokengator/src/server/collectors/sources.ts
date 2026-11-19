@@ -210,7 +210,8 @@ export const openrouter: Collector = {
   id: 'openrouter',
   providerId: 'openrouter',
   title: 'OpenRouter credits',
-  description: 'Calls the documented GET /api/v1/credits for credits bought and credits used.',
+  description:
+    'Calls the documented GET /api/v1/credits for credits bought and credits used. That endpoint needs a management key; an ordinary inference key is refused.',
   sourceKind: 'documented-api',
   allowedHosts: ['openrouter.ai'],
   env: ['OPENROUTER_API_KEY'],
@@ -221,7 +222,17 @@ export const openrouter: Collector = {
   async collect(context) {
     const key = needEnv(context, this.env);
     if (!key) throw new CollectorError(missing(this.env), 'unavailable');
-    const body = record(await context.fetchJson('https://openrouter.ai/api/v1/credits', { headers: { Authorization: `Bearer ${key}` } }));
+    let answer: unknown;
+    try {
+      answer = await context.fetchJson('https://openrouter.ai/api/v1/credits', { headers: { Authorization: `Bearer ${key}` } });
+    } catch (error) {
+      // The usual cause is the usual key: the variable's name is the one inference keys go by.
+      if (error instanceof CollectorError && error.kind === 'auth') {
+        throw new CollectorError(`${error.message} The credits endpoint needs an OpenRouter management key, not an ordinary inference key.`, 'auth');
+      }
+      throw error;
+    }
+    const body = record(answer);
     const data = record(body?.['data']);
     const total = numeric(data?.['total_credits']);
     const used = numeric(data?.['total_usage']);

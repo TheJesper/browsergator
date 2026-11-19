@@ -92,6 +92,9 @@ const plan = (id: string, name: string, price: Price | null, meters: PresetMeter
   return built;
 };
 
+/** The research recorded that ChatGPT Pro includes monthly API credits, not how many. */
+const PRO_CREDITS_NOTE = 'API credits must be claimed in Settings > Billing; the amount here is a starting point, so set it to what that page shows';
+
 export const CATALOG: readonly ProviderPreset[] = [
   // ------------------------------------------------------------------ coding
   {
@@ -137,7 +140,13 @@ export const CATALOG: readonly ProviderPreset[] = [
         [weeklyFixed('Weekly limit'), weeklyPart('Weekly, Fable models', 'weekly-fable'), billingMonth('api-credits', 'Monthly API credits', 'usd', 200)],
         'no 5-hour limit on verified accounts'
       ),
-      plan('team', 'Team seat', usd(25), [session(), weeklyFixed('Weekly limit')])
+      plan(
+        'team',
+        'Team seat',
+        usd(25),
+        [session(), weeklyFixed('Weekly limit'), billingMonth('api-credits', 'Monthly API credits', 'usd', 20)],
+        'the seat price was not verified, so set what you pay; API credits are $20 for a Standard seat and $100 for a Premium seat, pooled across the team'
+      )
     ]
   },
   {
@@ -148,7 +157,7 @@ export const CATALOG: readonly ProviderPreset[] = [
     category: 'coding',
     usageUrl: 'https://chatgpt.com/codex/settings/usage',
     howToRead:
-      'Codex and ChatGPT draw on one allowance. The usage page shows the 5-hour and weekly windows as a percentage remaining, each with a reset time. Note that it shows what is LEFT, not what is used.',
+      'The usage page shows the 5-hour and weekly windows as a percentage remaining, each with a reset time. Note that it shows what is LEFT, not what is used. From December 2026 Plus, Pro and Business share one allowance between ChatGPT and Codex; until then the page covers Codex.',
     collectors: ['codex-sessions'],
     uses: [
       {
@@ -159,10 +168,16 @@ export const CATALOG: readonly ProviderPreset[] = [
     ],
     plans: [
       plan('plus', 'Plus', usd(20), [session(), weeklyFromFirstUse('Weekly limit')]),
-      plan('pro-100', 'Pro 100', usd(100), [weeklyFromFirstUse('Weekly limit'), billingMonth('api-credits', 'Monthly API credits', 'usd', 100)], 'API credits must be claimed in Settings > Billing'),
-      plan('pro-200', 'Pro 200', usd(200), [weeklyFromFirstUse('Weekly limit'), billingMonth('api-credits', 'Monthly API credits', 'usd', 200)]),
-      plan('pro-500', 'Pro 500', usd(500), [weeklyFromFirstUse('Weekly limit'), billingMonth('api-credits', 'Monthly API credits', 'usd', 500)]),
-      plan('business', 'Business seat', usd(25), [session(), weeklyFromFirstUse('Weekly limit')]),
+      plan('pro-100', 'Pro 100', usd(100), [weeklyFromFirstUse('Weekly limit'), billingMonth('api-credits', 'Monthly API credits', 'usd', 100)], PRO_CREDITS_NOTE),
+      plan('pro-200', 'Pro 200', usd(200), [weeklyFromFirstUse('Weekly limit'), billingMonth('api-credits', 'Monthly API credits', 'usd', 200)], PRO_CREDITS_NOTE),
+      plan('pro-500', 'Pro 500', usd(500), [weeklyFromFirstUse('Weekly limit'), billingMonth('api-credits', 'Monthly API credits', 'usd', 500)], PRO_CREDITS_NOTE),
+      plan(
+        'business',
+        'Business seat',
+        usd(25),
+        [session(), weeklyFromFirstUse('Weekly limit')],
+        '$25 billed monthly, $20 billed annually; also includes monthly API credits whose amount is not published per seat, so add a meter for them from Settings > Billing'
+      ),
       plan('go', 'Go', usd(8), [{ key: 'monthly', label: 'Monthly allowance', role: 'allowance', unit: 'percent', reset: { kind: 'rolling', hours: 720 }, valueShare: 1 }])
     ]
   },
@@ -237,6 +252,7 @@ export const CATALOG: readonly ProviderPreset[] = [
     monogram: 'Ag',
     category: 'coding',
     usageUrl: 'https://antigravity.google/docs/plans/',
+    planPage: true,
     howToRead:
       'Run /usage in the Antigravity CLI, or open Settings in the app: each model group has a 5-hour and a weekly quota with a reset time. The price belongs to your Google AI plan, so leave it empty here.',
     collectors: ['antigravity-statusline'],
@@ -307,6 +323,7 @@ export const CATALOG: readonly ProviderPreset[] = [
     monogram: 'Ki',
     category: 'coding',
     usageUrl: 'https://kiro.dev/pricing/',
+    planPage: true,
     howToRead: 'The account usage dashboard shows credits used this month. The billing month starts on the 1st at 00:00 UTC.',
     collectors: [],
     plans: [
@@ -402,6 +419,7 @@ export const CATALOG: readonly ProviderPreset[] = [
     monogram: 'Ud',
     category: 'music',
     usageUrl: 'https://www.udio.com/pricing',
+    planPage: true,
     howToRead: 'The credit counter in the app shows what is left this cycle.',
     collectors: [],
     plans: [plan('standard', 'Standard', usd(10), [credits(2400)]), plan('pro', 'Pro', usd(30), [credits(6000)])]
@@ -446,6 +464,7 @@ export const CATALOG: readonly ProviderPreset[] = [
     monogram: 'Id',
     category: 'image',
     usageUrl: 'https://ideogram.ai/pricing',
+    planPage: true,
     howToRead: 'The credit counter shows priority credits left this month.',
     collectors: [],
     plans: [plan('plus', 'Plus', usd(20), [credits(2400, 'Monthly priority credits')]), plan('pro', 'Pro', usd(60), [credits(7500, 'Monthly priority credits')])]
@@ -494,6 +513,7 @@ export const CATALOG: readonly ProviderPreset[] = [
     monogram: 'Pk',
     category: 'video',
     usageUrl: 'https://pika.art/pricing',
+    planPage: true,
     howToRead: 'The credit counter shows what is left; plan credits refresh each billing cycle.',
     collectors: [],
     plans: [plan('starter', 'Starter', usd(10), [credits(600)]), plan('creator', 'Creator', usd(35), [credits(2600)])]
@@ -550,7 +570,7 @@ export const CATALOG: readonly ProviderPreset[] = [
     howToRead: 'Settings > Credits shows the remaining balance.',
     collectors: ['openrouter'],
     plans: [
-      plan('credits', 'Pay as you go', null, [{ key: 'credits', label: 'Credit balance', role: 'allowance', unit: 'usd', limit: 20, reset: { kind: 'none' }, valueShare: 1 }], 'a balance with no reset')
+      plan('credits', 'Pay as you go', null, [{ key: 'credits', label: 'Credit balance', role: 'allowance', unit: 'usd', limit: 20, reset: { kind: 'none' }, valueShare: 1 }], 'a balance with no reset; OpenRouter may expire unused credits a year after purchase, so set an expiry if yours has one')
     ]
   }
 ];

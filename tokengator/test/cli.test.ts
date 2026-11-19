@@ -379,7 +379,8 @@ describe('add', () => {
     for (const provider of CATALOG) {
       const io = makeIo();
       expect(await add(['--list', provider.id], io)).toBe(0);
-      expect(io.out()).toContain(`Usage page: ${provider.usageUrl}`);
+      // A pricing page is shown as what it is, never as the place to read usage.
+      expect(io.out()).toContain(`${provider.planPage ? 'Plan page' : 'Usage page'}: ${provider.usageUrl}`);
       expect(io.out()).toContain(provider.howToRead);
       for (const plan of provider.plans) expect(io.out()).toMatch(new RegExp(`^  ${plan.id}\\s`, 'm'));
       for (const use of provider.uses ?? []) expect(io.out()).toContain(use.url);

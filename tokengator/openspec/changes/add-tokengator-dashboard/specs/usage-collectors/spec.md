@@ -40,11 +40,15 @@ The system SHALL run enabled collectors when the service starts, then periodical
 - **THEN** the gap before its next attempt grows, up to one hour
 
 ### Requirement: Readings from collectors
-The system SHALL apply a collector's result as readings on the matching account and meters, creating the account from the catalog preset on first success, marking each updated meter with the collector as its source, and leaving meters the collector did not report untouched.
+The system SHALL apply a collector's result as readings on the matching account and meters, creating the account on first success, marking each updated meter with the collector as its source, and leaving meters the collector did not report untouched. An account created this way SHALL take a plan and a price only from a plan the source named.
 
 #### Scenario: First successful run
-- **WHEN** an enabled collector returns readings and no matching account exists
-- **THEN** an account is created from the provider's preset and the readings are applied to it
+- **WHEN** an enabled collector returns readings that name the plan and no matching account exists
+- **THEN** an account is created from the provider's preset for that plan and the readings are applied to it
+
+#### Scenario: The source does not say which plan
+- **WHEN** a status line reports readings for a provider with no account and names no plan
+- **THEN** the account is created with the provider's name, the reported meters as the catalog defines them, no plan and no price, and a note that the plan is to be set; nothing on it is valued in money
 
 #### Scenario: Manual meter alongside collected ones
 - **WHEN** an account has a meter the collector does not report

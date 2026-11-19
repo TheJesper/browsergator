@@ -56,8 +56,14 @@ export interface ProviderPreset {
   /** Two characters shown in place of a logo. */
   monogram: string;
   category: ProviderCategory;
-  /** Where a signed-in person sees current usage. */
+  /** Where a signed-in person sees current usage, or the provider's plan page when `planPage` is set. */
   usageUrl: string;
+  /**
+   * The address is the provider's plan or pricing page: no page that shows the account's own usage could
+   * be confirmed. It is then never called a usage page, and an account made from the preset gets no usage
+   * link, so neither a person nor an agent is sent to a page of plan limits to read their numbers.
+   */
+  planPage?: true;
   /** Which figures to read there, written for a person or an agent with a browser. */
   howToRead: string;
   plans: PresetPlan[];
@@ -76,6 +82,18 @@ export interface PresetUse {
   note: string;
   /** The provider's documentation for it. */
   url: string;
+}
+
+/**
+ * A provider's automatic sources, by kind. A status line is not a collector that can be listed, switched on
+ * or run: the provider's own tool pushes to it once its status line command is set. Telling the two apart
+ * keeps every interface from advertising an id that the collector commands would then refuse.
+ */
+export function automaticSources(provider: Pick<ProviderPreset, 'collectors'>): { statusLine: boolean; collectors: string[] } {
+  return {
+    statusLine: provider.collectors.some((id) => id.endsWith('-statusline')),
+    collectors: provider.collectors.filter((id) => !id.endsWith('-statusline'))
+  };
 }
 
 export function findProvider(catalog: readonly ProviderPreset[], providerId: string): ProviderPreset | null {
@@ -135,7 +153,7 @@ export function presetAccountInput(
     label: label?.trim() || (provider.plans.length > 1 ? `${provider.name} ${plan.name}` : provider.name),
     plan: plan.name,
     price: plan.price,
-    usageUrl: provider.usageUrl,
+    usageUrl: provider.planPage ? null : provider.usageUrl,
     notes: null,
     meters: plan.meters.map((meter) => presetMeterInput(meter, billingDay))
   };

@@ -386,6 +386,13 @@ function pushSample(meter: Meter, nowMs: number, used: number): Meter['samples']
  * Applies one reading. Returns the updated meter and, when the reading revealed that a window had ended,
  * the finished cycle to record.
  */
+/** Rolling windows up to this long are taken to begin with the first reading that shows use. */
+export const ROLLING_START_MAX_HOURS = 24;
+
+function startsOnReading(rule: ResetRule): rule is Extract<ResetRule, { kind: 'rolling' }> {
+  return rule.kind === 'rolling' && rule.hours <= ROLLING_START_MAX_HOURS;
+}
+
 export function applyReading(
   meter: Meter,
   reading: Reading,
@@ -488,8 +495,11 @@ export function applyReading(
     current = { ...current, windowStartedAt: iso(newStart) };
   }
 
-  // A rolling window with no clock starts at the first reading that shows any use.
-  if (current.reset.kind === 'rolling' && current.resetsAt === null && used !== null && used > 0) {
+  // A short rolling window with no clock starts at the first reading that shows any use: a session that
+  // was just opened. A long one (a week, a month from first use) is not started this way. A reading of
+  // "62% used" on a weekly limit says the week began days ago, and a window invented to start now would
+  // put a made-up reset date on every screen. It stays without a clock until a reset time is reported.
+  if (startsOnReading(current.reset) && current.resetsAt === null && used !== null && used > 0) {
     current = {
       ...current,
       windowStartedAt: iso(nowMs),

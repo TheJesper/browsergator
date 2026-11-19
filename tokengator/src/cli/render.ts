@@ -5,7 +5,7 @@
 // addition: the three parts of a forecast bar use three different characters, every state is spelled
 // out, and column widths are computed on the visible text so escape codes never shift a column.
 
-import { CATEGORY_LABEL, type ProviderCategory, type ProviderPreset } from '../core/catalog-types.js';
+import { CATEGORY_LABEL, automaticSources, type ProviderCategory, type ProviderPreset } from '../core/catalog-types.js';
 import { CONNECT_GROUP_LABEL, type ConnectSnippet } from '../core/connect.js';
 import { TIER_ORDER, sortViews, summarise, viewState, type MeterView, type Tier } from '../core/forecast.js';
 import { formatMoney, formatPercent } from '../core/format.js';
@@ -486,7 +486,8 @@ export function renderCatalog(catalog: readonly ProviderPreset[], checked: strin
 /** One provider in full: where its usage page is, what to read there, its plans, and the documented ways to use it. */
 export function renderProvider(provider: ProviderPreset, program = 'tokengator'): string {
   const lines: string[] = [`${provider.name} (${provider.id}), ${CATEGORY_LABEL[provider.category].toLowerCase()}`];
-  lines.push('', `Usage page: ${provider.usageUrl}`, `What to read there: ${provider.howToRead}`);
+  if (provider.planPage) lines.push('', `Plan page: ${provider.usageUrl} (plan limits; no page showing your own usage was confirmed)`, `Where the numbers are: ${provider.howToRead}`);
+  else lines.push('', `Usage page: ${provider.usageUrl}`, `What to read there: ${provider.howToRead}`);
   lines.push('', 'Plans');
   const idW = Math.max(...provider.plans.map((plan) => visibleLength(plan.id)), 0);
   for (const plan of provider.plans) {
@@ -499,7 +500,10 @@ export function renderProvider(provider: ProviderPreset, program = 'tokengator')
     lines.push('', 'Ways the provider documents for using it while you are away');
     for (const use of provider.uses) lines.push(`  ${use.title}: ${use.note}`, `    ${use.url}`);
   }
-  if (provider.collectors.length > 0) lines.push('', `Can be read automatically: ${program} collectors list (${provider.collectors.join(', ')})`);
+  const sources = automaticSources(provider);
+  if (sources.statusLine || sources.collectors.length > 0) lines.push('');
+  if (sources.statusLine) lines.push(`Fills itself once its status line command is set: ${program} connect --client statusline`);
+  if (sources.collectors.length > 0) lines.push(`Can be read automatically: ${program} collectors enable ${sources.collectors.join(', ')}`);
   lines.push('', `Add it: ${program} add ${provider.id} [--plan <plan>] [--label <name>] [--billing-day <1-31>]`, '');
   return lines.join('\n');
 }

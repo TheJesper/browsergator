@@ -4,9 +4,14 @@ Quota expires when nobody is looking at the dashboard. Reminders are how Tokenga
 
 ## The rule
 
-A quota earns **one reminder per window**, at the moment it becomes **Use now**: it resets soon and at
-least 10% of it is still there. "Soon" is the last 15% of the window, never less than 2 hours and
-never more than 72: about a day before a weekly limit resets, three days before a monthly one.
+A quota earns **one reminder per window**, at the moment it becomes **Use now**. That takes three
+things together: it resets soon, at least 10% of it is still there, and at the pace of this window at
+least 5% of it would expire. "Soon" is the last 15% of the window, never less than 2 hours and never
+more than 72: the last day of a weekly limit, the last three days of a monthly one.
+
+The third condition is why a reminder can come later than "a day before": with 15% left and a pace
+that will use it up, nothing is about to be wasted and nothing is raised. If the pace drops, the
+reminder comes then.
 
 - Windows shorter than two days (session limits, daily limits) are never raised. They would ring
   several times a day. The dashboard and the status line cover them.

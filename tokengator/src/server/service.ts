@@ -76,6 +76,9 @@ export interface ServiceOptions {
   timeZone?: string;
 }
 
+/** Left on an account that an automatic source created without knowing its plan. */
+export const PLAN_UNKNOWN_NOTE = 'Created from an automatic reading, which does not say which plan this is. Edit the subscription to set the plan and its price; until then nothing here is valued in money.';
+
 export class TokengatorService {
   private readonly now: () => number;
   readonly timeZone: string;
@@ -352,19 +355,36 @@ export class TokengatorService {
           return input;
         };
         if (!account) {
-          const plan = provider ? findPlan(provider, collected.planId) ?? provider.plans[0] : null;
-          const input: AccountInput =
-            provider && plan
-              ? presetAccountInput(provider, plan)
-              : {
-                  providerId: collected.providerId,
-                  label: collected.providerId,
-                  meters: collected.meters.map(fallbackMeter)
-                };
-          // The preset lists everything the plan can have. What the source says this account lacks is left out.
-          const absent = new Set(collected.absent ?? []);
-          const kept = input.meters.filter((meter) => meter.key === undefined || !absent.has(meter.key));
-          if (kept.length > 0) input.meters = kept;
+          // Only a plan the source named is used. Without one, picking the first plan in the catalog
+          // would put a plan name and a price on the account that nobody reported, and every figure in
+          // money would follow from that guess.
+          const plan = provider && collected.planId ? findPlan(provider, collected.planId) : null;
+          let input: AccountInput;
+          if (provider && plan) {
+            input = presetAccountInput(provider, plan);
+            // The preset lists everything the plan can have. What the source says this account lacks is left out.
+            const absent = new Set(collected.absent ?? []);
+            const kept = input.meters.filter((meter) => meter.key === undefined || !absent.has(meter.key));
+            if (kept.length > 0) input.meters = kept;
+          } else if (provider) {
+            // The meters that were reported, as the catalog defines them, on an account with no plan and
+            // no price until the person chooses one.
+            const definitions = provider.plans.flatMap((candidate) => candidate.meters);
+            input = {
+              providerId: provider.id,
+              label: provider.name,
+              plan: null,
+              price: null,
+              usageUrl: provider.usageUrl,
+              notes: PLAN_UNKNOWN_NOTE,
+              meters: collected.meters.map((meter) => {
+                const preset = definitions.find((entry) => entry.key === meter.key);
+                return preset ? presetMeterInput(preset) : fallbackMeter(meter);
+              })
+            };
+          } else {
+            input = { providerId: collected.providerId, label: collected.providerId, meters: collected.meters.map(fallbackMeter) };
+          }
           const added = addAccount(state, input, nowMs, source);
           state = added.state;
           account = added.account;

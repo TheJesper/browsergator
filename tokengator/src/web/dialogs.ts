@@ -5,7 +5,7 @@ import type { AccountInput, MeterInput, MeterPatch } from '../core/accounts.js';
 import { CATALOG, CATALOG_CHECKED } from '../core/catalog.js';
 import { CATEGORY_LABEL, planNeedsBillingDay, type PresetPlan, type ProviderCategory, type ProviderPreset } from '../core/catalog-types.js';
 import { CONNECT_GROUP_LABEL, connectSnippets } from '../core/connect.js';
-import { UNITS, formatMoney, formatNumber } from '../core/format.js';
+import { UNITS, formatAmount, formatMoney } from '../core/format.js';
 import { parseQuick } from '../core/quick.js';
 import { calendarFeed } from '../core/reminders.js';
 import { dateKey, formatAge, localZone, toMs } from '../core/time.js';
@@ -299,12 +299,10 @@ export function quickDialog(ctx: Ctx, prefill = ''): void {
 // Add a subscription
 // ---------------------------------------------------------------------------
 
+/** A plan's meters in one line, each as the catalog names it, with its size the way every other view writes it. */
 function planSummary(plan: PresetPlan): string {
   return plan.meters
-    .map((meter) => {
-      const amount = meter.unit === 'percent' || meter.limit === undefined ? '' : `${formatNumber(meter.limit)} ${meter.unitLabel ?? meter.unit} `;
-      return `${amount}${meter.label.toLowerCase()}`;
-    })
+    .map((meter) => (meter.unit === 'percent' || meter.limit === undefined ? meter.label : `${meter.label} (${formatAmount(meter, meter.limit)})`))
     .join(' · ');
 }
 

@@ -20,7 +20,7 @@ import {
 } from '../src/server/collectors/sources.js';
 import { parseStatusline, readStatusline, runStatusline, statuslineText } from '../src/server/collectors/statusline.js';
 import { CollectorError, type Collector, type CollectorContext } from '../src/server/collectors/types.js';
-import { TokengatorService } from '../src/server/service.js';
+import { PLAN_UNKNOWN_NOTE, TokengatorService } from '../src/server/service.js';
 import { MemoryStateStore } from '../src/server/store.js';
 
 const NOW = Date.parse('2026-11-19T10:00:00Z');
@@ -127,6 +127,26 @@ describe('Claude Code status line', () => {
     expect(line.includes('\n')).toBe(false);
   });
 
+  it('does not guess the plan of an account it creates: no plan name, no price, no money (review finding)', async () => {
+    // The status line says how much is used, not whether this is Pro, Max or Ultra.
+    const svc = service();
+    const soon = JSON.stringify({ rate_limits: { five_hour: { used_percentage: 64, resets_at: Math.floor((NOW + 2 * 3_600_000) / 1000) }, seven_day: { used_percentage: 62, resets_at: Math.floor((NOW + 14 * 3_600_000) / 1000) } } });
+    const line = await runStatusline(soon, svc);
+    const claude = (await svc.state()).accounts.find((account) => account.providerId === 'claude');
+    expect(claude).toMatchObject({ label: 'Claude', plan: null, price: null, notes: PLAN_UNKNOWN_NOTE });
+    // Only what was reported, as the catalog defines it.
+    expect(claude?.meters.map((meter) => [meter.key, meter.role])).toEqual([
+      ['session', 'throttle'],
+      ['weekly', 'allowance']
+    ]);
+    expect(line).toBe('5h 36% left 2h · week 38% left 14h (use now)');
+    expect(line).not.toContain('$');
+
+    // Once the person has said which plan it is, the same reading is worth money.
+    await svc.updateAccount(claude?.id ?? '', { plan: 'Max', price: { amount: 100, currency: 'USD', period: 'month' } });
+    expect(await runStatusline(soon, svc)).toMatch(/\(use now, \$\d+\.\d\d at risk\)$/);
+  });
+
   it('prints a line and changes nothing when there are no rate limits', async () => {
     const svc = service();
     const line = await runStatusline(JSON.stringify({ session_id: 'x' }), svc);
@@ -197,8 +217,10 @@ describe('Antigravity status line', () => {
     expect(account?.meters.find((meter) => meter.key === 'gemini-weekly')?.used).toBeCloseTo(6.22);
     expect(account?.meters.find((meter) => meter.key === 'gemini-5h')).toMatchObject({ role: 'throttle', source: { kind: 'statusline', id: 'antigravity-statusline' } });
     expect(JSON.stringify(state)).not.toContain('developer@example.com');
-    // Scenario "Disabled bucket": no meter for it, although the catalog's preset has one.
-    expect(account?.meters.map((meter) => meter.key).sort()).toEqual(['3p-5h', 'gemini-5h', 'gemini-weekly']);
+    // Scenario "Disabled bucket": no meter for it, although the catalog's preset has one. And none for a
+    // bucket that was not reported at all: buckets are created as they appear.
+    expect(account?.meters.map((meter) => meter.key).sort()).toEqual(['gemini-5h', 'gemini-weekly']);
+    expect(account).toMatchObject({ plan: null, price: null });
     expect(readStatusline(input, NOW)?.absent).toEqual(['3p-weekly']);
     expect(line).toContain('week 94% left');
     expect(line).toContain('5h 50% left');

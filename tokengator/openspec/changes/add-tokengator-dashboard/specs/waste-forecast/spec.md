@@ -162,6 +162,10 @@ The system SHALL order allowance meters by "use first" by default: tier in the o
 ### Requirement: One wording everywhere
 The system SHALL produce the headline and explanation of a meter's state from the same rules in the dashboard, the command line and the MCP server, so that a person and an agent read the same sentence about the same meter.
 
+#### Scenario: In use without a reset time
+- **WHEN** a meter has a reading and no known reset time
+- **THEN** its state reads "Reset time unknown" in every interface, not "Not running", and a rate limit in that position reads as open
+
 #### Scenario: Same sentence in two places
 - **WHEN** the dashboard shows "Use now: 38% left, resets in 14h" for a meter
 - **THEN** the MCP `what_to_use` tool lists it with that headline, and `tokengator status` closes its table with the same headline for the quota to use first

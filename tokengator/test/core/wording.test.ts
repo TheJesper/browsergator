@@ -68,7 +68,7 @@ describe('labels', () => {
       hot: 'Running hot',
       'on-pace': 'On pace',
       fresh: 'New window',
-      idle: 'Not started',
+      idle: 'Not running',
       balance: 'Balance',
       spent: 'Used up',
       expired: 'Expired'
@@ -81,8 +81,35 @@ describe('labels', () => {
     for (const v of viewState(state, NOW)) {
       const text = headline(v, NOW);
       expect(text).toMatch(/^[A-Z][a-z]/);
-      expect(stateLabel(v)).toBe(v.tier !== null ? TIER_LABEL[v.tier] : THROTTLE_LABEL[v.throttle ?? 'idle']);
+      const expected = v.tier === 'idle' && v.needsReset ? 'Reset time unknown' : v.tier !== null ? TIER_LABEL[v.tier] : THROTTLE_LABEL[v.throttle ?? 'idle'];
+      expect(stateLabel(v)).toBe(expected);
     }
+  });
+
+  it('does not call a quota that is in use "not running" because its reset time is missing (review finding)', () => {
+    // A fixed weekly limit with a reading and no reset time: used, and waiting for its date.
+    const fixed = view({ label: 'Weekly limit', reset: { kind: 'interval', hours: 168 }, used: 62 });
+    expect(fixed.tier).toBe('idle');
+    expect(stateLabel(fixed)).toBe('Reset time unknown');
+    expect(headline(fixed, NOW)).toBe('Reset time unknown: 38% left');
+
+    // A weekly limit "from first use" with a reading: the week began some days ago, nobody said when.
+    const rolling = view({ label: 'Weekly limit', reset: { kind: 'rolling', hours: 168 }, used: 62 });
+    expect(rolling.resetsAtMs).toBeNull();
+    expect(rolling.needsReset).toBe(true);
+    expect(stateLabel(rolling)).toBe('Reset time unknown');
+    expect(headline(rolling, NOW)).toBe('Reset time unknown: 38% left');
+
+    // Untouched, the same meter really has not started.
+    const untouched = view({ label: 'Weekly limit', reset: { kind: 'rolling', hours: 168 } });
+    expect(stateLabel(untouched)).toBe('Not running');
+    expect(headline(untouched, NOW)).toBe('Not started: the weekly window opens on first use');
+
+    // A rate limit on a fixed schedule with a reading and no reset time is open, not idle.
+    const throttle = view({ label: 'Weekly, Fable models', role: 'throttle', reset: { kind: 'interval', hours: 168 }, used: 41 });
+    expect(stateLabel(throttle)).toBe('Open');
+    expect(headline(throttle, NOW)).toBe('Open: 41% used');
+    expect(explain(throttle, NOW)).toContain('Its reset time is not known yet.');
   });
 });
 
@@ -601,7 +628,7 @@ describe('one wording everywhere', () => {
   it('gives the brief one section per tier present, in use-first order, and lists snoozed accounts apart', () => {
     const brief = briefMarkdown(zoo(), NOW, 'UTC');
     const headings = brief.split('\n').filter((line) => line.startsWith('## ')).map((line) => line.slice(3));
-    expect(headings).toEqual(['Use now', 'Behind pace', 'Running hot', 'On pace', 'New window', 'Not started', 'Balance', 'Used up', 'Expired']);
+    expect(headings).toEqual(['Use now', 'Behind pace', 'Running hot', 'On pace', 'New window', 'Not running', 'Balance', 'Used up', 'Expired']);
     expect(brief).toContain('Snoozed: Suno.');
     expect(brief).not.toContain('| Suno |');
     expect(brief.startsWith('# AI quota brief\n\n_As of 10:00 UTC (2026-11-19T10:00:00.000Z)_')).toBe(true);

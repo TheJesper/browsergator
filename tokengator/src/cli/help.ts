@@ -172,7 +172,7 @@ export function usage(): string {
       2
     ),
     '',
-    'Environment: TOKENGATOR_HOME, TOKENGATOR_HOST, TOKENGATOR_PORT, TOKENGATOR_TOKEN, TOKENGATOR_LOG.',
+    'Environment: TOKENGATOR_HOME, TOKENGATOR_HOST, TOKENGATOR_PORT, TOKENGATOR_TOKEN, TOKENGATOR_LOG, TOKENGATOR_NOTIFY_URL.',
     ''
   ].join('\n');
 }

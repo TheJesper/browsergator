@@ -7,7 +7,7 @@ import { ledgerTotals, type Money } from '../core/forecast.js';
 import { formatMoney, formatMoneyTotals, formatPercent } from '../core/format.js';
 import { summariseSpend } from '../core/spend.js';
 import { formatAge, formatMoment, toMs } from '../core/time.js';
-import { expiredMoney } from '../core/wording.js';
+import { expiredMoney, lostMoney } from '../core/wording.js';
 import type { ClosedCycle } from '../core/types.js';
 import { cycleColumns, dailyBars } from './charts.js';
 import type { Ctx } from './ctx.js';
@@ -147,7 +147,6 @@ export function historyView(ctx: Ctx): HTMLElement {
     return lostB - lostA;
   });
 
-  const approx = totals30.lostIsEstimate ? '~' : '';
   return h(
     'div',
     null,
@@ -164,8 +163,9 @@ export function historyView(ctx: Ctx): HTMLElement {
       h(
         'dl',
         { class: 'stats' },
-        h('div', { class: 'stat risk' }, h('dt', { class: 'label' }, 'Last 30 days'), h('dd', null, `${approx}${formatMoneyTotals(totals30.lost30, currency, formatMoney(0, currency))}`, creditNote(totals30.creditsLost30, currency))),
-        h('div', { class: 'stat' }, h('dt', { class: 'label' }, 'Last 90 days'), h('dd', null, formatMoneyTotals(totals90.lost30, currency, formatMoney(0, currency)), creditNote(totals90.creditsLost30, currency))),
+        // Both totals say when part of them is an estimate: the longer one contains the shorter.
+        h('div', { class: 'stat risk' }, h('dt', { class: 'label' }, 'Last 30 days'), h('dd', null, lostMoney(totals30.lost30, currency, totals30.lostIsEstimate), creditNote(totals30.creditsLost30, currency))),
+        h('div', { class: 'stat' }, h('dt', { class: 'label' }, 'Last 90 days'), h('dd', null, lostMoney(totals90.lost30, currency, totals90.lostIsEstimate), creditNote(totals90.creditsLost30, currency))),
         h(
           'div',
           { class: 'stat' },

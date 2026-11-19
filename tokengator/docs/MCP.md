@@ -467,7 +467,7 @@ answers `"removed": true`.
 ```text
 As of 12:00 UTC (2026-11-19T12:00:00.000Z).
 Ran 2 collectors.
-- claude-statusline (Claude Code status line): ok, updated 2 meters: claude-max:weekly, claude-max:session.
+- codex-sessions (Codex session logs): ok, updated 2 meters: chatgpt-plus:weekly, chatgpt-plus:session.
 - elevenlabs (ElevenLabs API): the credential was rejected. ELEVENLABS_API_KEY was rejected.
 ```
 
@@ -476,7 +476,7 @@ Ran 2 collectors.
   "available": true,
   "ran": 2,
   "collectors": [
-    { "id": "claude-statusline", "ran": true, "outcome": "ok", "updatedMeters": ["claude-max:weekly", "claude-max:session"] },
+    { "id": "codex-sessions", "ran": true, "outcome": "ok", "updatedMeters": ["chatgpt-plus:weekly", "chatgpt-plus:session"] },
     { "id": "elevenlabs", "ran": true, "outcome": "auth", "message": "ELEVENLABS_API_KEY was rejected.", "updatedMeters": [] }
   ]
 }

@@ -127,11 +127,15 @@ The system SHALL take a later reset time that comes on its own, or with the same
 - **THEN** the meter holds 70% in the same window and no finished window is recorded
 
 ### Requirement: Rolling windows start on first use
-A reading on an idle rolling meter SHALL start a window ending at the reading's reset time, or one window length after the reading when no reset time is given.
+A reading on an idle rolling meter SHALL start a window ending at the reading's reset time. When no reset time is given, a window of 24 hours or less SHALL start at the reading and end one window length later, and a longer window SHALL stay without a reset time until one is reported, shown as "reset time unknown".
 
 #### Scenario: First use of a rolling window
 - **WHEN** an idle rolling 5-hour meter receives a reading of 10% used with no reset time
 - **THEN** a window starts at the time of the reading and ends 5 hours later
+
+#### Scenario: A weekly window from first use, read without a reset
+- **WHEN** an idle rolling 7-day meter receives a reading of 62% used with no reset time
+- **THEN** the usage is stored, no reset time is invented, the meter reads "Reset time unknown: 38% left", and no finished window is ever recorded from that reading alone
 
 ### Requirement: One-off expiries and balances
 The system SHALL treat a new expiry on a one-off meter as an extension or a shortening and SHALL NOT close a window for it. A balance without a clock that is given an expiry SHALL become a one-off expiry from then on. A balance SHALL NOT record a finished window.
@@ -183,6 +187,10 @@ The system SHALL ship a catalog of provider presets with their common plans, eac
 #### Scenario: Add from a preset
 - **WHEN** a user adds the catalog's GitHub Copilot Pro plan
 - **THEN** an account is created with a monthly allowance meter (AI credits) that resets on the first day of each month at 00:00 UTC and the plan's list price
+
+#### Scenario: A provider with no confirmed usage page
+- **WHEN** the catalog knows only a provider's pricing page
+- **THEN** the page is shown as a plan page, never as a usage page, and an account made from the preset has no usage link
 
 #### Scenario: Presets are a starting point
 - **WHEN** a user edits the limit, price or reset rule of an account created from a preset

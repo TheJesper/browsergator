@@ -32,6 +32,9 @@ and prints a line such as:
 5h 36% left 2h 9m · week 38% left 14h 11m (use now, $7.39 at risk)
 ```
 
+(The money is there because this account is on Claude Max at $100 a month. The status line does
+not say which plan you have, so an account it creates has none until you set it.)
+
 Set it up in `~/.claude/settings.json`:
 
 ```json
@@ -77,6 +80,13 @@ quota), so the catalog marks those meters as carrying over and they are never co
 ### OpenRouter (`openrouter`)
 
 Reads `data.total_credits` and `data.total_usage`. A balance, not a window: it has no reset.
+OpenRouter may expire unused credits a year after purchase; if yours carry a date, set it on the
+meter and it is tracked like any other expiry.
+
+The credits endpoint needs a **management key**. An ordinary inference key, which is what
+`OPENROUTER_API_KEY` usually holds, is refused, and the collector says so. A management key can
+create and delete keys, so decide whether you want one in an environment file before using this
+collector; entering the balance by hand works without it.
 
 ### OpenAI and Claude API costs (`openai-costs`, `anthropic-costs`)
 
@@ -106,8 +116,13 @@ so the meter stays correct by the calendar even when this source fails.
   (`tokengator collectors run`, the dashboard's "Run now", the MCP tool `refresh_usage`).
 - Each run has a time limit. A collector that fails or hangs does not hold up the others.
 - After a failure the wait before the next attempt doubles, up to one hour; a success resets it.
-- On its first success a collector creates the account from the provider's catalog preset. Meters
-  it does not report are left alone.
+- On its first success a source creates the account if there is none. When the source says which
+  plan it is (Codex logs and the ElevenLabs and Copilot APIs do), the account is the catalog's preset
+  for that plan, price included. When it does not (the status lines do not), the account gets the
+  provider's name, the meters that were reported and **no plan and no price**, with a note saying so:
+  nothing on it is valued in money until you edit the subscription and set them. Adding the
+  subscription from the catalog first avoids that step.
+- Meters a source does not report are left alone.
 - When a window closes without a single reading from an automatic source, the ledger records that
   window as unused and marks it estimated: for a source that reports by itself, silence means the
   quota sat idle. Hand-kept meters are never assumed to be unused.

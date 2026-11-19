@@ -581,7 +581,9 @@ describe('reading tools', () => {
           vendor: 'Fake Labs',
           category: 'other',
           usageUrl: 'https://fake.example/usage',
+          planUrl: null,
           collectors: ['fake-source'],
+          statusLine: false,
           plans: [{ id: 'pro', name: 'Pro', price: usd(20) }]
         }
       ]
@@ -1329,7 +1331,7 @@ describe('docs/MCP.md', () => {
     async (tool, _outcome, example) => {
       catalog.providers.push(catalog.elevenlabs);
       const collectors = fakeCollectors([
-        { id: 'claude-statusline', providerId: 'claude', title: 'Claude Code status line', sourceKind: 'push', lastRunAt: iso(NOW), lastOutcome: 'ok', lastUpdated: ['claude-max:weekly', 'claude-max:session'] },
+        { id: 'codex-sessions', providerId: 'codex', title: 'Codex session logs', sourceKind: 'local-file', lastRunAt: iso(NOW), lastOutcome: 'ok', lastUpdated: ['chatgpt-plus:weekly', 'chatgpt-plus:session'] },
         { id: 'elevenlabs', providerId: 'elevenlabs', title: 'ElevenLabs API', lastRunAt: iso(NOW), lastOutcome: 'auth', lastMessage: 'ELEVENLABS_API_KEY was rejected.' }
       ]);
       const harness = await connect({ clientName: 'claude-code', collectors });

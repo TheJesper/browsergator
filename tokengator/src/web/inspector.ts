@@ -126,7 +126,8 @@ export function inspector(ctx: Ctx, view: MeterView): HTMLElement {
   if (view.resetsAtMs !== null && view.msLeft !== null && view.msLeft > 0) {
     facts.push(...fact('Resets', resetText(view.resetsAtMs, now, { times: 'countdown' }), formatMoment(view.resetsAtMs, now)));
   } else facts.push(...fact('Resets', view.needsReset ? 'not set' : 'no window', windowText(view)));
-  if (view.tier !== null && view.projectedFraction !== null) {
+  // Not for a window that has only just started: the sentence above says there is no forecast yet.
+  if (view.tier !== null && view.tier !== 'fresh' && view.projectedFraction !== null) {
     facts.push(...fact('Forecast at reset', `${formatPercent(view.projectedFraction)} used`, `${formatPercent(view.projectedUnused)} expires`));
   }
   if (view.requiredMultiple !== null && view.requiredMultiple > 1.05) {

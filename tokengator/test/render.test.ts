@@ -236,14 +236,14 @@ describe('renderStatus', () => {
     expect(plain).not.toContain('Midjourney');
     expect(plain).not.toContain('5-hour session');
     expect(plain).not.toContain('Old plan');
-    expect(plain).toContain('3 more are not shown (not started, used up, rate limits). Show everything: tokengator status --all');
+    expect(plain).toContain('3 more are not shown (not running, used up, rate limits). Show everything: tokengator status --all');
   });
 
   it('shows everything with all, rate limits included', () => {
     const everything = renderStatus(state, NOW, { all: true });
     expect(rowsOf(everything)).toHaveLength(7);
     expect(everything).toContain('Used up (1)');
-    expect(everything).toContain('Not started (1)');
+    expect(everything).toContain('Not running (1)');
     expect(everything).toContain('Rate limits (1)');
     expect(rowsOf(everything).find((row) => row.includes('5-hour session'))?.trimStart().startsWith('Idle')).toBe(true);
     expect(everything).not.toContain('not shown');
@@ -340,7 +340,7 @@ describe('renderStatus', () => {
     const quiet = build([{ input: { label: 'Old plan', meters: [{ label: 'Tokens', reset: { kind: 'interval', hours: 168 } }] } }]);
     const text = renderStatus(quiet, NOW);
     expect(rowsOf(text)).toHaveLength(0);
-    expect(text).toContain('Nothing is in an active window (1 meter: not started). Show everything: tokengator status --all');
+    expect(text).toContain('Nothing is in an active window (1 meter: not running). Show everything: tokengator status --all');
     expect(text.trimEnd().split('\n').pop()).toBe(summaryLine(summarise(quiet, NOW), 'USD'));
   });
 });
@@ -414,11 +414,19 @@ describe('other listings', () => {
       '  Scheduled runs: Draws on the same credits.',
       '    https://example.com/docs/schedule',
       '',
-      'Can be read automatically: tokengator collectors list (example-api)',
+      'Can be read automatically: tokengator collectors enable example-api',
       '',
       'Add it: tokengator add example [--plan <plan>] [--label <name>] [--billing-day <1-31>]',
       ''
     ]);
+  });
+
+  it('says how a status line fills a provider, apart from collectors that can be switched on (review finding)', () => {
+    const text = renderProvider({ ...preset, collectors: ['example-statusline', 'example-api'] });
+    expect(text).toContain('Fills itself once its status line command is set: tokengator connect --client statusline');
+    expect(text).toContain('Can be read automatically: tokengator collectors enable example-api');
+    // The id of a status line is never offered to a command that would refuse it.
+    expect(text).not.toContain('example-statusline');
   });
 
   it('lists providers by category with their plan ids and prices', () => {

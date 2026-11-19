@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { addAccount } from '../src/core/accounts.js';
 import { CATALOG, CATALOG_CHECKED } from '../src/core/catalog.js';
-import { findPlan, findProvider, monogramFor, planNeedsBillingDay, presetAccountInput } from '../src/core/catalog-types.js';
+import { automaticSources, findPlan, findProvider, monogramFor, planNeedsBillingDay, presetAccountInput } from '../src/core/catalog-types.js';
 import { demoState } from '../src/core/demo.js';
 import { summarise, viewState } from '../src/core/forecast.js';
 import { emptyState } from '../src/core/types.js';
@@ -25,6 +25,25 @@ describe('provider catalog', () => {
       expect(provider.plans.length, provider.id).toBeGreaterThan(0);
       expect(new Set(provider.plans.map((plan) => plan.id)).size, provider.id).toBe(provider.plans.length);
     }
+  });
+
+  it('never passes a pricing page off as a usage page (review finding)', () => {
+    const planPages = CATALOG.filter((provider) => provider.planPage);
+    expect(planPages.map((provider) => provider.id).sort()).toEqual(['antigravity', 'ideogram', 'kiro', 'pika', 'udio']);
+    for (const provider of CATALOG) {
+      // An address that names itself a pricing or plans page is marked as one.
+      if (/\/(pricing|plans)\/?$/.test(provider.usageUrl)) expect(provider.planPage, provider.id).toBe(true);
+      const account = presetAccountInput(provider, provider.plans[0] as (typeof provider.plans)[number]);
+      // An account made from it has a usage link only when the catalog knows a real one.
+      expect(account.usageUrl, provider.id).toBe(provider.planPage ? null : provider.usageUrl);
+    }
+  });
+
+  it('keeps status lines apart from collectors that can be run', () => {
+    const claude = CATALOG.find((provider) => provider.id === 'claude') as (typeof CATALOG)[number];
+    expect(automaticSources(claude)).toEqual({ statusLine: true, collectors: [] });
+    const codex = CATALOG.find((provider) => provider.id === 'codex') as (typeof CATALOG)[number];
+    expect(automaticSources(codex)).toEqual({ statusLine: false, collectors: ['codex-sessions'] });
   });
 
   it('links every documented way to use quota to an https page and says what it is in one sentence', () => {

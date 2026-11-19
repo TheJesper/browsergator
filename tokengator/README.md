@@ -15,8 +15,9 @@ Tokengator keeps every one of those clocks on one screen and answers a single qu
 
 ![The queue, most urgent first, with the inspector open](docs/img/queue-dark.png)
 
-It runs on your machine, on Windows, macOS and Linux. No account, no telemetry, nothing leaves
-loopback unless you switch on a collector that calls a provider's API with your own key.
+It runs on your machine, on Windows, macOS and Linux. No account, no telemetry. Nothing leaves
+loopback unless you ask for it: by switching on a collector that calls a provider's API with your own
+key, or by giving reminders an address of yours to post to.
 
 ## Quick start
 
@@ -50,18 +51,20 @@ left before anything is saved.
 Every quota is drawn the same way:
 
 ```
-used ████████████▓▓▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒ expires
+used ████████████▭▭▭▭▭▭▒▒▒▒▒▒▒▒▒▒▒▒ expires
                          │ even pace
 ```
 
-Solid blue is what you have used, dim blue is what you will use at your current pace, hatched
-orange is what will expire unused, and the tick is where an even pace would be right now.
+Solid blue is what you have used. The blue outline is what you will use at your current pace:
+an empty box, because it has not happened yet. Hatched orange is what will expire unused, and the
+tick is where an even pace would be right now. Quotas to use now sit on a warm band with their
+countdown as the largest figure, so the eye lands on what is urgent rather than on what is big.
 
 Each quota gets one state:
 
 | State | Meaning |
 | --- | --- |
-| **Use now** | Resets soon with at least 10% left. Use it or it is gone. |
+| **Use now** | Resets soon, at least 10% is left, and at your pace at least 5% of it would expire. Use it or it is gone. |
 | **Behind pace** | At the current pace 15% or more will expire. |
 | **Running hot** | It will run out well before the reset. Ration it. |
 | **On pace** | On track to be used up around the reset. |
@@ -78,6 +81,8 @@ Six views over the same data, switched with the number keys:
 6. **History**: what actually expired in each finished window, and what it was worth.
 
 ![Every reset on one time axis](docs/img/timeline-light.png)
+
+![The board: one card per subscription](docs/img/board-dark.png)
 
 Everything has a copy button: a status line, Markdown, JSON, or a prompt that hands the decision to
 an agent. **C** copies a brief of the whole picture.
@@ -115,7 +120,7 @@ nothing repeats. Details, privacy and how to start the service at sign-in:
 | Antigravity | status line command, the same way | none |
 | Codex | reads the rate-limit snapshot Codex writes to `~/.codex/sessions` | none |
 | ElevenLabs | documented subscription API | `ELEVENLABS_API_KEY` |
-| OpenRouter | documented credits API | `OPENROUTER_API_KEY` |
+| OpenRouter | documented credits API | `OPENROUTER_API_KEY` (a management key; an inference key is refused) |
 | OpenAI API costs | documented costs API | `OPENAI_ADMIN_KEY` |
 | Claude API costs | documented cost report API | `ANTHROPIC_ADMIN_KEY` |
 | GitHub Copilot | undocumented editor endpoint | `TOKENGATOR_GITHUB_TOKEN` |
@@ -134,7 +139,8 @@ Claude Code status line, in `~/.claude/settings.json` (the Antigravity CLI takes
 ```
 
 It prints the session and weekly limits and, when another subscription needs using, names it:
-`5h 36% left 1h 57m · week 30% left 13h (use now, $6.90 at risk) · use now: Suno Pro 64% left 2d 2h`.
+`5h 36% left 1h 57m · week 30% left 13h (use now, $5.53 at risk) · use now: Suno Pro 64% left 2d 2h`.
+Until you have told Tokengator which plan the account is on, the line carries no money.
 Already have a status line? Keep it: `tokengator statusline -- bash ~/.claude/statusline.sh` runs
 yours with the same input and prints its line with Tokengator's after it. If yours fails or takes
 longer than five seconds, the line says so (`[bash: timed out]`) instead of losing it silently.

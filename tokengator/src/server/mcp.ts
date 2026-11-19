@@ -37,7 +37,7 @@ import {
 } from '../core/accounts.js';
 import { costsMarkdown, meterMarkdown, meterRecord, queueText, snapshot, stamp, type MeterRecord } from '../core/brief.js';
 import { CATALOG, CATALOG_CHECKED } from '../core/catalog.js';
-import { findProvider, type PresetMeter, type ProviderPreset } from '../core/catalog-types.js';
+import { automaticSources, findProvider, type PresetMeter, type ProviderPreset } from '../core/catalog-types.js';
 import { cyclesOf, ledgerTotals, viewAccount, type MeterView, type Money } from '../core/forecast.js';
 import { formatAmount, formatMoney, formatMoneyTotals, formatPercent } from '../core/format.js';
 import { addSpendSource, recordSpend, summariseSpend } from '../core/spend.js';
@@ -401,8 +401,10 @@ const listCatalogOutput = z.looseObject({
       id: text,
       name: text,
       category: text,
-      usageUrl: text,
-      collectors: z.array(text),
+      usageUrl: text.nullable().describe("Where a signed-in person reads the account's usage. null when no such page was confirmed."),
+      planUrl: text.nullable().describe("The provider's plan or pricing page, given instead when there is no confirmed usage page. It shows plan limits, not the account's usage."),
+      collectors: z.array(text).describe('Ids that refresh_usage and the collector commands accept.'),
+      statusLine: z.boolean().describe("True when the provider's own tool can push readings through its status line command. That is set up once by the person and cannot be run on request."),
       plans: z.array(z.looseObject({ id: text, name: text, price: priceOut }))
     })
   )
@@ -571,8 +573,12 @@ function presetCompact(provider: ProviderPreset): Record<string, unknown> {
     name: provider.name,
     vendor: provider.vendor,
     category: provider.category,
-    usageUrl: provider.usageUrl,
-    collectors: provider.collectors,
+    // A plan page is not offered as the place to read usage.
+    usageUrl: provider.planPage ? null : provider.usageUrl,
+    planUrl: provider.planPage ? provider.usageUrl : null,
+    // Only ids the collector tools accept. A status line is reported apart: it cannot be run on request.
+    collectors: automaticSources(provider).collectors,
+    statusLine: automaticSources(provider).statusLine,
     plans: provider.plans.map((plan) => ({ id: plan.id, name: plan.name, price: plan.price }))
   };
 }
@@ -995,8 +1001,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
           }
           const lines = [
             `${preset.name} (id: ${preset.id}, ${preset.vendor}, ${preset.category}). Catalog checked ${CATALOG_CHECKED}; limits and prices drift, so trust the usage page over the preset.`,
-            `Usage page: ${preset.usageUrl}`,
-            `What to read there: ${preset.howToRead}`,
+            preset.planPage ? `Plan page: ${preset.usageUrl} (it lists plan limits; no page showing the account's own usage was confirmed)` : `Usage page: ${preset.usageUrl}`,
+            `${preset.planPage ? 'Where the numbers are' : 'What to read there'}: ${preset.howToRead}`,
             'Plans:'
           ];
           for (const plan of preset.plans) {
@@ -1006,7 +1012,9 @@ export function createMcpServer(deps: McpDeps): McpServer {
               lines.push(`  - ${meter.label} [${meter.key}]: ${meter.role}, ${size}, ${resetText(meter.reset, meter.anchor)}`);
             }
           }
-          if (preset.collectors.length > 0) lines.push(`Collectors that can fill it automatically: ${preset.collectors.join(', ')}.`);
+          const sources = automaticSources(preset);
+          if (sources.statusLine) lines.push('Fills itself once its status line command is set up (the Connect panel and `tokengator connect` print it). It is not a collector: refresh_usage cannot run it.');
+          if (sources.collectors.length > 0) lines.push(`Collectors that can fill it automatically: ${sources.collectors.join(', ')}.`);
           if (preset.uses && preset.uses.length > 0) {
             lines.push("Ways the provider documents for using the quota unattended (suggest them; do not start one unasked):");
             for (const use of preset.uses) lines.push(`- ${use.title}: ${use.note} ${use.url}`);
@@ -1021,7 +1029,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
                 `Provider presets, checked ${CATALOG_CHECKED}. Call list_catalog with a provider id for its plans, its meters and what to read on its usage page.`,
                 ...CATALOG.map(
                   (entry) =>
-                    `- ${entry.id}: ${entry.name} (${entry.category}); plans ${entry.plans.map((plan) => plan.id).join(', ')}; usage page ${entry.usageUrl}`
+                    `- ${entry.id}: ${entry.name} (${entry.category}); plans ${entry.plans.map((plan) => plan.id).join(', ')}; ${entry.planPage ? 'plan page' : 'usage page'} ${entry.usageUrl}`
                 )
               ];
         lines.push(custom);

@@ -724,6 +724,24 @@ describe('applyReading', () => {
       expect(started).toMatchObject({ used: 10, windowStartedAt: iso(NOW), resetsAt: iso(NOW + 5 * HOUR) });
     });
 
+    it('does not invent a reset date for a long window "from first use" (review finding)', () => {
+      // "38% left" on a weekly limit says the week began days ago. Starting one now would put a date on
+      // every screen that nobody reported, and book a finished window when that date passed.
+      for (const hours of [168, 720, 48]) {
+        const { meter } = one({ label: 'Weekly limit', reset: { kind: 'rolling', hours } });
+        const { meter: read, closed } = applyReading(meter, { usedPercent: 62 }, NOW);
+        expect(closed, `${hours}h`).toBeNull();
+        expect(read, `${hours}h`).toMatchObject({ used: 62, resetsAt: null, windowStartedAt: null, estimated: false });
+        // The reported reset is what starts it, and the window is placed behind it.
+        const { meter: timed } = applyReading(read, { usedPercent: 62, resetsAt: iso(NOW + 30 * HOUR) }, NOW);
+        expect(timed.resetsAt).toBe(iso(NOW + 30 * HOUR));
+        expect(timed.windowStartedAt).toBe(iso(NOW + 30 * HOUR - hours * HOUR));
+      }
+      // A day is still a session: it starts with the reading.
+      const { meter: day } = one({ label: 'Daily', reset: { kind: 'rolling', hours: 24 } });
+      expect(applyReading(day, { usedPercent: 10 }, NOW).meter.resetsAt).toBe(iso(NOW + 24 * HOUR));
+    });
+
     it('ends a rolling window at the reading\'s own reset time when it has one', () => {
       const { meter } = one({ label: 'Session', role: 'throttle', reset: { kind: 'rolling', hours: 5 } });
       const { meter: started } = applyReading(meter, { usedPercent: 10, resetsAt: iso(NOW + 3 * HOUR) }, NOW);

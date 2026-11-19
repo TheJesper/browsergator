@@ -286,6 +286,8 @@ export async function set(args: readonly string[], io: Io): Promise<number> {
     const view = viewAccount(result.account, nowMs).find((candidate) => candidate.id === result.meter.id) ?? viewMeter(result.account, result.meter, nowMs);
     say(io, result.preview);
     say(io, headline(view, nowMs));
+    // Without a reset time there is no forecast, and only the provider's page knows it.
+    if (view.needsReset) say(io, `Add when it resets for a forecast: ${PROGRAM} set ${result.meter.id} ${view.meter.unit === 'percent' ? `${Math.round(view.usedFraction * 100)}%` : String(view.used)} resets <when>`);
     return 0;
   });
 }

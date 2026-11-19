@@ -49,6 +49,11 @@ Meters come back most urgent first. Each has a state:
 - **Running hot**: it will run out *before* its reset. Go easy; prefer something else.
 - **On pace**, **New window**: nothing to do.
 - **Used up**: fully used until the reset. Use something else. This is the good outcome, not a problem.
+- **Reset time unknown**: it is in use, but nobody has said when it resets, so there is no forecast.
+  If you can see the usage page, report the number together with its reset time.
+- **Not running**: no window is open; one starts with the next use. Nothing to do.
+- **Balance**: prepaid credit with no reset. Nothing expires, so it never needs using up.
+- **Expired**: past its expiry. What was left is in the history.
 - `blockedBy`: a session limit is closed. The quota cannot be used until `blockedUntil`.
 - `stale: true`: the reading is old. Refresh it before relying on it (see below).
 
