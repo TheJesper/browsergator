@@ -219,15 +219,18 @@ export class TokengatorService {
     });
   }
 
-  /** Parses a quick-entry line without saving anything. */
-  async previewQuick(text: string): Promise<ReturnType<typeof parseQuick>> {
-    return parseQuick(text, await this.state(), this.now(), this.timeZone);
+  /**
+   * Parses a quick-entry line without saving anything. `timeZone` is the zone of whoever typed the line,
+   * when that is not this machine's: "fri 09:00" means nine o'clock where they are.
+   */
+  async previewQuick(text: string, timeZone: string = this.timeZone): Promise<ReturnType<typeof parseQuick>> {
+    return parseQuick(text, await this.state(), this.now(), timeZone);
   }
 
   /** Parses and applies a quick-entry line. */
-  quick(text: string, source: MeterSource = { kind: 'manual' }): Promise<ReportOutcome & { preview: string }> {
+  quick(text: string, source: MeterSource = { kind: 'manual' }, timeZone: string = this.timeZone): Promise<ReportOutcome & { preview: string }> {
     return this.mutate((state, nowMs) => {
-      const parsed = parseQuick(text, state, nowMs, this.timeZone);
+      const parsed = parseQuick(text, state, nowMs, timeZone);
       if (!parsed.ok) throw quickError(parsed);
       const next = applyReadingToState(state, parsed.account.id, parsed.meter.id, { ...parsed.reading, source }, nowMs);
       return { state: next, result: { ...findMeter(next, parsed.meter.id), preview: parsed.preview } };

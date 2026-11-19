@@ -104,6 +104,15 @@ async function narrow(browser) {
     await page.waitForSelector('.insp');
     const box = await page.locator('.insp').boundingBox();
     check(`${theme} 400px: details fit the screen`, box !== null && box.x >= 0 && box.x + box.width <= 400.5, JSON.stringify(box));
+    // An overlay as tall as its content cannot be scrolled: everything below the fold would be out of reach.
+    const reach = await page.evaluate(() => {
+      const insp = document.querySelector('.insp');
+      const last = [...insp.querySelectorAll('.insp-sec')].at(-1);
+      last.scrollIntoView();
+      const rect = last.getBoundingClientRect();
+      return { bottom: insp.getBoundingClientRect().bottom, scrolls: insp.scrollHeight > insp.clientHeight, lastTop: rect.top, viewport: innerHeight };
+    });
+    check(`${theme} 400px: details end at the screen edge and scroll to their last section`, reach.bottom <= reach.viewport + 0.5 && reach.scrolls && reach.lastTop < reach.viewport, JSON.stringify(reach));
     await page.keyboard.press('Escape');
     await page.keyboard.press('u');
     await page.waitForSelector('dialog[open]');
@@ -435,6 +444,156 @@ async function motion(browser) {
   await context.close();
 }
 
+// What the independent review found in the dashboard's logic, each pinned by a check.
+async function reviewed(browser) {
+  console.log('\nReview findings');
+  const { context, page, errors } = await open(browser);
+  const rows = () => page.evaluate(() => [...document.querySelectorAll('#main [data-nav="row"]')].map((row) => row.dataset.id));
+  const active = () => page.evaluate(() => {
+    const el = document.activeElement;
+    return el ? `${el.tagName}${el.id ? `#${el.id}` : ''}:${(el.getAttribute('title') ?? el.textContent ?? '').trim().slice(0, 40)}` : 'none';
+  });
+
+  // The Timeline follows the chosen order like every other view.
+  await page.click('#sort-button');
+  await menuItem(page, 'Most value at risk').click();
+  check('choosing an order from the menu leaves focus on the Sort button', (await active()).startsWith('BUTTON#sort-button'), await active());
+  const queueOrder = await rows();
+  await page.keyboard.press('3');
+  await page.waitForSelector('.tl-grid');
+  // Rows inside the horizon come first and later ones after; within each group the chosen order holds.
+  const onAxis = await page.evaluate(() => [...document.querySelectorAll('.tl-grid [data-nav="row"]')].map((row) => row.dataset.id));
+  const expected = queueOrder.filter((id) => onAxis.includes(id));
+  const chronological = await page.evaluate(() => [...document.querySelectorAll('.tl-grid [data-nav="row"]')].length);
+  check('the Timeline lists rows in the chosen order', onAxis.length > 2 && chronological > 2 && JSON.stringify(onAxis) === JSON.stringify(expected), `${onAxis.join(',')} vs ${expected.join(',')}`);
+  await page.click('#sort-button');
+  await menuItem(page, 'Use first').click();
+  await page.keyboard.press('1');
+
+  // Focus survives a redraw.
+  await page.locator('.tabs .tab', { hasText: 'Board' }).focus();
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.cards');
+  check('activating a view tab keeps focus on it', /^BUTTON:Board/.test(await active()), await active());
+  await page.locator('.tabs .tab', { hasText: 'Queue' }).focus();
+  await page.keyboard.press('Enter');
+  const chip = page.locator('.chips .chip-btn', { hasText: 'Coding' });
+  await chip.focus();
+  await page.keyboard.press('Enter');
+  check('activating a category keeps focus on it', /^BUTTON:Coding/.test(await active()), await active());
+  await page.locator('.chips .chip-btn', { hasText: 'All' }).click();
+
+  // An open menu owns the keyboard, and what changed under it is drawn when it closes.
+  await page.click('#sort-button');
+  await page.keyboard.press('2');
+  await page.keyboard.press('Escape');
+  check('a view key pressed over an open menu changes nothing', (await page.$('.cards')) === null && !/board/.test(await page.evaluate(() => location.hash)));
+
+  // The details pane keeps its place when the page is redrawn.
+  await page.setViewportSize({ width: 1280, height: 600 });
+  await page.locator('.row .row-name').first().click();
+  await page.waitForSelector('.insp');
+  await page.evaluate(() => { document.querySelector('.insp').scrollTop = 400; });
+  await page.keyboard.press('t'); // a preference change redraws everything
+  await page.waitForTimeout(150);
+  const kept = await page.evaluate(() => document.querySelector('.insp').scrollTop);
+  check('a redraw keeps the details pane scrolled where it was', kept >= 380, `scrollTop ${kept}`);
+  await page.keyboard.press('t');
+  await page.locator('.insp .insp-close, .insp [aria-label="Close details"]').first().evaluate((el) => el.focus());
+  await page.keyboard.press('Escape');
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  // Changing a window's length keeps the reset time shown in the form.
+  const claude = page.locator('.row', { hasText: 'Claude Max' }).first();
+  await claude.locator('[aria-label^="More actions"]').click();
+  await menuItem(page, 'Edit subscription').click();
+  await page.waitForSelector('dialog[open]');
+  const length = page.locator('dialog[open] input[id$="-every"]').first();
+  const shownReset = await page.locator('dialog[open] input[id$="-resets"]').first().inputValue();
+  await length.fill('5');
+  await page.locator('dialog[open] .btn.primary').click();
+  await dialogGone(page);
+  const weeklyRow = await page.locator('.row', { hasText: 'Claude Max' }).first().innerText();
+  check('changing a window length keeps its reset time', shownReset !== '' && !/set the reset time/i.test(weeklyRow), weeklyRow.replace(/\s+/g, ' ').slice(0, 140));
+
+  // A Save that was refused part-way does not repeat what it already did.
+  const gpt = page.locator('.row', { hasText: 'ChatGPT Plus' }).first();
+  await gpt.locator('[aria-label^="More actions"]').click();
+  await menuItem(page, 'Edit subscription').click();
+  await page.waitForSelector('dialog[open]');
+  const addMeter = page.locator('dialog[open] button', { hasText: 'Add a meter' });
+  await addMeter.click();
+  await page.locator('dialog[open] fieldset.meter-form').last().locator('input[id$="-label"]').fill('Extra A');
+  await addMeter.click();
+  const second = page.locator('dialog[open] fieldset.meter-form').last();
+  await second.locator('input[id$="-label"]').fill('Extra B');
+  await second.locator('select[id$="-unit"]').selectOption('credits');
+  await page.locator('dialog[open] .btn.primary').click();
+  await page.waitForTimeout(200);
+  check('a meter without a limit is refused before anything is sent', (await page.$('dialog[open]')) !== null && /limit/i.test(await page.locator('dialog[open] .err').innerText()));
+  await second.locator('input[id$="-limit"]').fill('500');
+  await page.locator('dialog[open] .btn.primary').click();
+  await dialogGone(page);
+  await page.keyboard.press('2');
+  await page.waitForSelector('.cards');
+  const card = await page.locator('.card', { hasText: 'ChatGPT Plus' }).first().innerText();
+  check('saving again adds each new meter once', (card.match(/Extra A/g) ?? []).length === 1 && (card.match(/Extra B/g) ?? []).length === 1, card.replace(/\s+/g, ' ').slice(0, 200));
+  await page.keyboard.press('1');
+
+  // The copied line always says how much is left.
+  const behind = page.locator('.row', { hasText: 'Monthly API credits' }).first();
+  if ((await behind.count()) > 0) {
+    await behind.locator('[aria-label^="Copy "]').click();
+    await menuItem(page, 'Copy status line').click();
+    await page.waitForTimeout(120);
+    const line = await clipboard(page);
+    check('a behind-pace status line says what is left', /Behind pace: .+ left, about \d+% will expire, resets in/.test(line), line);
+  } else check('a behind-pace status line says what is left', false, 'the sample has no behind-pace row');
+
+  // With names hidden, no account name is readable anywhere on the page or in a menu.
+  await page.click('[aria-label="Menu"]');
+  await menuItem(page, 'Hide names').click();
+  const labels = await page.evaluate(() => [...new Set([...document.querySelectorAll('.row-name .a > span:first-child')].map((el) => el.textContent.trim()))].filter(Boolean));
+  const leaks = async () =>
+    page.evaluate((names) => {
+      const out = [];
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const text = node.textContent ?? '';
+        if (!names.some((name) => text.includes(name) || text.includes(name.toLowerCase().replace(/\s+/g, '-')))) continue;
+        let hidden = false;
+        for (let el = node.parentElement; el; el = el.parentElement) {
+          if (getComputedStyle(el).filter.includes('blur') || el.tagName === 'SCRIPT' || el.tagName === 'STYLE') hidden = true;
+        }
+        if (!hidden) out.push(text.trim().slice(0, 60));
+      }
+      return out;
+    }, labels);
+  check('hiding names leaves none readable on the page', labels.length > 3 && (await leaks()).length === 0, (await leaks()).join(' | '));
+  await page.locator('.row .row-name').first().click();
+  await page.waitForSelector('.insp');
+  check('hiding names covers the details pane', (await leaks()).length === 0, (await leaks()).join(' | '));
+  await page.keyboard.press('Escape');
+  await page.locator('.row').first().hover();
+  await page.locator('.row [aria-label^="More actions"]').first().click();
+  await page.waitForSelector('.menu');
+  check('hiding names covers the menus', /Delete this subscription/.test(await page.locator('.menu').innerText()) && (await leaks()).length === 0, (await leaks()).join(' | '));
+  await page.keyboard.press('Escape');
+
+  // A category nothing belongs to any more does not hide every quota.
+  await page.evaluate(() => {
+    const prefs = JSON.parse(localStorage.getItem('tokengator.prefs.v1') ?? '{}');
+    localStorage.setItem('tokengator.prefs.v1', JSON.stringify({ ...prefs, category: 'other', privacy: false, view: 'queue' }));
+  });
+  await page.reload();
+  await page.waitForSelector('#main');
+  await page.waitForTimeout(300);
+  check('a category that is no longer in use stops filtering', (await page.locator('.row').count()) > 3, await mainText(page).then((text) => text.slice(0, 80)));
+
+  check('no script errors', errors.length === 0, errors.join(' | '));
+  await context.close();
+}
+
 (async () => {
   const browser = await chromium.launch();
   try {
@@ -447,6 +606,7 @@ async function motion(browser) {
     await reminders(browser);
     await keyboard(browser);
     await motion(browser);
+    await reviewed(browser);
   } catch (error) {
     failures += 1;
     console.error(`\nui-check: stopped early: ${error instanceof Error ? error.stack : String(error)}`);

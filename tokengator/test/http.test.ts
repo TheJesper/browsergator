@@ -795,6 +795,26 @@ describe('HTTP API', () => {
     expect((await readState(harness)).state.accounts).toEqual([]);
   });
 
+  it('reads a clock time in the zone of whoever typed it, so what is saved is what was previewed (review finding)', async () => {
+    const harness = await start(); // the service itself runs in UTC
+    await send(harness, 'POST', '/api/accounts', percentAccount('Claude Max'));
+    const line = { text: 'claude 62% resets fri 09:00', timeZone: 'Asia/Tokyo' };
+
+    const preview = await send(harness, 'POST', '/api/quick', { ...line, dryRun: true });
+    expect(((await preview.json()) as { preview: string }).preview).toContain('09:00');
+    expect((await send(harness, 'POST', '/api/quick', line)).status).toBe(200);
+    // Friday 09:00 in Tokyo is midnight UTC, not 09:00 UTC.
+    expect((await readState(harness)).state.accounts[0]?.meters[0]?.resetsAt).toBe('2026-11-20T00:00:00.000Z');
+
+    // Without a zone the service's own applies, as before.
+    expect((await send(harness, 'POST', '/api/quick', { text: 'claude 62% resets fri 09:00' })).status).toBe(200);
+    expect((await readState(harness)).state.accounts[0]?.meters[0]?.resetsAt).toBe('2026-11-20T09:00:00.000Z');
+
+    const bogus = await send(harness, 'POST', '/api/quick', { text: 'claude 70%', timeZone: 'Mars/Olympus' });
+    expect(await errorOf(bogus)).toMatchObject({ code: 'validation', field: 'timeZone' });
+    expect((await readState(harness)).state.accounts[0]?.meters[0]?.used).toBe(62);
+  });
+
   it('previews and saves a quick entry, and reports an ambiguous name with candidates', async () => {
     const harness = await start();
     await send(harness, 'POST', '/api/accounts', percentAccount('Claude Max'));

@@ -64,6 +64,17 @@ describe('in-memory backend', () => {
     expect((await backend.load()).state.accounts).toHaveLength(0);
   });
 
+  it('answers an added or edited meter with the meter as saved, so a form can carry on from it (review finding)', async () => {
+    const backend = new MemoryBackend(emptyState());
+    await backend.addPreset({ provider: 'copilot', plan: 'pro' });
+    const account = (await backend.load()).state.accounts[0]!;
+    const added = await backend.addMeter(account.id, { label: 'Extra', reset: { kind: 'interval', hours: 168 } });
+    expect(added).toMatchObject({ id: `${account.id}:extra`, label: 'Extra', unit: 'percent' });
+    const edited = await backend.updateMeter(added.id, { label: 'Extra weekly', used: 40 });
+    expect(edited).toMatchObject({ id: added.id, label: 'Extra weekly', used: 40 });
+    expect((await backend.load()).state.accounts[0]?.meters.filter((meter) => meter.label.startsWith('Extra'))).toHaveLength(1);
+  });
+
   it('tracks spend', async () => {
     const backend = new MemoryBackend(emptyState());
     await backend.addSpend({ label: 'OpenAI API', currency: 'USD', monthlyBudget: 50 });
@@ -113,6 +124,23 @@ describe('the shared list behind every view', () => {
     expect(instance.queue().map((view) => view.account.providerId)).toEqual(['suno']);
     instance.setPrefs({ category: 'all', hideSpent: true });
     expect(instance.queue().some((view) => view.tier === 'spent')).toBe(false);
+  });
+
+  it('stops filtering by a category that nothing belongs to any more (review finding)', async () => {
+    const backend = new MemoryBackend(emptyState());
+    await backend.addPreset({ provider: 'suno', plan: 'pro' });
+    await backend.addPreset({ provider: 'claude', plan: 'pro' });
+    const instance = new App(backend);
+    await instance.use(backend);
+    instance.setPrefs({ category: 'music' });
+    expect(instance.queue().map((view) => view.account.providerId)).toEqual(['suno']);
+
+    // The last music subscription goes. No chip is drawn for a single category, so nothing could clear it.
+    await backend.removeAccount(instance.queue()[0]!.account.id);
+    await instance.reload();
+    expect(instance.model.prefs.category).toBe('all');
+    expect(instance.queue().length).toBeGreaterThan(0);
+    expect(instance.filtered().every((view) => view.account.providerId === 'claude')).toBe(true);
   });
 
   it('keeps the selection addressable by meter id and notifies listeners', async () => {

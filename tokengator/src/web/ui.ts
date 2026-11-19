@@ -3,6 +3,59 @@
 import { h, icon, type Child } from './dom.js';
 
 // ---------------------------------------------------------------------------
+// Focus across rebuilds
+// ---------------------------------------------------------------------------
+// The page is redrawn from its model, which replaces the element that had focus with an identical new one.
+// A mark records enough about a control to find that replacement, so the keyboard stays where it was.
+
+export interface FocusMark {
+  id: string;
+  tag: string;
+  label: string;
+  /** Selector of the region the control was in (tabs, toolbar, list, inspector), or '' for anywhere. */
+  scope: string;
+  /** The meter the control belonged to, when it sat inside a row or a card. */
+  within: string | null;
+  /** Which of several identical controls it was. */
+  nth: number;
+}
+
+const controlLabel = (el: Element): string => el.getAttribute('aria-label') ?? el.getAttribute('title') ?? (el.textContent ?? '').trim();
+const meterOf = (el: Element): string | null => el.closest<HTMLElement>('[data-id]')?.dataset['id'] ?? null;
+
+function lookalikes(root: HTMLElement, mark: Pick<FocusMark, 'tag' | 'label' | 'scope'>, within: string | null | undefined): HTMLElement[] {
+  const base = mark.scope ? root.querySelector<HTMLElement>(mark.scope) : root;
+  if (!base) return [];
+  return [...base.querySelectorAll<HTMLElement>(mark.tag)].filter((el) => controlLabel(el) === mark.label && (within === undefined || meterOf(el) === within));
+}
+
+/** Notes which control inside `root` has focus. `scopes` are the selectors of the regions that get rebuilt. */
+export function markFocus(root: HTMLElement, scopes: readonly string[]): FocusMark | null {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || active === document.body || !root.contains(active)) return null;
+  const mark = { id: active.id, tag: active.tagName, label: controlLabel(active), scope: scopes.find((selector) => active.closest(selector) !== null) ?? '', within: meterOf(active) };
+  return { ...mark, nth: Math.max(0, lookalikes(root, mark, mark.within).indexOf(active)) };
+}
+
+/** Puts focus back on the control a mark describes, if the rebuild dropped it. True when focus is on a control. */
+export function restoreFocus(root: HTMLElement, mark: FocusMark | null): boolean {
+  const current = document.activeElement;
+  if (current instanceof HTMLElement && current !== document.body && current.isConnected) return true;
+  if (!mark) return false;
+  const exact = lookalikes(root, mark, mark.within);
+  const target =
+    (mark.id ? root.querySelector<HTMLElement>(`#${CSS.escape(mark.id)}`) : null) ??
+    exact[mark.nth] ??
+    exact[0] ??
+    // The same control for another meter: the inspector's buttons after the selection moved.
+    lookalikes(root, mark, undefined)[0] ??
+    // Or the row the control belonged to.
+    (mark.within ? root.querySelector<HTMLElement>(`[data-nav="row"][data-id="${CSS.escape(mark.within)}"]`) : null);
+  target?.focus({ preventScroll: true });
+  return target !== null && target !== undefined;
+}
+
+// ---------------------------------------------------------------------------
 // Toasts
 // ---------------------------------------------------------------------------
 
@@ -37,6 +90,12 @@ export function isMenuOpen(): boolean {
   return openMenu !== null;
 }
 
+const menuClosed = new Set<() => void>();
+/** Calls `listener` whenever a menu has closed, however it was closed. */
+export function onMenuClosed(listener: () => void): void {
+  menuClosed.add(listener);
+}
+
 /** Opens a menu under `anchor`. Clicking the same anchor again closes it. */
 export function showMenu(anchor: HTMLElement, entries: MenuEntry[]): void {
   if (openMenu && openMenu.anchor === anchor) {
@@ -59,6 +118,9 @@ export function showMenu(anchor: HTMLElement, entries: MenuEntry[]): void {
             role: checkable ? 'menuitemradio' : 'menuitem',
             'aria-checked': checkable ? String(entry.checked) : null,
             onclick: () => {
+              // Focus goes back to what opened the menu before the choice acts, so a dialog the choice
+              // opens returns there when it closes, and a redraw finds something to keep focus on.
+              if (anchor.isConnected) anchor.focus({ preventScroll: true });
               closeMenu();
               entry.onSelect();
             }
@@ -116,6 +178,7 @@ export function showMenu(anchor: HTMLElement, entries: MenuEntry[]): void {
     removeEventListener('scroll', onScroll, true);
     anchor.setAttribute('aria-expanded', 'false');
     if (openMenu?.el === el) openMenu = null;
+    for (const listener of [...menuClosed]) listener();
   }
   document.addEventListener('keydown', onKey, true);
   document.addEventListener('pointerdown', onPointer, true);
@@ -140,6 +203,9 @@ export interface DialogHandle {
   setError: (message: string | null) => void;
 }
 
+/** The regions of the page that are rebuilt, for finding a dialog's opener again. */
+export const DIALOG_SCOPES: readonly string[] = ['.insp', '.tabs', '.toolbar', '.pane', '.bar'];
+
 /** Asked of the document rather than counted, so it is right the instant a dialog closes. */
 export function isDialogOpen(): boolean {
   return document.querySelector('dialog[open]') !== null;
@@ -147,6 +213,9 @@ export function isDialogOpen(): boolean {
 
 export function openDialog(options: { title: string; class?: string; onClose?: () => void; head?: boolean }): DialogHandle {
   closeMenu();
+  // The platform returns focus to whatever opened the dialog. If the page was redrawn meanwhile, that
+  // element is gone, so its replacement is found the same way a redraw finds it.
+  const opener = markFocus(document.body, DIALOG_SCOPES);
   const body = h('div', { class: 'dlg-body' });
   const errorLine = h('p', { class: 'err', role: 'alert', hidden: true });
   const foot = h('div', { class: 'dlg-foot' }, errorLine);
@@ -159,6 +228,7 @@ export function openDialog(options: { title: string; class?: string; onClose?: (
     finished = true;
     el.remove();
     options.onClose?.();
+    if (!isDialogOpen()) restoreFocus(document.body, opener);
   };
   const close = (): void => {
     if (el.open) el.close();

@@ -48,7 +48,9 @@ export function meterMenu(ctx: Ctx, view: MeterView): MenuEntry[] {
       entries.push({ label: 'Until this window resets', icon: 'snooze', onSelect: () => ctx.actions.snooze(account.id, view.resetsAtMs) });
     }
   }
-  entries.push({ kind: 'sep' }, { label: `Delete ${account.label}…`, icon: 'trash', danger: true, onSelect: () => ctx.actions.removeAccount(view) });
+  // A menu is drawn outside the page it belongs to, so with names hidden it does not print one.
+  const named = ctx.app.model.prefs.privacy ? 'this subscription' : account.label;
+  entries.push({ kind: 'sep' }, { label: `Delete ${named}…`, icon: 'trash', danger: true, onSelect: () => ctx.actions.removeAccount(view) });
   return entries;
 }
 
@@ -296,7 +298,8 @@ function laterResets(view: MeterView, nowMs: number, horizonMs: number): number[
 export function timelineView(ctx: Ctx, queue: MeterView[]): HTMLElement {
   const { now, prefs, selectedId } = ctx.app.model;
   const horizonMs = prefs.horizon * HOUR;
-  const timed = queue.filter((view) => view.msLeft !== null && view.msLeft > 0).sort((a, b) => (a.msLeft ?? 0) - (b.msLeft ?? 0));
+  // Rows keep the order chosen in the toolbar, like every other view. The axis is what shows time.
+  const timed = queue.filter((view) => view.msLeft !== null && view.msLeft > 0);
   const within = timed.filter((view) => (view.msLeft ?? 0) <= horizonMs);
   const later = timed.filter((view) => (view.msLeft ?? 0) > horizonMs);
   const unscheduled = queue.filter((view) => view.msLeft === null);

@@ -186,7 +186,7 @@ All bodies are JSON. Errors are `{ "error": { "code", "message", "field"?, "cand
 | `PATCH /api/meters/:id` | fields to change | `{ meter }` |
 | `DELETE /api/meters/:id` | | 204 |
 | `POST /api/meters/:id/readings` | a reading | `{ account, meter }` |
-| `POST /api/quick` | `{ text, dryRun? }` | `{ preview, accountId, meterId, saved }` |
+| `POST /api/quick` | `{ text, dryRun?, timeZone? }` (the zone of whoever typed the line; the service's when omitted) | `{ preview, accountId, meterId, saved }` |
 | `POST /api/spend` | a spend source | 201 `{ source }` |
 | `PATCH /api/spend/:id` | fields to change | `{ source }` |
 | `DELETE /api/spend/:id` | | 204 |

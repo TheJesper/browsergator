@@ -9,6 +9,7 @@ import { extname, isAbsolute, join, relative, resolve } from 'node:path';
 import type { AccountInput, AccountPatch, MeterInput, MeterPatch } from '../core/accounts.js';
 import { CATALOG, CATALOG_CHECKED } from '../core/catalog.js';
 import type { SpendSourceInput } from '../core/spend.js';
+import { isValidTimeZone } from '../core/time.js';
 import type { MeterSource, Price, Reading, Settings } from '../core/types.js';
 import type { CollectorHost, CollectorStatus } from './collectors/types.js';
 import { MAX_BODY_BYTES, MAX_IMPORT_BYTES, VERSION, type ServiceConfig } from './config.js';
@@ -841,8 +842,12 @@ export class TokengatorHttpServer {
         const dryRun = input['dryRun'] ?? false;
         // A preview that is misread as "save" would write a number the user only wanted to check.
         if (typeof dryRun !== 'boolean') throw new ValidationError('dryRun', 'dryRun must be true or false.');
+        // The dashboard previews a line in the browser's zone. Saving it in the service's zone instead
+        // would store a different hour from the one the person just confirmed.
+        const zone = optionalText(input, 'timeZone');
+        if (zone !== undefined && !isValidTimeZone(zone)) throw new ValidationError('timeZone', 'timeZone must be an IANA name, for example Europe/Stockholm.');
         if (dryRun) {
-          const parsed = await service.previewQuick(text);
+          const parsed = await service.previewQuick(text, zone);
           if (!parsed.ok) throw quickError(parsed);
           sendJson(res, 200, {
             preview: parsed.preview,
@@ -852,7 +857,7 @@ export class TokengatorHttpServer {
           });
           return;
         }
-        const saved = await service.quick(text);
+        const saved = await service.quick(text, { kind: 'manual' }, zone);
         sendJson(res, 200, { preview: saved.preview, accountId: saved.account.id, meterId: saved.meter.id, saved: true });
       }),
 

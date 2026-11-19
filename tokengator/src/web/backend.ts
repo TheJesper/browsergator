@@ -21,7 +21,8 @@ import { demoState } from '../core/demo.js';
 import { parseQuick } from '../core/quick.js';
 import { applyReadingToState, rollState } from '../core/reset.js';
 import { addSpendSource, recordSpend, removeSpendSource, updateSpendSource, type SpendSourceInput } from '../core/spend.js';
-import type { Price, Reading, Settings, State } from '../core/types.js';
+import { localZone } from '../core/time.js';
+import type { Meter, Price, Reading, Settings, State } from '../core/types.js';
 
 /** Mirrors the server's CollectorStatus without importing server code into the bundle. */
 export interface CollectorInfo {
@@ -98,8 +99,9 @@ export interface Backend {
   addPreset(preset: PresetRequest): Promise<void>;
   updateAccount(id: string, patch: AccountPatch): Promise<void>;
   removeAccount(id: string): Promise<void>;
-  addMeter(accountId: string, input: MeterInput): Promise<void>;
-  updateMeter(id: string, patch: MeterPatch): Promise<void>;
+  /** Both answer with the meter as it now is, so a form can carry on from what was saved. */
+  addMeter(accountId: string, input: MeterInput): Promise<Meter>;
+  updateMeter(id: string, patch: MeterPatch): Promise<Meter>;
   removeMeter(id: string): Promise<void>;
   report(meterId: string, reading: Reading): Promise<void>;
   quick(text: string): Promise<string>;
@@ -217,11 +219,11 @@ export class HttpBackend implements Backend {
   async removeAccount(id: string): Promise<void> {
     await this.call('DELETE', `/api/accounts/${encodeURIComponent(id)}`);
   }
-  async addMeter(accountId: string, input: MeterInput): Promise<void> {
-    await this.call('POST', `/api/accounts/${encodeURIComponent(accountId)}/meters`, input);
+  async addMeter(accountId: string, input: MeterInput): Promise<Meter> {
+    return (await this.call<{ meter: Meter }>('POST', `/api/accounts/${encodeURIComponent(accountId)}/meters`, input)).meter;
   }
-  async updateMeter(id: string, patch: MeterPatch): Promise<void> {
-    await this.call('PATCH', `/api/meters/${encodeURIComponent(id)}`, patch);
+  async updateMeter(id: string, patch: MeterPatch): Promise<Meter> {
+    return (await this.call<{ meter: Meter }>('PATCH', `/api/meters/${encodeURIComponent(id)}`, patch)).meter;
   }
   async removeMeter(id: string): Promise<void> {
     await this.call('DELETE', `/api/meters/${encodeURIComponent(id)}`);
@@ -230,7 +232,8 @@ export class HttpBackend implements Backend {
     await this.call('POST', `/api/meters/${encodeURIComponent(meterId)}/readings`, reading);
   }
   async quick(text: string): Promise<string> {
-    const result = await this.call<{ preview: string }>('POST', '/api/quick', { text });
+    // The zone goes along so that what is saved is what the preview, made here, showed.
+    const result = await this.call<{ preview: string }>('POST', '/api/quick', { text, timeZone: localZone() });
     return result.preview;
   }
   async addSpend(input: SpendSourceInput): Promise<void> {
@@ -329,11 +332,18 @@ export class MemoryBackend implements Backend {
   removeAccount(id: string): Promise<void> {
     return this.change((state) => removeAccount(state, id));
   }
-  addMeter(accountId: string, input: MeterInput): Promise<void> {
-    return this.change((state, nowMs) => addMeter(state, accountId, input, nowMs).state);
+  addMeter(accountId: string, input: MeterInput): Promise<Meter> {
+    let created: Meter | null = null;
+    return this.change((state, nowMs) => {
+      const added = addMeter(state, accountId, input, nowMs);
+      created = added.meter;
+      return added.state;
+    }).then(() => created as unknown as Meter);
   }
-  updateMeter(id: string, patch: MeterPatch): Promise<void> {
-    return this.change((state, nowMs) => updateMeter(state, id, patch, nowMs));
+  updateMeter(id: string, patch: MeterPatch): Promise<Meter> {
+    return this.change((state, nowMs) => updateMeter(state, id, patch, nowMs)).then(
+      () => this.state.accounts.flatMap((account) => account.meters).find((meter) => meter.id === id) as Meter
+    );
   }
   removeMeter(id: string): Promise<void> {
     return this.change((state, nowMs) => removeMeter(state, id, nowMs));

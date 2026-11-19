@@ -216,7 +216,8 @@ describe('wording per tier', () => {
     const v = view(weekly(0.6, 30), { price: USD_100 });
     expect(v.tier).toBe('behind');
     expect(headline(v, NOW)).toBe('Behind pace: about 48% will expire, resets in 2d 19h');
-    expect(statusLine(v, NOW)).toBe('Claude Max, Weekly: Behind pace: about 48% will expire, resets in 2d 19h ($11.15 at risk)');
+    // A line that travels alone also says what is left: there is no bar beside it.
+    expect(statusLine(v, NOW)).toBe('Claude Max, Weekly: Behind pace: 70% left, about 48% will expire, resets in 2d 19h ($11.15 at risk)');
     expect(explain(v, NOW)).toBe(
       '30% used with 40% of the window left. At this pace about 48% expires unused, worth $11.15. Finishing it takes 3.5× the pace so far.'
     );
@@ -245,7 +246,7 @@ describe('wording per tier', () => {
     const runsOut = formatMoment(v.runsOutAtMs as number, NOW);
     expect(runsOut).toMatch(/^(today|tomorrow) \d\d:\d\d$/);
     expect(headline(v, NOW)).toBe(`Running hot: runs out ${runsOut}, resets in 4d 21h`);
-    expect(statusLine(v, NOW)).toBe(`Claude Max, Weekly: Running hot: runs out ${runsOut}, resets in 4d 21h`);
+    expect(statusLine(v, NOW)).toBe(`Claude Max, Weekly: Running hot: 25% left, runs out ${runsOut}, resets in 4d 21h`);
     expect(explain(v, NOW)).toBe(
       `75% used with 70% of the window left. At this pace it runs out ${runsOut}, 4d 4h before the reset. Nothing will be wasted, but it may need rationing.`
     );
@@ -408,7 +409,7 @@ describe('markers carried into every summary', () => {
     expect(v.stale).toBe(true);
     expect(v.ageMs).toBeNull();
     expect(v.tier).toBe('behind'); // 0% used is an assumption here, not a fact
-    expect(statusLine(v, NOW)).toBe('ChatGPT Plus, Weekly: Behind pace: about 97% will expire, resets in 3d (no reading yet)');
+    expect(statusLine(v, NOW)).toBe('ChatGPT Plus, Weekly: Behind pace: 100% left, about 97% will expire, resets in 3d (no reading yet)');
     expect(explain(v, NOW)).toMatch(/No reading yet\.$/);
     expect(recommend(v, NOW)).toMatch(/check the usage page first\.$/);
     expect(meterMarkdown(v, NOW, 'UTC')).toContain('- Updated: never (stale)');
@@ -559,9 +560,13 @@ describe('one wording everywhere', () => {
       expect(record?.recommendation).toBe(recommend(v, NOW, 'UTC'));
       expect(record?.state).toBe(stateLabel(v));
       expect(meterRecord(v, NOW, 'UTC')).toEqual(record);
-      expect(statusLine(v, NOW, 'UTC')).toContain(sentence);
+      // The status line is the same sentence, with the share left added where the sentence lacks it.
+      const [state, rest] = [sentence.slice(0, sentence.indexOf(': ') + 2), sentence.slice(sentence.indexOf(': ') + 2)];
+      expect(statusLine(v, NOW, 'UTC')).toContain(state);
+      expect(statusLine(v, NOW, 'UTC')).toContain(rest);
+      if (v.tier !== 'spent' && v.tier !== 'expired') expect(statusLine(v, NOW, 'UTC')).toContain(leftText(v));
       expect(meterMarkdown(v, NOW, 'UTC')).toContain(`**${sentence}**`);
-      expect(agentPrompt(v, NOW, 'UTC')).toContain(sentence);
+      expect(agentPrompt(v, NOW, 'UTC')).toContain(statusLine(v, NOW, 'UTC'));
       if (!v.snoozed) expect(lines.some((line) => line.endsWith(statusLine(v, NOW, 'UTC')))).toBe(true);
     }
 

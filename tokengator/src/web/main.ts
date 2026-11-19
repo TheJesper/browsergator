@@ -16,7 +16,7 @@ import { brandMark, h, icon, mount } from './dom.js';
 import { inspector } from './inspector.js';
 import { costsView, historyView } from './ledger-views.js';
 import { barLegend, refreshCountdowns } from './parts.js';
-import { closeMenu, confirmDialog, copyText, isDialogOpen, isMenuOpen, showMenu, toast, type MenuEntry } from './ui.js';
+import { DIALOG_SCOPES, closeMenu, confirmDialog, copyText, isDialogOpen, isMenuOpen, markFocus, onMenuClosed, restoreFocus, showMenu, toast, type MenuEntry } from './ui.js';
 import { boardView, queueView, tableTools, tableView, timelineView } from './views.js';
 
 declare global {
@@ -333,7 +333,15 @@ function start(app: App, fellBack: boolean): void {
           { class: 'summary-sub' },
           h('span', { class: liveClass }, h('i'), liveText),
           next && next.resetsAtMs !== null
-            ? h('span', null, `Next reset: ${next.account.label}, ${next.meter.label.toLowerCase()} in `, h('span', { class: 'num', dataset: { until: next.resetsAtMs, mode: 'countdown' } }, formatDuration(next.msLeft ?? 0)), ` (${leftText(next)}).`)
+            ? h(
+                'span',
+                null,
+                'Next reset: ',
+                h('span', { class: 'private' }, next.account.label),
+                `, ${next.meter.label.toLowerCase()} in `,
+                h('span', { class: 'num', dataset: { until: next.resetsAtMs, mode: 'countdown' } }, formatDuration(next.msLeft ?? 0)),
+                ` (${leftText(next)}).`
+              )
             : null,
           s.stale > 0 ? h('span', null, `${s.stale} reading${s.stale === 1 ? ' is' : 's are'} stale.`) : null
         )
@@ -380,6 +388,8 @@ function start(app: App, fellBack: boolean): void {
       'button',
       {
         class: 'select-btn',
+        // Its text changes with the order chosen, so it is found again by id after a redraw.
+        id: 'sort-button',
         type: 'button',
         onclick: () =>
           showMenu(
@@ -460,15 +470,17 @@ function start(app: App, fellBack: boolean): void {
 
     const s = app.summary();
     const queue = app.queue();
+    // What a rebuild would otherwise throw away: where the keyboard is, and how far two panes are scrolled.
+    const focusMark = markFocus(root, DIALOG_SCOPES);
+    const shownBefore = layout.querySelector<HTMLElement>('.insp')?.dataset['meter'] ?? null;
+    const inspScroll = layout.querySelector<HTMLElement>('.insp')?.scrollTop ?? 0;
+    const tableScroll = pane.querySelector<HTMLElement>('.table-wrap')?.scrollLeft ?? 0;
     renderTabs(s.useNow);
     renderBanners();
     renderSummary();
     renderToolbar(queue);
     document.title = s.useNow > 0 ? `(${s.useNow}) Tokengator` : 'Tokengator';
 
-    // Keep keyboard focus on the same row across a rebuild.
-    const focused = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>('[data-id]')?.dataset['id'];
-    const updating = document.activeElement?.id === 'insp-update';
     const scrollY = window.scrollY;
 
     const view = prefs.view;
@@ -476,7 +488,7 @@ function start(app: App, fellBack: boolean): void {
     if (view === 'costs') content = costsView(ctx);
     else if (view === 'history') content = historyView(ctx);
     else if (state.accounts.length === 0) content = emptyState();
-    else if (queue.length === 0 && view !== 'board') {
+    else if (view === 'board' ? app.filtered().length === 0 : queue.length === 0) {
       content = h('div', { class: 'empty' }, h('h2', null, 'Nothing matches'), h('p', null, 'No quota matches the current filter. Clear the filter or the category to see everything.'));
     } else if (view === 'board') content = boardView(ctx, queue, app.filtered());
     else if (view === 'timeline') content = timelineView(ctx, queue);
@@ -492,11 +504,13 @@ function start(app: App, fellBack: boolean): void {
       layout.append(h('button', { class: 'scrim', type: 'button', 'aria-label': 'Close details', onclick: () => app.select(null) }), inspector(ctx, selected));
     }
 
-    if (focused) {
-      const again = pane.querySelector<HTMLElement>(`[data-nav="row"][data-id="${CSS.escape(focused)}"]`);
-      again?.focus({ preventScroll: true });
-    } else if (updating) {
-      layout.querySelector<HTMLElement>('#insp-update')?.focus({ preventScroll: true });
+    const insp = layout.querySelector<HTMLElement>('.insp');
+    if (insp && insp.dataset['meter'] === shownBefore && inspScroll > 0) insp.scrollTop = inspScroll;
+    const table = pane.querySelector<HTMLElement>('.table-wrap');
+    if (table && tableScroll > 0) table.scrollLeft = tableScroll;
+    // A control that is gone with its inspector hands focus to the row the inspector was showing.
+    if (!restoreFocus(root, focusMark) && focusMark?.scope === '.insp' && shownBefore) {
+      pane.querySelector<HTMLElement>(`[data-nav="row"][data-id="${CSS.escape(shownBefore)}"]`)?.focus({ preventScroll: true });
     }
     if (window.scrollY !== scrollY) window.scrollTo({ top: scrollY });
     notify();
@@ -516,14 +530,17 @@ function start(app: App, fellBack: boolean): void {
     }
     render();
   });
-  layout.addEventListener('focusout', () => {
-    if (pending) {
+  // What was held back is drawn as soon as the reason is gone: the field was left, or the menu closed.
+  const flush = (): void => {
+    if (!pending) return;
+    setTimeout(() => {
+      if (!pending || isEditingInPlace() || isMenuOpen()) return;
       pending = false;
-      setTimeout(() => {
-        if (!isEditingInPlace()) render();
-      }, 0);
-    }
-  });
+      render();
+    }, 0);
+  };
+  layout.addEventListener('focusout', flush);
+  onMenuClosed(flush);
 
   // -- notifications -----------------------------------------------------------
   function notify(): void {
@@ -587,7 +604,8 @@ function start(app: App, fellBack: boolean): void {
       else if (app.model.selectedId) app.select(null);
       return;
     }
-    if (typing || isDialogOpen()) return;
+    // An open menu owns the keyboard: a shortcut pressed over it would change a view that cannot be redrawn.
+    if (typing || isDialogOpen() || isMenuOpen()) return;
     const view = VIEWS.find((candidate) => candidate.key === event.key);
     if (view) {
       event.preventDefault();
@@ -619,13 +637,11 @@ function start(app: App, fellBack: boolean): void {
         break;
       case 'j':
       case 'ArrowDown':
-        if (event.key === 'ArrowDown' && isMenuOpen()) break;
         event.preventDefault();
         moveSelection(1);
         break;
       case 'k':
       case 'ArrowUp':
-        if (event.key === 'ArrowUp' && isMenuOpen()) break;
         event.preventDefault();
         moveSelection(-1);
         break;

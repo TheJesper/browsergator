@@ -61,6 +61,10 @@ export default tseslint.config(
         getComputedStyle: 'readonly',
         HTMLElement: 'readonly',
         window: 'readonly',
+        innerHeight: 'readonly',
+        location: 'readonly',
+        NodeFilter: 'readonly',
+        localStorage: 'readonly',
         Notification: 'writable'
       }
     },

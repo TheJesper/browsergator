@@ -550,32 +550,48 @@ export function editDialog(ctx: Ctx, account: Account): void {
       applyChanges();
     })();
   });
+  /** What differs between a saved meter and what its form now says. */
+  const patchFor = (o: Meter, next: MeterInput): MeterPatch => {
+    const patch: MeterPatch = {};
+    if (next.label !== o.label) patch.label = next.label;
+    if (next.role !== o.role && next.role) patch.role = next.role;
+    if (next.unit !== o.unit && next.unit) patch.unit = next.unit;
+    if ((next.unitLabel ?? '') !== (o.unitLabel ?? '')) patch.unitLabel = next.unitLabel ?? '';
+    // A percent meter has an implicit limit of 100, so a new unit always takes its limit along: a
+    // typed 100 is a real limit, not "unchanged".
+    if (next.limit !== undefined && (next.limit !== o.limit || patch.unit !== undefined)) patch.limit = next.limit;
+    if (next.used !== undefined && Math.abs(next.used - o.used) > 0.005) patch.used = next.used;
+    if (JSON.stringify(next.reset) !== JSON.stringify(o.reset)) patch.reset = next.reset;
+    // A new rule clears the reset time unless one comes with it, so the time shown in the form always
+    // goes along. Otherwise it is sent only when it was moved: the field shows minutes, not seconds.
+    const moved = Math.abs((toMs(next.resetsAt ?? null) ?? 0) - (toMs(o.resetsAt) ?? 0)) > 60_000;
+    if (next.resetsAt !== undefined && (moved || patch.reset !== undefined)) patch.resetsAt = next.resetsAt;
+    if ((next.rollover ?? 'none') !== o.rollover && next.rollover) patch.rollover = next.rollover;
+    if ((next.valueShare ?? 0) > 0 !== o.valueShare > 0 && next.valueShare !== undefined) patch.valueShare = next.valueShare;
+    if ((next.partial === true) !== (o.partial === true)) patch.partial = next.partial === true;
+    return patch;
+  };
   const applyChanges = (): void => {
+    // The one mistake a form can be checked for without asking the service, caught before anything is sent.
+    const unlimited = forms.find((form) => !form.removed && form.read().unit !== 'percent' && form.read().limit === undefined);
+    if (unlimited) {
+      dialog.setError(`Give ${unlimited.read().label.trim() || 'the new meter'} a limit, or count it in percent.`);
+      return;
+    }
     save.disabled = true;
     dialog.setError(null);
     const work = async (): Promise<void> => {
       await backend.updateAccount(account.id, { label: label.value, plan: plan.value || null, price: price.read(), usageUrl: url.value || null, notes: notes.value || null });
-      for (const form of forms) {
-        if (form.original && form.removed) await backend.removeMeter(form.original.id);
-        else if (form.original) {
-          const next = form.read();
-          const patch: MeterPatch = {};
-          const o = form.original;
-          if (next.label !== o.label) patch.label = next.label;
-          if (next.role !== o.role && next.role) patch.role = next.role;
-          if (next.unit !== o.unit && next.unit) patch.unit = next.unit;
-          if ((next.unitLabel ?? '') !== (o.unitLabel ?? '')) patch.unitLabel = next.unitLabel ?? '';
-          if (next.limit !== undefined && next.limit !== o.limit) patch.limit = next.limit;
-          if (next.used !== undefined && Math.abs(next.used - o.used) > 0.005) patch.used = next.used;
-          if (JSON.stringify(next.reset) !== JSON.stringify(o.reset)) patch.reset = next.reset;
-          if (next.resetsAt !== undefined && toMs(next.resetsAt ?? null) !== toMs(o.resetsAt) && Math.abs((toMs(next.resetsAt ?? null) ?? 0) - (toMs(o.resetsAt) ?? 0)) > 60_000) {
-            patch.resetsAt = next.resetsAt;
-          }
-          if ((next.rollover ?? 'none') !== o.rollover && next.rollover) patch.rollover = next.rollover;
-          if ((next.valueShare ?? 0) > 0 !== o.valueShare > 0 && next.valueShare !== undefined) patch.valueShare = next.valueShare;
-          if ((next.partial === true) !== (o.partial === true)) patch.partial = next.partial === true;
-          if (Object.keys(patch).length > 0) await backend.updateMeter(o.id, patch);
-        } else if (!form.removed) await backend.addMeter(account.id, form.read());
+      // Every step is a request of its own, so a refusal part-way leaves the earlier ones saved. Each form
+      // records what it has done, and a second Save sends only what is still outstanding.
+      for (const form of [...forms]) {
+        if (form.original && form.removed) {
+          await backend.removeMeter(form.original.id);
+          forms.splice(forms.indexOf(form), 1);
+        } else if (form.original) {
+          const patch = patchFor(form.original, form.read());
+          if (Object.keys(patch).length > 0) form.original = await backend.updateMeter(form.original.id, patch);
+        } else if (!form.removed) form.original = await backend.addMeter(account.id, form.read());
       }
     };
     work()

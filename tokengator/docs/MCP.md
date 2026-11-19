@@ -285,7 +285,7 @@ lists the known ids. Anything the catalog lacks can be tracked with a custom acc
 ```text
 As of 12:00 UTC (2026-11-19T12:00:00.000Z).
 Recorded, reported by agent "claude-code".
-Suno Pro, Credits: Behind pace: about 25% will expire, resets in 9d ($2.48 at risk)
+Suno Pro, Credits: Behind pace: 1,200 credits left, about 25% will expire, resets in 9d ($2.48 at risk)
 1,300 of 2,500 credits used with 30% of the window left. At this pace about 25% expires unused, worth $2.48. Finishing it takes 2.2× the pace so far.
 ```
 

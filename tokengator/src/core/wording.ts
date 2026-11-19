@@ -217,7 +217,18 @@ export function explain(view: MeterView, nowMs: number, tz?: string): string {
   return parts.join(' ');
 }
 
-/** One line for clipboards, status bars and logs. */
+/**
+ * The headline with the share left always in it. On a row the bar beside the headline shows what is left;
+ * a line that travels alone (a clipboard, a status bar, a tool answer) has to say it.
+ */
+function headlineWithLeft(view: MeterView, nowMs: number, tz?: string): string {
+  const text = headline(view, nowMs, tz);
+  if (view.tier !== 'behind' && !(view.tier === 'hot' && view.runsOutAtMs !== null)) return text;
+  const at = text.indexOf(': ') + 2;
+  return `${text.slice(0, at)}${leftText(view)}, ${text.slice(at)}`;
+}
+
+/** One line for clipboards, status bars and logs: who, the state, the share left, the reset, the money. */
 export function statusLine(view: MeterView, nowMs: number, tz?: string): string {
   const name = `${view.account.label}, ${view.meter.label}`;
   const money = riskMoney(view);
@@ -226,7 +237,7 @@ export function statusLine(view: MeterView, nowMs: number, tz?: string): string 
   // A meter that was never read is stale too, and its numbers are assumptions: say so, or "0% used" on an
   // untouched preset reads as a fact.
   if (view.stale) tail.push(view.ageMs !== null ? `updated ${formatAge(view.ageMs)}` : 'no reading yet');
-  return `${name}: ${headline(view, nowMs, tz)}${tail.length ? ` (${tail.join(', ')})` : ''}`;
+  return `${name}: ${headlineWithLeft(view, nowMs, tz)}${tail.length ? ` (${tail.join(', ')})` : ''}`;
 }
 
 /** What an agent or a person should do about it, in one sentence. */

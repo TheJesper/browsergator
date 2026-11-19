@@ -60,6 +60,14 @@ The dashboard SHALL let the user order meters by use first, soonest reset, most 
 - **WHEN** the user chooses "most value at risk"
 - **THEN** every view lists the meter with the highest value at risk first
 
+#### Scenario: Order on the Timeline
+- **WHEN** an order other than soonest reset is chosen and the Timeline is shown
+- **THEN** the rows inside the horizon follow the chosen order, and each row's position on the axis still shows when it resets
+
+#### Scenario: A category that is no longer in use
+- **WHEN** the chosen category has no account left, because the last one was removed or the data source changed
+- **THEN** the category filter is cleared and the user's quotas are listed
+
 #### Scenario: Filter by text
 - **WHEN** the user types "cla" in the filter
 - **THEN** only meters whose account, provider, plan or meter name contains "cla" remain
@@ -78,6 +86,10 @@ The dashboard SHALL accept a one-line update naming an account, optionally a met
 #### Scenario: Ambiguous or unknown account
 - **WHEN** the line matches no account or more than one
 - **THEN** nothing is saved and the candidates are offered for selection
+
+#### Scenario: A clock time is the user's own
+- **WHEN** the browser is in Europe/Stockholm, the service runs in UTC, and the user confirms "claude 62% resets fri 09:00"
+- **THEN** the reset saved is 09:00 in Stockholm, the time the preview showed
 
 #### Scenario: Two accounts with one name
 - **WHEN** two accounts are both called "Claude Max" and the line begins with the id of one of them, "claude-max"
@@ -120,6 +132,14 @@ The dashboard SHALL let the user add an account from the catalog or from scratch
 - **WHEN** the user chooses delete on an account
 - **THEN** nothing is removed until they confirm in a dialog that names the account
 
+#### Scenario: Changing a window keeps its reset time
+- **WHEN** the user changes the length of a meter's window from 7 to 5 days and leaves the reset time shown in the form alone
+- **THEN** the meter keeps that reset time and its forecast
+
+#### Scenario: Saving again after a refusal
+- **WHEN** a save that adds two meters is refused because of the second, and the user corrects it and saves again
+- **THEN** each of the two meters exists once
+
 ### Requirement: Connect panel
 The dashboard SHALL show ready-to-copy instructions for connecting MCP clients over HTTP and stdio, for the Claude Code status line integration and for installing the agent skill, with the running instance's own address filled in.
 
@@ -137,6 +157,14 @@ The dashboard SHALL reflect changes made through the API, the MCP server, the CL
 #### Scenario: Connection lost
 - **WHEN** the connection to the local service drops
 - **THEN** the dashboard says it is offline, keeps the last data visible and reconnects automatically
+
+#### Scenario: A change arrives while a menu is open
+- **WHEN** a reading arrives while a menu is open and the menu is then closed
+- **THEN** the change is shown as soon as the menu has closed
+
+#### Scenario: A redraw keeps the user's place
+- **WHEN** the page is redrawn while the user has scrolled the inspector and a control has keyboard focus
+- **THEN** the inspector stays scrolled where it was and focus stays on the same control
 
 ### Requirement: A warning comes with something to do
 The inspector SHALL, for a meter that is `use-now` or `behind` and whose provider has documented ways to use quota unattended, list those ways with their links and say when the catalog was checked. It SHALL also show the account's own notes.
@@ -175,6 +203,13 @@ The dashboard SHALL offer one panel that shows every way a reminder can reach th
 - **WHEN** the panel is opened on sample data
 - **THEN** the desktop and webhook rows say they need the local service and the calendar can be copied as text
 
+### Requirement: Hiding names
+The dashboard SHALL offer a setting that hides account names for screen sharing. While it is on, no account name and no identifier made from one SHALL be readable in any view, in the summary, in the inspector or in a menu.
+
+#### Scenario: Sharing a screen
+- **WHEN** the user switches on "Hide names"
+- **THEN** the summary's next-reset sentence, every row, card and table cell, the inspector's agent hint and the row menus show no account name
+
 ### Requirement: Themes
 The dashboard SHALL provide a light and a dark theme built on one greyed Solarized palette, SHALL follow the system setting by default, SHALL remember an explicit choice, and SHALL keep body text at a contrast of at least 4.5:1 and meaningful graphical marks at least 3:1 against their background in both themes.
 
@@ -208,12 +243,24 @@ The dashboard SHALL be fully operable by keyboard and SHALL provide shortcuts to
 - **WHEN** the user types "3" in the filter field
 - **THEN** the character is entered and the view does not change
 
+#### Scenario: A key pressed over an open menu
+- **WHEN** the user presses 2 while a menu is open
+- **THEN** the view does not change
+
+#### Scenario: Focus after choosing from a menu
+- **WHEN** the user chooses an order from the Sort menu by keyboard
+- **THEN** keyboard focus is on the Sort button
+
 ### Requirement: Narrow screens
 The dashboard SHALL remain usable at a width of 400 CSS pixels: the page SHALL not scroll sideways, rows SHALL stack, and the inspector SHALL open over the list.
 
 #### Scenario: Phone width
 - **WHEN** the viewport is 400 pixels wide
 - **THEN** every view fits without horizontal page scrolling and all actions remain reachable
+
+#### Scenario: Inspector taller than the screen
+- **WHEN** the inspector is open on a screen shorter than its content
+- **THEN** it ends at the screen edge and scrolls to its last section
 
 ### Requirement: Empty state and sample data
 The dashboard SHALL, when there are no accounts, offer the catalog and the automatic sources detected on the machine, and SHALL offer a sample-data mode that is clearly labelled, changes nothing on disk and can be left at any time. When the local service cannot be reached at all the dashboard SHALL run on sample data and say so.

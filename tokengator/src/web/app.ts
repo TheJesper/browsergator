@@ -180,6 +180,12 @@ export class App {
       this.model.error = null;
       this.model.online = true;
       this.model.lastSync = Date.now();
+      // A category nothing belongs to any more would hide every quota, with no chip left to clear it.
+      const { category } = this.model.prefs;
+      if (category !== 'all' && !this.categoriesInUse().includes(category)) {
+        this.model.prefs = { ...this.model.prefs, category: 'all' };
+        savePrefs(this.model.prefs);
+      }
     } catch (error) {
       this.model.error = (error as Error).message;
       if (!this.model.loaded) throw error;

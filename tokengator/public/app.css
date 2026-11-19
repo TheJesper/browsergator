@@ -389,7 +389,7 @@ button.link:hover { color: var(--ink); }
 .row-act { grid-area: act; display: flex; justify-content: flex-end; gap: 2px; opacity: 0; }
 .row:hover .row-act, .row:focus-within .row-act, .row.selected .row-act { opacity: 1; }
 @media (hover: none) { .row-act { opacity: 1; } }
-.privacy .row-name .a > span:first-child, .privacy .card-title, .privacy .insp-title, .privacy .tbl .c-name, .privacy .tl-label b, .privacy .tl-later-name b, .privacy .hist-row .who b, .privacy .spend h3 { filter: blur(5px); }
+.privacy .private, .privacy .row-name .a > span:first-child, .privacy .card-title, .privacy .insp-title, .privacy .tbl .c-name, .privacy .tl-label b, .privacy .tl-later-name b, .privacy .hist-row .who b, .privacy .spend h3 { filter: blur(5px); }
 
 @container (max-width: 860px) {
   .row {
@@ -438,8 +438,10 @@ button.link:hover { color: var(--ink); }
 
 @media (max-width: 1039px) {
   .layout.with-inspector { grid-template-columns: minmax(0, 1fr); }
+  /* `align-self: start` from the rule above would size a fixed box to its content, however tall, and it
+     could not be scrolled. Stretching it between its insets is what makes `overflow-y` take effect. */
   .insp {
-    position: fixed; z-index: 40; top: 0; right: 0; bottom: 0; height: auto;
+    position: fixed; z-index: 40; top: 0; right: 0; bottom: 0; height: auto; align-self: stretch; max-height: 100dvh;
     width: min(440px, 100vw); border-left: 1px solid var(--line); box-shadow: var(--shadow);
     padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px);
   }

@@ -149,7 +149,7 @@ export function inspector(ctx: Ctx, view: MeterView): HTMLElement {
 
   return h(
     'aside',
-    { class: 'insp', 'aria-label': `${account.label}, ${view.meter.label}` },
+    { class: 'insp', 'aria-label': `${account.label}, ${view.meter.label}`, dataset: { meter: view.id } },
     h(
       'div',
       { class: 'insp-head' },
@@ -246,7 +246,15 @@ export function inspector(ctx: Ctx, view: MeterView): HTMLElement {
     h(
       'div',
       { class: 'insp-sec' },
-      h('p', { class: 'hint' }, `Agents can reach this meter as "${view.meter.id}".`, view.snoozed && account.snoozedUntil ? ` Snoozed for ${formatDuration(Date.parse(account.snoozedUntil) - now)}.` : '')
+      h(
+        'p',
+        { class: 'hint' },
+        'Agents can reach this meter as "',
+        // The id is made from the account's name, so it hides with the names.
+        h('span', { class: 'private' }, view.meter.id),
+        '".',
+        view.snoozed && account.snoozedUntil ? ` Snoozed for ${formatDuration(Date.parse(account.snoozedUntil) - now)}.` : ''
+      )
     )
   );
 }
