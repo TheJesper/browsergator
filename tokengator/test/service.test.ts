@@ -574,6 +574,25 @@ describe('TokengatorService', () => {
       expect((unknownPlan as ValidationError).field).toBe('plan');
     });
 
+    it('puts billing-anchored meters on the billing day the user gives, and refuses a day that is not one', async () => {
+      const provider = CATALOG.find((entry) => entry.plans.some((plan) => plan.meters.some((meter) => meter.anchor === 'billing')));
+      if (!provider) return;
+      const plan = provider.plans.find((entry) => entry.meters.some((meter) => meter.anchor === 'billing')) as (typeof provider.plans)[number];
+      const key = (plan.meters.find((meter) => meter.anchor === 'billing') as (typeof plan.meters)[number]).key;
+
+      const dated = await service.addFromPreset(provider.id, plan.id, { label: 'Dated', billingDay: 17 });
+      expect(dated.meters.find((meter) => meter.key === key)?.reset).toMatchObject({ kind: 'monthly', day: 17, time: '00:00' });
+
+      const undated = await service.addFromPreset(provider.id, plan.id, { label: 'Undated' });
+      expect(undated.meters.find((meter) => meter.key === key)?.reset.kind).toBe('interval');
+
+      for (const bad of [0, 32, 2.5]) {
+        const refused = await failure(service.addFromPreset(provider.id, plan.id, { label: 'Bad', billingDay: bad }));
+        expect(refused).toBeInstanceOf(ValidationError);
+        expect((refused as ValidationError).field).toBe('billingDay');
+      }
+    });
+
     it('marks status line readings as such', async () => {
       await service.applyCollected('claude-statusline', [{ providerId: PROVIDER, meters: [{ key: 'weekly', reading: { usedPercent: 40 } }] }], []);
       expect(meterOf(await store.read(), `${PROVIDER}:weekly`).source).toEqual({ kind: 'statusline', id: 'claude-statusline' });

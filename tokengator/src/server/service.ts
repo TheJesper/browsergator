@@ -22,7 +22,7 @@ import {
 import { briefMarkdown, snapshot, type Snapshot } from '../core/brief.js';
 import { CATALOG } from '../core/catalog.js';
 import { findPlan, findProvider, presetAccountInput, presetMeterInput } from '../core/catalog-types.js';
-import { parseQuick, resolveTarget } from '../core/quick.js';
+import { parseQuick, resolveMeterIn, resolveTarget } from '../core/quick.js';
 import { ReadingError, applyReadingToState, rollState } from '../core/reset.js';
 import {
   addSpendSource,
@@ -197,10 +197,15 @@ export class TokengatorService {
     if (target.meterId) return findMeter(state, target.meterId);
     const name = [target.account ?? '', target.meter ?? ''].join(' ').trim();
     if (!name) throw new ValidationError('account', 'Name the account (id, label or provider).');
-    // An account named by its exact id, with a meter named loosely, must not be confused by other accounts.
+    // An account named by its exact id is settled; only the meter is looked for, and only inside it. Joining
+    // the two names would let a meter word that also occurs in the account label vanish into the account.
     const exact = target.account ? state.accounts.find((account) => account.id === target.account) : undefined;
-    const scope = exact ? { ...state, accounts: [exact] } : state;
-    const found = resolveTarget(scope, name.split(/\s+/).filter(Boolean));
+    if (exact) {
+      const meter = resolveMeterIn(exact, target.meter ?? '');
+      if (!meter.ok) throw new AmbiguousTargetError(meter.error, meter.candidates);
+      return { account: exact, meter: meter.meter };
+    }
+    const found = resolveTarget(state, name.split(/\s+/).filter(Boolean));
     if (!found.ok) throw new AmbiguousTargetError(found.error, found.candidates);
     return found;
   }

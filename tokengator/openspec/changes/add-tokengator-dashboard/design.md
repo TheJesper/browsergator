@@ -101,7 +101,7 @@ A finished cycle is recorded only for allowance meters that have had at least on
 - Every request: Host must be a loopback name or the configured host, with the service's port.
 - State-changing requests: Origin, when present, must equal the service's own origin; bodies must be `application/json` and at most 256 KB. A cross-site form cannot produce that without a preflight, which the service never approves.
 - With a token: bearer header or an HTTP-only, SameSite=Strict cookie minted by `POST /api/session`; comparison with `timingSafeEqual`. See D15 for why the token never travels in a query string.
-- The MCP endpoint sits behind the same checks, and the SDK's own DNS-rebinding protection is enabled as a second layer.
+- The MCP endpoint is mounted inside the HTTP server, behind the same Host, Origin and token checks. The SDK's own rebinding guard is not used: it would need a second copy of the allowed-host list, and one list is easier to keep right than two.
 - Credentials are read from the environment (or `~/.tokengator/.env`) inside the collector at call time and never leave that function. The redaction helper used for logs and error messages strips anything that looks like a key or bearer value.
 
 ### D10. MCP: stateless HTTP and stdio over the same service

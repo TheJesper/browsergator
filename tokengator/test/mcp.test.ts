@@ -927,7 +927,8 @@ describe('managing accounts', () => {
     [{ custom: { label: 'Bad page', usageUrl: 'ftp://example', meters: [{ label: 'M', reset: { kind: 'none' } }] } }, ['Invalid input (custom.usageUrl)']],
     [{ custom: { label: 'Empty', meters: [] } }, ['custom.meters']],
     [{ provider: 'fakeai', price: { amount: 5, currency: 'dollars', period: 'month' } }, ['price.currency', 'three-letter currency code']],
-    [{ provider: 'fakeai', billingDay: 3 }, ['billingDay']]
+    [{ provider: 'fakeai', billingDay: 40 }, ['billingDay']],
+    [{ provider: 'fakeai', renewsOn: 3 }, ['renewsOn']]
   ])('add_account refuses %j and names the field', async (args, expected) => {
     const harness = await connect({ state: emptyState() });
     const answer = await refused(harness, 'add_account', args);

@@ -224,6 +224,9 @@ export interface Snapshot {
   throttles: MeterRecord[];
 }
 
+const cents = (money: Summary['atRisk']): Summary['atRisk'] =>
+  Object.fromEntries(Object.entries(money).map(([currency, amount]) => [currency, round(amount, 2)]));
+
 /** The machine-readable twin of the brief: what `what_to_use` and `status --json` return. */
 export function snapshot(state: State, nowMs: number, tz: string = localZone()): Snapshot {
   const summary = summarise(state, nowMs);
@@ -240,8 +243,8 @@ export function snapshot(state: State, nowMs: number, tz: string = localZone()):
       behind: summary.behind,
       hot: summary.hot,
       stale: summary.stale,
-      atRisk: summary.atRisk,
-      lost30: summary.lost30,
+      atRisk: cents(summary.atRisk),
+      lost30: cents(summary.lost30),
       lost30IsEstimate: summary.lostIsEstimate,
       utilisation30Percent: summary.utilisation30 === null ? null : round(summary.utilisation30 * 100),
       nextReset:

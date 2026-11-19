@@ -745,6 +745,12 @@ describe('HTTP API', () => {
     expect(await errorOf(missing)).toMatchObject({ code: 'validation', field: 'preset.provider' });
     const wrongType = await send(harness, 'POST', '/api/accounts', { preset: { provider: 7 } });
     expect(wrongType.status).toBe(400);
+    const badDay = await send(harness, 'POST', '/api/accounts', { preset: { provider: 'fakeai', billingDay: '17' } });
+    expect(await errorOf(badDay)).toMatchObject({ code: 'validation', field: 'preset.billingDay' });
+    const lateDay = await send(harness, 'POST', '/api/accounts', { preset: { provider: 'fakeai', billingDay: 40 } });
+    expect(await errorOf(lateDay)).toMatchObject({ code: 'validation', field: 'billingDay' });
+    const goodDay = await send(harness, 'POST', '/api/accounts', { preset: { provider: 'fakeai', label: 'Dated', billingDay: 17 } });
+    expect(goodDay.status).toBe(201);
   });
 
   it('answers malformed documents with 400 instead of failing inside', async () => {

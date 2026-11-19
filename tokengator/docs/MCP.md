@@ -70,9 +70,10 @@ state only.
 additional fields.
 
 **Time.** Agents have no clock, so every text result that depends on the time starts with
-`As of <local time> <zone> (<UTC instant>).` Structured results of the reading tools carry `generatedAt`
-and `timeZone`. All instants in structured content are ISO 8601 in UTC. An instant you send (`resetsAt`) must carry a zone, for example `2026-11-21T09:00:00Z` or
-`2026-11-21T10:00:00+01:00`; for a countdown shown on a page use `resetsInMinutes` instead.
+`As of <local time> <zone> (<UTC instant>).` The reading tools whose answer depends on the time also return
+`generatedAt` and `timeZone`. All instants in structured content are ISO 8601 in UTC. An instant you send
+(`resetsAt`) must carry a zone, for example `2026-11-21T09:00:00Z` or `2026-11-21T10:00:00+01:00`; for a
+countdown shown on a page use `resetsInMinutes` instead.
 
 **Naming an account.** `account` accepts the account id (`claude-max`), its label, its provider, or any
 words that match exactly one account. A name that matches several is refused with the candidates.
@@ -99,7 +100,7 @@ uses the account's main allowance.
 | `snoozed` | The account is hidden from the queue and from alerts for now. |
 | `headline`, `recommendation` | The same sentences the dashboard shows. |
 
-`null` means unknown, never zero.
+`null` means unknown or not applicable, never zero.
 
 ## Examples
 
@@ -129,8 +130,12 @@ As of 12:00 UTC (2026-11-19T12:00:00.000Z).
 5. Team Beta, Weekly: Used up: resets in 3d
 ```
 
-Structured content, selected fields. `queue` holds full meter records; `omitted` says what was left out of
-it (`includeSettled: true` keeps used-up, expired and balance meters; `limit` is 1 to 50, default 10):
+The text lists the meters of every account that is not snoozed, up to `limit` (1 to 50, default 10).
+
+Structured content, selected fields. `queue` holds full meter records, most urgent first. Unless
+`includeSettled` is true it leaves out meters with nothing left to spend (used up, expired, or a balance
+without a reset), and `omitted` counts what was left out. Meters of a snoozed account come last, marked
+`snoozed`. `throttles` lists the rate limits for context:
 
 ```json
 {
@@ -289,9 +294,10 @@ Suno Pro, Credits: Behind pace: about 25% will expire, resets in 9d ($2.48 at ri
 }
 ```
 
-Arguments: `account` (required), `meter`, exactly one of `used`, `remaining`, `usedPercent`,
-`remainingPercent` (percentages are 0 to 100), `limit`, a reset as `resetsAt` or `resetsInMinutes`, and
-`note`. A call needs an amount, a reset, or both.
+Arguments: `account` (required), `meter`, at most one amount (`used`, `remaining`, `usedPercent` or
+`remainingPercent`; percentages are 0 to 100), `limit`, a reset as `resetsAt` or `resetsInMinutes`, and
+`note`. A call needs an amount, a reset, or both. The reading is stored with the reporter and the note,
+and the result states the meter's new forecast.
 
 ### `quick_update`
 
@@ -375,7 +381,8 @@ From a custom definition:
 
 Give exactly one of `provider` or `custom`. `plan` picks the preset's plan by id or name (its first plan
 when omitted), `label` renames the account, and `price` overrides the preset price or prices a custom
-account (`null` for none). A custom meter takes `label`, `reset` and, optionally, `key`,
+account (`null` for none). `billingDay` (1 to 31) places a preset's billing-date quota on the day the
+subscription renews; without it the first reported reset time sets the schedule. A custom meter takes `label`, `reset` and, optionally, `key`,
 `role`, `unit` (default `percent`), `unitLabel`, `limit` (required unless the unit is percent), `used`,
 `resetsAt`, `rollover` and `valueShare`. `reset.kind` is one of `rolling` (opens on first use, lasts
 `hours`), `interval` (every `hours`; a weekly cap is 168), `daily`, `monthly` (`day`, `time`, `tz`), `once`

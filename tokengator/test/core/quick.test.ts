@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { addAccount, type AccountInput, type MeterInput } from '../../src/core/accounts.js';
-import { defaultMeter, parseDuration, parseQuick, parseWhen, previewReading, resolveTarget } from '../../src/core/quick.js';
+import { defaultMeter, parseDuration, parseQuick, parseWhen, previewReading, resolveMeterIn, resolveTarget } from '../../src/core/quick.js';
 import { applyReadingToState } from '../../src/core/reset.js';
 import { DAY, HOUR, MINUTE, iso } from '../../src/core/time.js';
 import { emptyState, type Account, type Meter, type Reading, type State } from '../../src/core/types.js';
@@ -548,3 +548,37 @@ describe('parseQuick', () => {
     });
   });
 });
+
+describe('a meter word that also occurs in the account name', () => {
+  const NOW_MS = Date.parse('2026-11-19T10:00:00Z');
+  const state = addAccount(emptyState(), {
+    label: 'Max Plan',
+    meters: [
+      { label: 'Weekly', unit: 'percent', reset: { kind: 'interval', hours: 168 } },
+      { label: 'Max burst', unit: 'percent', reset: { kind: 'interval', hours: 168 }, valueShare: 0 }
+    ]
+  }, NOW_MS).state;
+
+  it('is left over for the meter instead of being swallowed by the account', () => {
+    const found = resolveTarget(state, ['max-plan', 'max']);
+    expect(found.ok && found.meter.label).toBe('Max burst');
+    const parsed = parseQuick('max plan max 30%', state, NOW_MS, 'UTC');
+    expect(parsed.ok && parsed.meter.label).toBe('Max burst');
+  });
+
+  it('still reads the bare account name as its main meter', () => {
+    const found = resolveTarget(state, ['max', 'plan']);
+    expect(found.ok && found.meter.label).toBe('Weekly');
+  });
+
+  it('resolves a meter inside a known account by key, label or words', () => {
+    const account = state.accounts[0]!;
+    expect(resolveMeterIn(account, 'max')).toMatchObject({ ok: true, meter: { label: 'Max burst' } });
+    expect(resolveMeterIn(account, 'weekly')).toMatchObject({ ok: true, meter: { label: 'Weekly' } });
+    expect(resolveMeterIn(account, '')).toMatchObject({ ok: true, meter: { label: 'Weekly' } });
+    const missing = resolveMeterIn(account, 'monthly');
+    expect(missing.ok).toBe(false);
+    expect(!missing.ok && missing.candidates.map((candidate) => candidate.meterId)).toEqual(['max-plan:weekly', 'max-plan:max-burst']);
+  });
+});
+

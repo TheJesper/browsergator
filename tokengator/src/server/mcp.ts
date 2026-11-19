@@ -183,6 +183,13 @@ const addAccountInput = z.strictObject({
   plan: z.string().min(1).max(60).optional().describe("With provider: the plan's id or name (the provider's first plan when omitted). With custom: a plan name to show."),
   label: z.string().min(1).max(60).optional().describe('Name to show. Overrides the preset name or custom.label.'),
   price: priceArg.nullable().optional().describe('Overrides the preset price, or prices a custom account. null means no price.'),
+  billingDay: z
+    .number()
+    .int()
+    .min(1)
+    .max(31)
+    .optional()
+    .describe('With provider: the day of the month the subscription renews, for plans whose quota resets on the billing date. The first reported reset time corrects it either way.'),
   custom: z
     .strictObject({
       label: z.string().min(1).max(60).describe('Name of the subscription.'),
@@ -790,10 +797,10 @@ export function createMcpServer(deps: McpDeps): McpServer {
   };
 
   const viewsOf = (account: Account, nowMs: number): MeterView[] => viewAccount(account, nowMs);
-  const recordsOf = (account: Account, nowMs: number): MeterRecord[] => viewsOf(account, nowMs).map((view) => meterRecord(view, nowMs));
+  const recordsOf = (account: Account, nowMs: number): MeterRecord[] => viewsOf(account, nowMs).map((view) => meterRecord(view, nowMs, tz));
   const meterLine = (view: MeterView, nowMs: number): string => {
     const freshness = view.ageMs === null ? ' (no reading yet)' : view.stale ? ' (stale)' : '';
-    return `- ${view.meter.label} [${view.meter.key}]: ${headline(view, nowMs)}${freshness}`;
+    return `- ${view.meter.label} [${view.meter.key}]: ${headline(view, nowMs, tz)}${freshness}`;
   };
 
   /** The answer of every tool that changed one meter: its new headline, as the shared status line, and the reasoning behind it. */
@@ -801,11 +808,11 @@ export function createMcpServer(deps: McpDeps): McpServer {
     const now = service.nowMs();
     const view = viewsOf(outcome.account, now).find((candidate) => candidate.id === outcome.meter.id);
     if (!view) throw new NotFoundError(`No meter with id "${outcome.meter.id}".`);
-    const explanation = explain(view, now);
-    return done([asOf(now), lead, statusLine(view, now), explanation], {
+    const explanation = explain(view, now, tz);
+    return done([asOf(now), lead, statusLine(view, now, tz), explanation], {
       accountId: outcome.account.id,
       meterId: outcome.meter.id,
-      meter: meterRecord(view, now),
+      meter: meterRecord(view, now, tz),
       explanation,
       ...extra
     });
@@ -816,7 +823,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     const views = viewsOf(account, now);
     return done([asOf(now), lead, ...views.map((view) => meterLine(view, now)), ...tail], {
       account: accountSummary(account),
-      meters: views.map((view) => meterRecord(view, now)),
+      meters: views.map((view) => meterRecord(view, now, tz)),
       ...extra
     });
   };
@@ -918,8 +925,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
             lines.push(`Finished windows on record: ${cycles.length}. Unused at each reset, oldest first: ${unused}.`);
           }
           return {
-            ...meterRecord(view, now),
-            explanation: explain(view, now),
+            ...meterRecord(view, now, tz),
+            explanation: explain(view, now, tz),
             reset: view.meter.reset,
             rollover: view.meter.rollover,
             valueShare: view.meter.valueShare,
@@ -1228,9 +1235,10 @@ export function createMcpServer(deps: McpDeps): McpServer {
         }
         const source = agentSource();
         if (args.provider !== undefined) {
-          const overrides: { label?: string; price?: Price | null } = {};
+          const overrides: { label?: string; price?: Price | null; billingDay?: number } = {};
           if (args.label !== undefined) overrides.label = args.label;
           if (args.price !== undefined) overrides.price = args.price;
+          if (args.billingDay !== undefined) overrides.billingDay = args.billingDay;
           const account = await service.addFromPreset(args.provider, args.plan, overrides, source);
           const preset = findProvider(CATALOG, account.providerId);
           const tail = [
@@ -1599,8 +1607,8 @@ export function runMcpStdio(deps: McpDeps): Promise<void> {
         .catch(() => undefined)
         .then(resolve);
     };
-    // The SDK transport never notices the end of its input. A client that exits closes our stdin, and
-    // without these the process would sit there holding the state file's watcher open.
+    // The SDK transport never notices the end of its input. A client that exits closes our stdin; without
+    // these the promise would never settle and the command could not shut down in order.
     process.stdin.once('end', finish);
     process.stdin.once('close', finish);
     // The client went away while an answer was being written.

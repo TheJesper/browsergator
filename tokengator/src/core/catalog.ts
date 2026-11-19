@@ -178,7 +178,7 @@ export const CATALOG: readonly ProviderPreset[] = [
       'gemini.google.com/usage shows the 5-hour and weekly usage as percentages with reset times. Flow and Flow Music credits are at one.google.com/ai/activity.',
     collectors: [],
     plans: [
-      plan('plus', 'Plus', usd(7.99), [
+      plan('plus', 'Plus', usd(4.99), [
         session(),
         weeklyFromFirstUse('Weekly limit', 'weekly', 0.7),
         billingMonth('flow-credits', 'Monthly Flow credits', 'credits', 200, { valueShare: 0.3 }),
@@ -427,7 +427,7 @@ export const CATALOG: readonly ProviderPreset[] = [
     howToRead: 'The credit counter in the app shows what is left; plan credits expire on the renewal date.',
     collectors: [],
     plans: [
-      plan('standard', 'Standard', usd(15), [credits(625)]),
+      plan('standard', 'Standard', null, [credits(625)], 'enter the price you pay'),
       plan('pro', 'Pro', usd(35), [credits(2250)]),
       plan('max', 'Max', null, [credits(9500, 'Monthly credits', { rollover: 'carries' })], 'up to one month of unused credits carries over')
     ]

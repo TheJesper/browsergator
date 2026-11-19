@@ -80,8 +80,8 @@ When reporting:
 
 - Mind the direction. Some pages show percent **used** (Claude), others percent **left** (Codex).
   Use `usedPercent` or `remainingPercent` accordingly, or `used` / `remaining` for counted units.
-- Include the reset. Pass `resetsAt` as an ISO time, or `resetsInMinutes` when the page says
-  "resets in 3h 20m" (that is 200).
+- Include the reset. Use `resetsInMinutes` when the page says "resets in 3h 20m" (that is 200).
+  Use `resetsAt` only with a zone (`2026-11-21T09:00:00Z` or `+01:00`); a time without one is refused.
 - Name the meter when an account has several: `meter: "weekly"`, `"session"`, `"credits"`.
 - If the name is ambiguous the tool returns candidates with ids. Retry with the id.
 

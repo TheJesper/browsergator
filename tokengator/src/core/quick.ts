@@ -52,8 +52,42 @@ function words(text: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * True when every token is the start of a different word. Each word can be claimed once: on an account
+ * "Max Plan" the line "max plan max" has one "max" too many for the name, so the last one is left over
+ * for the meter instead of being swallowed.
+ */
 function matches(tokens: string[], haystack: string[]): boolean {
-  return tokens.every((token) => haystack.some((word) => word.startsWith(token)));
+  const pool = [...new Set(haystack)];
+  const take = (index: number, free: string[]): boolean => {
+    if (index === tokens.length) return true;
+    const token = tokens[index] as string;
+    return free.some((word, at) => word.startsWith(token) && take(index + 1, [...free.slice(0, at), ...free.slice(at + 1)]));
+  };
+  return take(0, pool);
+}
+
+/** Finds a meter inside one account by key, label or unambiguous words. Used when the account is already known. */
+export function resolveMeterIn(
+  account: Account,
+  meterName: string
+): { ok: true; meter: Meter } | { ok: false; error: string; candidates: QuickCandidate[] } {
+  const wanted = meterName.trim();
+  const tokens = words(wanted);
+  const all = (): QuickCandidate[] => account.meters.map((meter) => ({ accountId: account.id, meterId: meter.id, label: `${account.label}, ${meter.label}` }));
+  if (tokens.length === 0) {
+    const meter = defaultMeter(account);
+    return meter ? { ok: true, meter } : { ok: false, error: `${account.label} has no meters.`, candidates: [] };
+  }
+  const exact = account.meters.filter((meter) => meter.id === wanted || meter.key === tokens.join('-') || meter.label.toLowerCase() === wanted.toLowerCase());
+  if (exact.length === 1) return { ok: true, meter: exact[0] as Meter };
+  const loose = account.meters.filter((meter) => matches(tokens, meterWords(meter)));
+  if (loose.length === 1) return { ok: true, meter: loose[0] as Meter };
+  return {
+    ok: false,
+    error: loose.length === 0 ? `${account.label} has no meter matching "${wanted}".` : `"${wanted}" matches more than one meter of ${account.label}.`,
+    candidates: loose.length === 0 ? all() : loose.map((meter) => ({ accountId: account.id, meterId: meter.id, label: `${account.label}, ${meter.label}` }))
+  };
 }
 
 function accountWords(account: Account): string[] {

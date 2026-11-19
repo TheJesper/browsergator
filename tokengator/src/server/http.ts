@@ -758,10 +758,15 @@ export class TokengatorHttpServer {
           const preset = asObject(input['preset'], 'preset');
           const provider = optionalText(preset, 'provider', 'preset.provider');
           if (!provider) throw new ValidationError('preset.provider', 'preset.provider is required.');
-          const overrides: { label?: string; price?: Price | null } = {};
+          const overrides: { label?: string; price?: Price | null; billingDay?: number | null } = {};
           const label = optionalText(preset, 'label', 'preset.label');
           if (label !== undefined) overrides.label = label;
           if (preset['price'] !== undefined) overrides.price = preset['price'] as Price | null;
+          const billingDay = preset['billingDay'];
+          if (billingDay !== undefined && billingDay !== null) {
+            if (typeof billingDay !== 'number') throw new ValidationError('preset.billingDay', 'preset.billingDay must be a whole number from 1 to 31.');
+            overrides.billingDay = billingDay;
+          }
           const account = await service.addFromPreset(provider, optionalText(preset, 'plan', 'preset.plan'), overrides);
           sendJson(res, 201, { account });
           return;
