@@ -537,20 +537,21 @@ describe('one wording everywhere', () => {
     expect(new Set(queue.map((v) => v.tier))).toEqual(new Set<Tier | null>(TIER_ORDER));
 
     for (const v of queue) {
-      const sentence = headline(v, NOW);
+      // Everything is asked for in the same zone: a sentence can carry a clock time.
+      const sentence = headline(v, NOW, 'UTC');
       const record = snap.queue.find((entry) => entry.id === v.id);
       expect(record?.headline).toBe(sentence);
-      expect(record?.recommendation).toBe(recommend(v, NOW));
+      expect(record?.recommendation).toBe(recommend(v, NOW, 'UTC'));
       expect(record?.state).toBe(stateLabel(v));
-      expect(meterRecord(v, NOW)).toEqual(record);
-      expect(statusLine(v, NOW)).toContain(sentence);
+      expect(meterRecord(v, NOW, 'UTC')).toEqual(record);
+      expect(statusLine(v, NOW, 'UTC')).toContain(sentence);
       expect(meterMarkdown(v, NOW, 'UTC')).toContain(`**${sentence}**`);
       expect(agentPrompt(v, NOW, 'UTC')).toContain(sentence);
-      if (!v.snoozed) expect(lines.some((line) => line.endsWith(statusLine(v, NOW)))).toBe(true);
+      if (!v.snoozed) expect(lines.some((line) => line.endsWith(statusLine(v, NOW, 'UTC')))).toBe(true);
     }
 
     const throttle = viewState(state, NOW).find((v) => v.tier === null) as MeterView;
-    expect(snap.throttles).toEqual([meterRecord(throttle, NOW)]);
+    expect(snap.throttles).toEqual([meterRecord(throttle, NOW, 'UTC')]);
     expect(snap.throttles[0]).toMatchObject({ headline: 'Blocked: reopens in 1h 10m', tier: 'blocked', role: 'throttle' });
   });
 

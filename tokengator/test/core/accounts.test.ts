@@ -1036,10 +1036,11 @@ describe('editing a meter (review findings)', () => {
     state = updateMeter(state, 'suno:credits', { resetsAt: '2026-12-12T00:00:00Z' }, NOW_MS);
     const meter = only(state);
     expect(meter.reset.kind).toBe('monthly');
-    expect(meter.reset).toMatchObject({ day: 12 });
-    // The windows that follow end on the same day of each month, in the rule's own zone, not 730.5 hours apart.
+    // The day is the one that instant falls on where the user is, which is where the rule keeps its clock.
     const zone = (meter.reset as { tz: string }).tz;
     const day = (meter.reset as { day: number }).day;
+    expect(day).toBe(zonedParts(Date.parse('2026-12-12T00:00:00Z'), zone).day);
+    // The windows that follow end on that day of each month, not 730.5 hours apart.
     for (const months of [1, 2, 3, 4]) {
       const end = only(rollState(state, Date.parse('2026-12-12T00:00:00Z') + months * 31 * DAY - 20 * DAY)).resetsAt as string;
       expect(zonedParts(Date.parse(end), zone).day, end).toBe(day);
