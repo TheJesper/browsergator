@@ -17,7 +17,7 @@ import {
   type Tier
 } from '../../src/core/forecast.js';
 import { formatMoneyTotals } from '../../src/core/format.js';
-import { applyReadingToState, rollState } from '../../src/core/reset.js';
+import { applyReadingToState, effectiveShare, rollState } from '../../src/core/reset.js';
 import { DAY, HOUR, MINUTE, MONTH, iso } from '../../src/core/time.js';
 import { emptyState, type Account, type Price, type State } from '../../src/core/types.js';
 import { explain, recommend, statusLine, summaryLine } from '../../src/core/wording.js';
@@ -672,7 +672,7 @@ describe('value at risk', () => {
     expect(yearlyPriced.valueAtRisk).toBeCloseTo(monthlyPriced.valueAtRisk as number, 9);
   });
 
-  it('never values a window above one month of the plan', () => {
+  it('values every calendar month at one fee, and longer windows by their length', () => {
     const state = add(
       emptyState(),
       'Copilot',
@@ -684,8 +684,27 @@ describe('value at risk', () => {
     const december = viewState(state, utc(2026, 12, 16))[0] as MeterView;
     expect(december.windowMs).toBe(31 * DAY);
     expect(december.windowValue).toBe(10);
+    // February has 28 days, fewer than the mean month, and is still one fee's worth.
+    const february = add(
+      emptyState(),
+      'Copilot',
+      [{ label: 'Premium requests', unit: 'requests', limit: 300, used: 0, reset: { kind: 'monthly', day: 1, time: '00:00', tz: 'UTC' } }],
+      { price: { amount: 10, currency: 'USD', period: 'month' } },
+      utc(2027, 2, 10)
+    );
+    const inFebruary = viewState(february, utc(2027, 2, 10))[0] as MeterView;
+    expect(inFebruary.windowMs).toBe(28 * DAY);
+    expect(inFebruary.windowValue).toBe(10);
+    // Two months of quota on a monthly price is two fees.
     const sixtyDays = view(windowed(1440, 0.5, 20), { price: USD_100 });
-    expect(sixtyDays.windowValue).toBe(100);
+    expect(sixtyDays.windowValue).toBeCloseTo((100 * 60 * DAY) / MONTH, 9);
+    // A yearly allowance on a yearly price is what was paid for the year, not a twelfth of it.
+    const yearly = view(windowed(8766, 0.5, 20), { price: { amount: 1200, currency: 'USD', period: 'year' } });
+    expect(yearly.windowValue).toBeCloseTo(1200, 0);
+    expect(yearly.valueAtRisk).toBeGreaterThan(600);
+    // A quarter on a 30-dollar plan is 90 dollars.
+    const quarterly = view(windowed(2191.5, 0.5, 20), { price: { amount: 30, currency: 'USD', period: 'month' } });
+    expect(quarterly.windowValue).toBeCloseTo(90, 1);
   });
 
   it('is absent without a price, and such meters stay out of money totals', () => {
@@ -1037,5 +1056,91 @@ describe('summarise', () => {
     let state = add(emptyState(), 'Spent soon', [weeklyResettingIn(2, 100)]);
     state = add(state, 'Still open', [weeklyResettingIn(50, 40)]);
     expect(summarise(state, NOW).nextReset?.account.label).toBe('Still open');
+  });
+});
+
+describe('a one-off pack that was tracked with some of it already spent (review finding)', () => {
+  const pack = (nowMs: number, expiresInDays: number, used: number): State =>
+    add(emptyState(), 'OpenAI API', [{ label: 'Prepaid credits', unit: 'usd', limit: 50, used, reset: { kind: 'once' }, resetsAt: iso(nowMs + expiresInDays * DAY) }], {}, nowMs);
+  const first = (state: State, nowMs: number): MeterView => viewState(state, nowMs)[0] as MeterView;
+
+  it('is behind pace from the start when nothing has been spent since, never "running hot"', () => {
+    const state = pack(NOW, 60, 30);
+    const tiers = [1, 6, 15, 30, 45, 55, 58].map((day) => first(state, NOW + day * DAY).tier);
+    expect(tiers).not.toContain('hot');
+    expect(tiers).not.toContain('on-pace');
+    // Too early to say on the first day, behind from then on, and "use now" in its last three days.
+    expect(tiers).toEqual(['fresh', 'behind', 'behind', 'behind', 'behind', 'behind', 'use-now']);
+    const midway = first(state, NOW + 30 * DAY);
+    expect(midway.runsOutAtMs).toBeNull();
+    // Nearly all of the 20 dollars left is expected to expire, and that is what is at risk, in credits.
+    expect(midway.valueBasis).toBe('credit');
+    expect(midway.valueAtRisk).toBeGreaterThan(17);
+    expect(midway.valueAtRisk).toBeLessThanOrEqual(20);
+    expect(midway.requiredMultiple).toBeNull();
+    expect(summarise(state, NOW + 30 * DAY).behind).toBe(1);
+  });
+
+  it('is running hot when what has been spent since tracking began would empty it early', () => {
+    let state = pack(NOW, 60, 30);
+    // Fifteen dollars in ten days, five left, fifty days to go.
+    state = applyReadingToState(state, 'openai-api', 'openai-api:prepaid-credits', { used: 45 }, NOW + 10 * DAY);
+    const view = first(state, NOW + 10 * DAY);
+    expect(view.tier).toBe('hot');
+    // Five dollars at a dollar and a half a day lasts three and a third days.
+    expect(((view.runsOutAtMs as number) - (NOW + 10 * DAY)) / DAY).toBeCloseTo(10 / 3, 6);
+    expect(view.valueAtRisk).toBe(0);
+  });
+
+  it('measures a pack bought and tracked from nothing the way any window is measured', () => {
+    let state = pack(NOW, 60, 0);
+    state = applyReadingToState(state, 'openai-api', 'openai-api:prepaid-credits', { used: 25 }, NOW + 30 * DAY);
+    const view = first(state, NOW + 30 * DAY);
+    // Half of it in half the time: there is no earlier spending to set aside.
+    expect(view.tier).toBe('on-pace');
+    state = applyReadingToState(state, 'openai-api', 'openai-api:prepaid-credits', { used: 40 }, NOW + 40 * DAY);
+    expect(first(state, NOW + 40 * DAY).projectedFraction).toBeGreaterThan(0.8);
+  });
+});
+
+describe('one fee is split between quotas, never counted more than once (review finding)', () => {
+  it('scales the shares down when every quota of a plan was marked as worth the whole fee', () => {
+    // What a form with a tick box per meter produces: two allowances, each with share 1.
+    const state = add(
+      emptyState(),
+      'Custom plan',
+      [
+        { label: 'Monthly', unit: 'credits', limit: 1000, used: 0, valueShare: 1, resetsAt: iso(NOW + 15 * DAY), windowStartedAt: iso(NOW - 15 * DAY), reset: { kind: 'interval', hours: 720 } },
+        { ...weekly(0.5, 0), label: 'Weekly', valueShare: 1 },
+        { label: 'Third', unit: 'credits', limit: 10, used: 0, valueShare: 1, resetsAt: iso(NOW + 15 * DAY), windowStartedAt: iso(NOW - 15 * DAY), reset: { kind: 'interval', hours: 720 } }
+      ],
+      { price: { amount: 20, currency: 'USD', period: 'month' } }
+    );
+    const all = viewState(state, NOW);
+    // Per month: the monthly windows once each, the weekly window about 4.35 times.
+    const perMonth = all.reduce((sum, view) => sum + (view.windowValue as number) * (view.windowMs === WEEK ? MONTH / WEEK : 1), 0);
+    expect(perMonth).toBeLessThanOrEqual(20 * 1.02);
+    expect(perMonth).toBeGreaterThan(20 * 0.95);
+    const atRisk = summarise(state, NOW).atRisk['USD'] as number;
+    expect(atRisk).toBeLessThanOrEqual(20);
+  });
+
+  it('leaves shares that already fit alone, and never spends the fee on a dollar credit or a rate limit', () => {
+    const account = add(
+      emptyState(),
+      'Google AI Pro',
+      [
+        { ...weekly(0.5, 10), label: 'A', valueShare: 0.4 },
+        { ...weekly(0.5, 10), label: 'B', valueShare: 0.3 },
+        { label: 'Credit', unit: 'usd', limit: 100, used: 0, valueShare: 1, reset: { kind: 'interval', hours: 720 }, resetsAt: iso(NOW + 10 * DAY) },
+        { label: 'Session', role: 'throttle', reset: { kind: 'rolling', hours: 5 }, valueShare: 1 }
+      ],
+      { price: USD_100 }
+    ).accounts[0] as Account;
+    const [a, b, credit, session] = account.meters as [Account['meters'][number], Account['meters'][number], Account['meters'][number], Account['meters'][number]];
+    expect(effectiveShare(account, a)).toBe(0.4);
+    expect(effectiveShare(account, b)).toBe(0.3);
+    expect(effectiveShare(account, credit)).toBe(0);
+    expect(effectiveShare(account, session)).toBe(0);
   });
 });

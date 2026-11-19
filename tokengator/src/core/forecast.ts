@@ -103,13 +103,15 @@ export function projectUse(usedFraction: number, elapsedFraction: number): numbe
 function classify(input: {
   meter: Meter;
   usedFraction: number;
+  /** Share of the limit used since the window (or, for a one-off pack, the tracking) began. */
+  pacedFraction: number;
   remainingFraction: number;
   elapsedFraction: number | null;
   msLeft: number | null;
   horizonMs: number | null;
   projectedUnused: number;
 }): Tier {
-  const { meter, usedFraction, remainingFraction, elapsedFraction, msLeft, horizonMs, projectedUnused } = input;
+  const { meter, usedFraction, pacedFraction, remainingFraction, elapsedFraction, msLeft, horizonMs, projectedUnused } = input;
   if (meter.expired) return 'expired';
   if (usedFraction >= SPENT_AT) return 'spent';
   if (meter.reset.kind === 'none') return 'balance';
@@ -117,9 +119,10 @@ function classify(input: {
   if (msLeft <= horizonMs && remainingFraction >= USE_NOW_MIN_LEFT && projectedUnused >= USE_NOW_MIN_UNUSED) {
     return 'use-now';
   }
-  if (elapsedFraction >= 0.1 && usedFraction / elapsedFraction >= HOT_PACE) {
-    // Run-out lands at elapsed/used of the window; "well before" means a tenth of a window early.
-    const runOutAt = elapsedFraction / usedFraction;
+  if (elapsedFraction >= 0.1 && pacedFraction > 0 && pacedFraction / elapsedFraction >= HOT_PACE) {
+    // At this pace what is left lasts remaining/pace of a window more; "well before" the reset means
+    // running out with a tenth of the window still to go.
+    const runOutAt = elapsedFraction + (remainingFraction * elapsedFraction) / pacedFraction;
     if (1 - runOutAt >= 0.1) return 'hot';
   }
   if (elapsedFraction < FRESH_ELAPSED) return 'fresh';
@@ -199,10 +202,19 @@ export function viewMeter(account: Account, meter: Meter, nowMs: number): MeterV
   }
 
   const carries = meter.rollover === 'carries';
-  const projectedFraction = elapsedFraction === null ? null : projectUse(usedFraction, elapsedFraction);
+  // A one-off pack is usually tracked with something already spent. That part was not spent at the pace
+  // being measured: counted as such it reads as "running hot" for half the pack's life while the balance
+  // sits untouched. So for a pack, pace is what was used since the first reading of the tracked window,
+  // against what was left at that point.
+  const first = meter.samples[0];
+  const baseline = meter.reset.kind === 'once' && limit > 0 ? clamp((first ? first.used : used) / limit, 0, usedFraction) : 0;
+  const room = 1 - baseline;
+  const pacedFraction = usedFraction - baseline;
+  const projectedFraction =
+    elapsedFraction === null ? null : room > 0 ? baseline + room * projectUse(pacedFraction / room, elapsedFraction) : 1;
   const projectedUnused = projectedFraction === null || carries || meter.expired ? 0 : 1 - projectedFraction;
 
-  const tier = classify({ meter, usedFraction, remainingFraction, elapsedFraction, msLeft, horizonMs, projectedUnused });
+  const tier = classify({ meter, usedFraction, pacedFraction, remainingFraction, elapsedFraction, msLeft, horizonMs, projectedUnused });
 
   let requiredMultiple: number | null = null;
   let perDayToFinish: number | null = null;
@@ -210,14 +222,16 @@ export function viewMeter(account: Account, meter: Meter, nowMs: number): MeterV
   if (elapsedFraction !== null && msLeft !== null && msLeft > 0 && windowMs) {
     if (tier === 'use-now' || tier === 'behind') {
       perDayToFinish = remaining / (msLeft / DAY);
-      if (usedFraction > 0 && elapsedFraction > 0 && elapsedFraction < 1) {
-        const currentRate = usedFraction / elapsedFraction;
+      if (pacedFraction > 0 && elapsedFraction > 0 && elapsedFraction < 1) {
+        const currentRate = pacedFraction / elapsedFraction;
         const requiredRate = remainingFraction / (1 - elapsedFraction);
         requiredMultiple = requiredRate / currentRate;
       }
     }
-    if (tier === 'hot' && usedFraction > 0 && windowStartMs !== null) {
-      runsOutAtMs = windowStartMs + (nowMs - windowStartMs) / usedFraction;
+    if (tier === 'hot' && pacedFraction > 0 && windowStartMs !== null) {
+      // What is left, at the pace since the start. For a window that began at nothing used this is the
+      // same moment as start + elapsed / used.
+      runsOutAtMs = nowMs + ((nowMs - windowStartMs) * remainingFraction) / pacedFraction;
     }
   }
 

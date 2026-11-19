@@ -83,7 +83,7 @@ interface MeterForm {
 
 let formSeq = 0;
 
-function meterForm(meter: Meter | null, onRemove: ((form: MeterForm) => void) | null): MeterForm {
+function meterForm(meter: Meter | null, onRemove: ((form: MeterForm) => void) | null, othersValued = false): MeterForm {
   const n = (formSeq += 1);
   const rule: ResetRule = meter?.reset ?? { kind: 'interval', hours: 168 };
   const hours = rule.kind === 'rolling' || rule.kind === 'interval' ? rule.hours : 168;
@@ -103,7 +103,9 @@ function meterForm(meter: Meter | null, onRemove: ((form: MeterForm) => void) | 
   const zone = textInput(`m${n}-tz`, rule.kind === 'daily' || rule.kind === 'monthly' ? rule.tz : localZone(), 'Europe/Stockholm');
   const resetsAt = textInput(`m${n}-resets`, toLocalInput(meter?.resetsAt ?? null), '', 'datetime-local');
   const carries = h('input', { type: 'checkbox', id: `m${n}-carries`, checked: meter?.rollover === 'carries' }) as HTMLInputElement;
-  const valued = h('input', { type: 'checkbox', id: `m${n}-valued`, checked: meter ? meter.valueShare > 0 : true }) as HTMLInputElement;
+  // A new meter counts as money only when nothing else on the subscription does yet: one fee is split
+  // between the quotas that are ticked, so ticking a second one by default would quietly halve the first.
+  const valued = h('input', { type: 'checkbox', id: `m${n}-valued`, checked: meter ? meter.valueShare > 0 : !othersValued }) as HTMLInputElement;
   const partial = h('input', { type: 'checkbox', id: `m${n}-partial`, checked: meter?.partial === true }) as HTMLInputElement;
 
   const limitField = field('Limit', limit);
@@ -113,7 +115,7 @@ function meterForm(meter: Meter | null, onRemove: ((form: MeterForm) => void) | 
   const timeField = field('Time', time);
   const zoneField = field('Time zone', zone, 'An IANA name, for example America/Los_Angeles.');
   const resetsField = field('Current window resets', resetsAt, 'Leave empty if you do not know yet.');
-  const valueRow = h('label', { class: 'check full' }, valued, 'Count unused quota of this meter as money lost');
+  const valueRow = h('label', { class: 'check full' }, valued, 'Count unused quota of this meter as money lost (the plan fee is split between the quotas that are ticked)');
   const carryRow = h('label', { class: 'check full' }, carries, 'Unused quota carries over to the next window');
   const partialRow = h('label', { class: 'check full' }, partial, 'Covers only part of the plan (one model family): reaching it does not block the rest');
 
@@ -522,7 +524,8 @@ export function editDialog(ctx: Ctx, account: Account): void {
       class: 'btn small',
       type: 'button',
       onclick: () => {
-        const form = meterForm(null, remove);
+        const othersValued = account.meters.some((existing) => existing.role === 'allowance' && existing.unit !== 'usd' && existing.valueShare > 0);
+        const form = meterForm(null, remove, othersValued);
         forms.push(form);
         list.appendChild(form.el);
       }

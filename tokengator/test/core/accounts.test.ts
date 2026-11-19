@@ -21,7 +21,7 @@ import { presetAccountInput, type PresetPlan, type ProviderPreset } from '../../
 import { viewState } from '../../src/core/forecast.js';
 import { applyReadingToState, rollState } from '../../src/core/reset.js';
 import { addSpendSource, recordSpend } from '../../src/core/spend.js';
-import { DAY, HOUR, iso } from '../../src/core/time.js';
+import { DAY, HOUR, iso, zonedParts } from '../../src/core/time.js';
 import { STATE_VERSION, emptyState, type Account, type Meter, type MeterSource, type Reading, type State } from '../../src/core/types.js';
 
 const utc = (y: number, mo: number, d: number, h = 0, mi = 0): number => Date.UTC(y, mo - 1, d, h, mi, 0);
@@ -556,7 +556,12 @@ describe('updateMeter', () => {
   it('keeps a month-long window when a monthly meter is given its exact reset time', () => {
     let state = addAccount(emptyState(), base({ meters: [{ label: 'Weekly', unit: 'credits', limit: 2500, used: 300, reset: { kind: 'monthly', day: 12, time: '00:00', tz: 'UTC' } }] }), NOW).state;
     state = updateMeter(state, 'claude-max:weekly', { resetsAt: '2026-12-12T14:37:00Z' }, NOW);
-    expect(meterOf(state)).toMatchObject({ resetsAt: '2026-12-12T14:37:00.000Z', windowStartedAt: '2026-11-12T00:00:00.000Z' });
+    // The exact time is taken as the schedule's, as a reading's would be, so the window is a whole month.
+    expect(meterOf(state)).toMatchObject({
+      resetsAt: '2026-12-12T14:37:00.000Z',
+      windowStartedAt: '2026-11-12T14:37:00.000Z',
+      reset: { kind: 'monthly', day: 12, time: '14:37', tz: 'UTC' }
+    });
     const view = viewState(state, NOW)[0];
     expect(view?.elapsedFraction).toBeGreaterThan(0.2);
     expect(view?.tier).toBe('behind');
@@ -1019,5 +1024,62 @@ describe('input bounds (nothing that is stored can break the next load)', () => 
     expect(imported.cycles[0]?.wastedValue).toBeNull();
     // What comes out is a document that says the same thing after a trip through JSON.
     expect(JSON.parse(JSON.stringify(imported))).toEqual(imported);
+  });
+});
+
+describe('editing a meter (review findings)', () => {
+  const NOW_MS = Date.parse('2026-11-19T10:00:00Z');
+  const only = (state: State): Meter => (state.accounts[0] as Account).meters[0] as Meter;
+
+  it('turns a billing-cycle placeholder into a monthly rule when the reset time is edited in, as a reading does', () => {
+    let state = addAccount(emptyState(), { label: 'Suno', meters: [{ label: 'Credits', unit: 'credits', limit: 2500, reset: { kind: 'interval', hours: 730.5 } }] }, NOW_MS).state;
+    state = updateMeter(state, 'suno:credits', { resetsAt: '2026-12-12T00:00:00Z' }, NOW_MS);
+    const meter = only(state);
+    expect(meter.reset.kind).toBe('monthly');
+    expect(meter.reset).toMatchObject({ day: 12 });
+    // The windows that follow end on the same day of each month, in the rule's own zone, not 730.5 hours apart.
+    const zone = (meter.reset as { tz: string }).tz;
+    const day = (meter.reset as { day: number }).day;
+    for (const months of [1, 2, 3, 4]) {
+      const end = only(rollState(state, Date.parse('2026-12-12T00:00:00Z') + months * 31 * DAY - 20 * DAY)).resetsAt as string;
+      expect(zonedParts(Date.parse(end), zone).day, end).toBe(day);
+    }
+    const viaReading = applyReadingToState(
+      addAccount(emptyState(), { label: 'Suno', meters: [{ label: 'Credits', unit: 'credits', limit: 2500, reset: { kind: 'interval', hours: 730.5 } }] }, NOW_MS).state,
+      'suno',
+      'suno:credits',
+      { used: 0, resetsAt: '2026-12-12T00:00:00Z' },
+      NOW_MS
+    );
+    expect(only(viaReading).reset).toEqual(meter.reset);
+  });
+
+  it('leaves the rule alone when the same edit also sets the rule', () => {
+    let state = addAccount(emptyState(), { label: 'Suno', meters: [{ label: 'Credits', unit: 'credits', limit: 2500, reset: { kind: 'interval', hours: 730.5 } }] }, NOW_MS).state;
+    state = updateMeter(state, 'suno:credits', { reset: { kind: 'interval', hours: 168 }, resetsAt: '2026-11-25T00:00:00Z' }, NOW_MS);
+    expect(only(state).reset).toEqual({ kind: 'interval', hours: 168 });
+  });
+
+  it('carries the share that was used over to the new limit when a percent meter gets a real unit', () => {
+    let state = addAccount(emptyState(), { label: 'Suno', meters: [{ label: 'Credits', reset: { kind: 'interval', hours: 168 }, used: 62 }] }, NOW_MS).state;
+    state = updateMeter(state, 'suno:credits', { unit: 'credits', limit: 2500 }, NOW_MS);
+    expect(only(state)).toMatchObject({ unit: 'credits', limit: 2500, used: 1550 });
+    // Back again is the same share.
+    state = updateMeter(state, 'suno:credits', { unit: 'percent' }, NOW_MS);
+    expect(only(state)).toMatchObject({ unit: 'percent', limit: 100, used: 62 });
+    // An amount given in the same edit wins.
+    state = updateMeter(state, 'suno:credits', { unit: 'credits', limit: 2500, used: 900 }, NOW_MS);
+    expect(only(state).used).toBe(900);
+  });
+
+  it('asks for the limit when a meter leaves percent without one', () => {
+    const state = addAccount(emptyState(), { label: 'Suno', meters: [{ label: 'Credits', reset: { kind: 'interval', hours: 168 }, used: 62 }] }, NOW_MS).state;
+    let field: string | undefined;
+    try {
+      updateMeter(state, 'suno:credits', { unit: 'credits' }, NOW_MS);
+    } catch (error) {
+      field = (error as ValidationError).field;
+    }
+    expect(field).toBe('limit');
   });
 });

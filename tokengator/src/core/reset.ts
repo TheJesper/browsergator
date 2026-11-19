@@ -251,18 +251,35 @@ export function monthlyPrice(account: Pick<Account, 'price'>): number | null {
  * Money a full window of this meter stands for. A meter counted in dollars is its own value; anything else
  * is valued as its share of the plan price.
  */
-export function windowValue(account: Pick<Account, 'price'>, meter: Meter, lengthMs: number | null): number | null {
+/**
+ * The share of the plan fee a meter stands for. One fee can be split between a plan's quotas but not
+ * counted more than once, so when the shares that were entered add up to more than the whole fee each
+ * is scaled down in proportion. That holds however the shares got there: a form with a tick box per
+ * meter, an agent, an import or an older file.
+ */
+export function effectiveShare(account: Pick<Account, 'meters'>, meter: Meter): number {
+  const counts = (candidate: Meter): boolean => candidate.role === 'allowance' && candidate.unit !== 'usd' && candidate.valueShare > 0;
+  if (!counts(meter)) return 0;
+  const total = account.meters.reduce((sum, candidate) => sum + (counts(candidate) ? candidate.valueShare : 0), 0);
+  return total > 1 ? meter.valueShare / total : meter.valueShare;
+}
+
+export function windowValue(account: Pick<Account, 'price' | 'meters'>, meter: Meter, lengthMs: number | null): number | null {
   if (meter.role !== 'allowance') return null;
   if (meter.unit === 'usd') return meter.limit > 0 ? meter.limit : null;
   const perMonth = monthlyPrice(account);
   if (perMonth === null) return null;
-  if (!(meter.valueShare > 0)) return null;
+  const share = effectiveShare(account, meter);
+  if (!(share > 0)) return null;
   // A one-off purchase is worth what was paid, however long it was tracked. It must not depend on a
   // window length: a pack that expires before its first reading has no window start to measure from.
-  if (meter.reset.kind === 'once') return perMonth * meter.valueShare;
+  if (meter.reset.kind === 'once') return perMonth * share;
   if (lengthMs === null) return null;
-  // A window is never worth more than one billing month.
-  return perMonth * Math.min(lengthMs / MONTH, 1) * meter.valueShare;
+  // Scaled by the window's length in months. A "month" on a calendar or a billing date is 28 to 31 days,
+  // and each of those is one fee's worth, not 0.92 or 1.02 of one. A quarter is three fees, a year twelve.
+  const months = lengthMs / MONTH;
+  const scale = lengthMs >= 27 * DAY && lengthMs <= 32 * DAY ? 1 : months;
+  return perMonth * scale * share;
 }
 
 /** Currency of the money figures of a meter. */

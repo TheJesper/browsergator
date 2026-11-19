@@ -13,7 +13,7 @@ import type {
   Unit
 } from './types.js';
 import { STATE_VERSION, emptyState } from './types.js';
-import { MAX_SAMPLES, anchorMeter, rollState } from './reset.js';
+import { MAX_SAMPLES, adoptSchedule, anchorMeter, rollState } from './reset.js';
 import { MAX_WINDOW_HOURS, MIN_WINDOW_HOURS, isAmount, isLimit, parseInstant, plainBlock, plainLine } from './limits.js';
 import { iso, isValidTimeZone, toMs } from './time.js';
 
@@ -112,6 +112,8 @@ function text(field: string, value: unknown, max: number, required: boolean): st
   if (trimmed.length > max) throw new ValidationError(field, `${field} must be at most ${max} characters.`);
   return trimmed || null;
 }
+
+const clampFraction = (value: number): number => Math.min(1, Math.max(0, value));
 
 function instant(field: string, value: unknown): string | null {
   if (value === undefined || value === null || value === '') return null;
@@ -335,6 +337,9 @@ export function updateMeter(state: State, meterId: string, patch: MeterPatch, no
     next.role = patch.role === 'throttle' ? 'throttle' : 'allowance';
     if (next.role === 'throttle') next.valueShare = 0;
   }
+  // Set when the unit changes away from percent: the share that was used has to be carried over to the
+  // new limit, or "62% used" would become "62 of 2,500 credits".
+  let carriedFraction: number | null = null;
   if ('unit' in patch && patch.unit !== undefined) {
     if (!UNIT_IDS.includes(patch.unit)) throw new ValidationError('unit', `unit must be one of ${UNIT_IDS.join(', ')}.`);
     if (patch.unit !== next.unit) {
@@ -343,6 +348,9 @@ export function updateMeter(state: State, meterId: string, patch: MeterPatch, no
       if (patch.unit === 'percent') {
         next.used = next.limit > 0 ? (next.used / next.limit) * 100 : 0;
         next.limit = 100;
+      } else if (next.unit === 'percent') {
+        if (patch.limit === undefined) throw new ValidationError('limit', 'Give the limit in the new unit when changing a meter away from percent.');
+        carriedFraction = clampFraction(next.used / 100);
       }
     }
     next.unit = patch.unit;
@@ -355,6 +363,7 @@ export function updateMeter(state: State, meterId: string, patch: MeterPatch, no
   if ('limit' in patch && patch.limit !== undefined && next.unit !== 'percent') {
     if (!isLimit(patch.limit)) throw new ValidationError('limit', 'limit must be a number greater than 0.');
     next.limit = patch.limit;
+    if (carriedFraction !== null) next.used = carriedFraction * next.limit;
   }
   if ('used' in patch && patch.used !== undefined) {
     if (!isAmount(patch.used)) throw new ValidationError('used', 'used must be a number of 0 or more.');
@@ -377,6 +386,13 @@ export function updateMeter(state: State, meterId: string, patch: MeterPatch, no
     next.resetsAt = instant('resetsAt', patch.resetsAt);
     next.expired = false;
     if (!('windowStartedAt' in patch)) next.windowStartedAt = null;
+    // A reset time says something about the schedule too, whoever supplies it: a reading does this, and
+    // an edit must not differ. Without it a billing-cycle placeholder stays a 730.5-hour interval and its
+    // windows wander off the billing day.
+    const reported = toMs(next.resetsAt);
+    if (reported !== null && reported > nowMs && !('reset' in patch && patch.reset !== undefined)) {
+      next.reset = adoptSchedule(next.reset, reported);
+    }
   }
   if ('windowStartedAt' in patch) next.windowStartedAt = instant('windowStartedAt', patch.windowStartedAt);
   if ('rollover' in patch) next.rollover = patch.rollover === 'carries' ? 'carries' : 'none';
