@@ -5,6 +5,7 @@ import type { MeterView } from '../core/forecast.js';
 import { formatAmount, formatMoney, formatPercent } from '../core/format.js';
 import type { SpendSummary } from '../core/spend.js';
 import { formatMoment, toMs } from '../core/time.js';
+import { expiredMoney } from '../core/wording.js';
 import type { ClosedCycle } from '../core/types.js';
 import { h, s } from './dom.js';
 import { hideTip, showTip, withTip } from './ui.js';
@@ -168,7 +169,7 @@ export function cycleColumns(cycles: readonly ClosedCycle[], nowMs: number, widt
         ? h(
             'span',
             null,
-            `, ${cycle.confidence === 'estimated' ? 'about ' : ''}${formatPercent(cycle.wastedFraction)} expired${cycle.wastedValue && cycle.currency ? ` (${formatMoney(cycle.wastedValue, cycle.currency)})` : ''}`
+            `, ${cycle.confidence === 'estimated' ? 'about ' : ''}${formatPercent(cycle.wastedFraction)} expired${expiredMoney(cycle.wastedValue, cycle.currency, cycle.unit) ? ` (${expiredMoney(cycle.wastedValue, cycle.currency, cycle.unit)})` : ''}`
           )
         : h('span', null, ', nothing expired'),
       h('br'),

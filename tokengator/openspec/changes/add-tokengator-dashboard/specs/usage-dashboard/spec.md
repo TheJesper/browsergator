@@ -79,6 +79,21 @@ The dashboard SHALL accept a one-line update naming an account, optionally a met
 - **WHEN** the line matches no account or more than one
 - **THEN** nothing is saved and the candidates are offered for selection
 
+### Requirement: Quick entry refuses what it cannot read
+Quick entry SHALL refuse a line rather than guess: a word that only begins like a weekday or a month SHALL NOT be read as one, a date the calendar does not have SHALL NOT slide into the next month, and a comma in a number SHALL be read only as a thousands separator.
+
+#### Scenario: A word that is not a day
+- **WHEN** the user enters "copilot 40% resets monthly"
+- **THEN** nothing is saved and the answer says "monthly" was not understood
+
+#### Scenario: The 31st of November
+- **WHEN** the user enters "copilot 40% resets nov 31"
+- **THEN** nothing is saved
+
+#### Scenario: Decimal comma
+- **WHEN** the user enters "suno 1,5k left"
+- **THEN** nothing is saved, while "suno 1,200 left" stores 1,200 left
+
 ### Requirement: Copy actions
 The dashboard SHALL provide, for every meter and account, actions that copy a one-line status, a Markdown summary, the JSON record and an agent prompt, and SHALL provide a "copy brief" action that copies a Markdown summary of everything that needs using. Each copy SHALL be confirmed visibly, and when the clipboard is unavailable the text SHALL be shown selected so it can be copied by hand.
 

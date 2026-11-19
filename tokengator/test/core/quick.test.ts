@@ -582,3 +582,50 @@ describe('a meter word that also occurs in the account name', () => {
   });
 });
 
+
+describe('input that used to be misread instead of refused (review finding)', () => {
+  it('reads a day only from the start of its name, so words that merely begin like one are not days', () => {
+    // Thursday 19 November 2026: the next Monday is the 23rd, the next Thursday the 26th.
+    for (const word of ['mon', 'monday', 'Mon']) expect(parseWhen(word, NOW, 'UTC'), word).toBe(utc(2026, 11, 23));
+    for (const word of ['thu', 'thur', 'thurs', 'thursday']) expect(parseWhen(`${word} 09:00`, NOW, 'UTC'), word).toBe(utc(2026, 11, 26, 9, 0));
+    for (const word of ['wed', 'weds', 'wednesday']) expect(parseWhen(word, NOW, 'UTC'), word).toBe(utc(2026, 11, 25));
+    for (const word of ['monthly', 'month', 'months', 'friend', 'sunset', 'sunny', 'satisfied', 'tuesdays', 'wedding', 'mo']) {
+      expect(parseWhen(word, NOW, 'UTC'), word).toBeNull();
+    }
+  });
+
+  it('reads a month only from the start of its name', () => {
+    for (const text of ['dec 5', '5 dec', 'december 5', 'decem 5']) expect(parseWhen(text, NOW, 'UTC'), text).toBe(utc(2026, 12, 5));
+    expect(parseWhen('sept 3', NOW, 'UTC')).toBe(utc(2027, 9, 3));
+    for (const text of ['decade 5', 'marching 3', 'mayor 3', 'ju 3', 'junk 3']) expect(parseWhen(text, NOW, 'UTC'), text).toBeNull();
+  });
+
+  it('refuses a day the calendar does not have instead of sliding into the next month', () => {
+    for (const text of ['nov 31', '31 nov', '2026-11-31', '2026-11-31 09:00', 'feb 30', '2027-02-29', 'jun 31 18:00']) {
+      expect(parseWhen(text, NOW, 'UTC'), text).toBeNull();
+    }
+    // The 29th of February exists in 2028 only, and "feb 29" means the coming one or nothing.
+    expect(parseWhen('feb 29', NOW, 'UTC')).toBeNull();
+    expect(parseWhen('2028-02-29', NOW, 'UTC')).toBe(utc(2028, 2, 29));
+    expect(parseWhen('nov 30', NOW, 'UTC')).toBe(utc(2026, 11, 30));
+  });
+
+  it('does not change a schedule on the strength of a word it did not understand', () => {
+    const refused = rejected('copilot 40% resets monthly');
+    expect(refused.error).toMatch(/monthly/);
+    expect(rejected('copilot 40% resets nov 31').error).toMatch(/nov 31/);
+    // The same line with a real day still works.
+    expect(ok('copilot 40% resets mon').reading).toMatchObject({ usedPercent: 40, resetsAt: iso(utc(2026, 11, 23)) });
+  });
+
+  it('reads commas as thousands separators only, and refuses a decimal comma', () => {
+    expect(ok('suno 1,200 left').reading).toMatchObject({ remaining: 1200 });
+    expect(ok('elevenlabs 12,500 used').reading).toMatchObject({ used: 12_500 });
+    expect(ok('elevenlabs 1,234,567 used').reading).toMatchObject({ used: 1_234_567 });
+    expect(ok('suno 1.5k left').reading).toMatchObject({ remaining: 1500 });
+    for (const text of ['suno 1,5k left', 'suno 12,40 used', 'suno 1,23 left', 'suno 1,2345 left', 'suno ,500 left', 'suno 1,,200 left']) {
+      const result = parseQuick(text, fixture(), NOW, 'UTC');
+      expect(result.ok, text).toBe(false);
+    }
+  });
+});

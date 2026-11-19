@@ -84,6 +84,16 @@ export function moneyPair(plan: Money, credits: Money, preferredCurrency?: strin
   return '';
 }
 
+/**
+ * Money that expired in one finished window, or over several windows of the same meter: "$17.25" for
+ * plan money, "$70.00 in credits" for a credit counted in dollars. Empty when there is none.
+ */
+export function expiredMoney(amount: number | null, currency: string | null, unit: string): string {
+  if (amount === null || currency === null || amount < 0.005) return '';
+  const text = formatMoney(amount, currency);
+  return unit === 'usd' ? `${text} in credits` : text;
+}
+
 /** What a plan-share figure is, for tooltips: people read a dollar sign as a charge unless told otherwise. */
 export const PLAN_VALUE_NOTE = 'Your plan fee spread over this window. An estimate for comparing quotas, not a charge or a refund.';
 export const CREDIT_VALUE_NOTE = 'The face value of this credit. It can only be spent where the provider accepts it.';

@@ -7,6 +7,7 @@ import { ledgerTotals, type Money } from '../core/forecast.js';
 import { formatMoney, formatMoneyTotals, formatPercent } from '../core/format.js';
 import { summariseSpend } from '../core/spend.js';
 import { formatAge, formatMoment, toMs } from '../core/time.js';
+import { expiredMoney } from '../core/wording.js';
 import type { ClosedCycle } from '../core/types.js';
 import { cycleColumns, dailyBars } from './charts.js';
 import type { Ctx } from './ctx.js';
@@ -107,7 +108,7 @@ function historyMarkdown(cycles: readonly ClosedCycle[], nowMs: number): string 
   for (const cycle of cycles.slice().reverse()) {
     const approx = cycle.confidence === 'estimated' ? '~' : '';
     lines.push(
-      `| ${formatMoment(toMs(cycle.endedAt) ?? nowMs, nowMs)} | ${cycle.accountLabel} | ${cycle.meterLabel} | ${formatPercent(1 - cycle.wastedFraction)} | ${approx}${formatPercent(cycle.wastedFraction)} | ${cycle.wastedValue !== null && cycle.currency ? approx + formatMoney(cycle.wastedValue, cycle.currency) : ''} |`
+      `| ${formatMoment(toMs(cycle.endedAt) ?? nowMs, nowMs)} | ${cycle.accountLabel} | ${cycle.meterLabel} | ${formatPercent(1 - cycle.wastedFraction)} | ${approx}${formatPercent(cycle.wastedFraction)} | ${expiredMoney(cycle.wastedValue, cycle.currency, cycle.unit) ? approx + expiredMoney(cycle.wastedValue, cycle.currency, cycle.unit) : ''} |`
     );
   }
   return lines.join('\n');
@@ -201,7 +202,7 @@ export function historyView(ctx: Ctx): HTMLElement {
             'div',
             { class: 'tot' },
             h('b', null, lost >= 0.005 && last.currency ? formatMoney(lost, last.currency) : formatPercent(1 - mean)),
-            h('span', null, lost >= 0.005 && last.currency ? `expired, ${formatPercent(mean)} used on average` : 'used on average')
+            h('span', null, lost >= 0.005 && last.currency ? `${last.unit === 'usd' ? 'in credits ' : ''}expired, ${formatPercent(mean)} used on average` : 'used on average')
           )
         );
       })

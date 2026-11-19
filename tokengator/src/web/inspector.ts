@@ -6,7 +6,7 @@ import { cyclesOf, type MeterView } from '../core/forecast.js';
 import { formatAmount, formatMoney, formatMultiple, formatPercent } from '../core/format.js';
 import { parseQuick } from '../core/quick.js';
 import { DAY, formatDuration, formatMoment } from '../core/time.js';
-import { CREDIT_VALUE_NOTE, PLAN_VALUE_NOTE, explain, headline } from '../core/wording.js';
+import { CREDIT_VALUE_NOTE, PLAN_VALUE_NOTE, expiredMoney, explain, headline } from '../core/wording.js';
 import { burnUp, cycleColumns } from './charts.js';
 import type { Ctx } from './ctx.js';
 import { h, icon } from './dom.js';
@@ -220,7 +220,7 @@ export function inspector(ctx: Ctx, view: MeterView): HTMLElement {
                 'p',
                 { class: 'hint', style: { marginTop: '6px' } },
                 `${formatPercent(meanUsed)} used on average over ${cycles.length} window${cycles.length === 1 ? '' : 's'}`,
-                wasted >= 0.005 && cycles[0]?.currency ? `, ${formatMoney(wasted, cycles[0].currency)} expired.` : '.'
+                expiredMoney(wasted, cycles[0]?.currency ?? null, view.meter.unit) ? `, ${expiredMoney(wasted, cycles[0]?.currency ?? null, view.meter.unit)} expired.` : '.'
               )
             : null,
           cycles.length > 0

@@ -97,19 +97,62 @@ The system SHALL accept a reading for a meter as an amount used, an amount remai
 - **THEN** it is rejected with a message naming the offending field and the meter is unchanged
 
 ### Requirement: Readings can move the window
-The system SHALL treat a reading whose reset time is later than the meter's current reset time by at least half a window as the start of a new window, closing the previous one first. A reading on an idle rolling meter SHALL start a window ending at the reading's reset time, or one window length after the reading when no reset time is given.
+The system SHALL treat a reading whose reset time is later than the meter's current reset time by at least half a window as the start of a new window only when the reading also reports less usage than is stored. It SHALL then close the previous window, ending it where the new one began and never later than the previous reset or the moment of the reading.
 
-#### Scenario: Provider reports a later reset
-- **WHEN** a weekly meter that resets on the 20th receives a reading with a reset time on the 27th
-- **THEN** the window ending on the 20th is closed with the last known usage and the meter continues in the window ending on the 27th
+#### Scenario: Provider reports a later reset and less usage
+- **WHEN** a weekly meter at 55% that resets on the 20th receives, on the 19th, a reading of 4% with a reset time on the 27th
+- **THEN** the previous window is closed with 55% used, ending at the moment of the reading, and the meter continues at 4% in the window ending on the 27th
+
+#### Scenario: Small correction to the reset time
+- **WHEN** a reading's reset time differs from the stored one by less than half a window
+- **THEN** the stored reset time is corrected and the window's samples are kept
+
+### Requirement: A later date alone is a corrected date
+The system SHALL take a later reset time that comes on its own, or with the same usage or more, as a correction of the date: usage is kept and no finished window is recorded.
+
+#### Scenario: Only the date is corrected
+- **WHEN** a hand-kept weekly meter at 62% receives a reading that says only that it resets four days later than stored
+- **THEN** the meter keeps 62%, its reset time moves, and no finished window is recorded
+
+#### Scenario: Later date and more usage
+- **WHEN** the same meter receives a reading of 70% with a reset time four days later than stored
+- **THEN** the meter holds 70% in the same window and no finished window is recorded
+
+### Requirement: Rolling windows start on first use
+A reading on an idle rolling meter SHALL start a window ending at the reading's reset time, or one window length after the reading when no reset time is given.
 
 #### Scenario: First use of a rolling window
 - **WHEN** an idle rolling 5-hour meter receives a reading of 10% used with no reset time
 - **THEN** a window starts at the time of the reading and ends 5 hours later
 
-#### Scenario: Small correction to the reset time
-- **WHEN** a reading's reset time differs from the stored one by less than half a window
-- **THEN** the stored reset time is corrected and the window's samples are kept
+### Requirement: One-off expiries and balances
+The system SHALL treat a new expiry on a one-off meter as an extension or a shortening and SHALL NOT close a window for it. A balance without a clock that is given an expiry SHALL become a one-off expiry from then on. A balance SHALL NOT record a finished window.
+
+#### Scenario: A pack is topped up
+- **WHEN** a prepaid pack that expires in a month receives a reading with an expiry a year away
+- **THEN** its expiry moves, the day tracking began stays, and nothing is recorded
+
+#### Scenario: A balance is given an expiry
+- **WHEN** a balance meter receives a reading with an expiry in three days
+- **THEN** it is forecast and reminded about like any expiring quota, and one finished window is recorded when it expires
+
+### Requirement: A finished window is taken back when it had not finished
+The system SHALL, when a meter was rolled forward automatically and a later reading shows that its real reset is earlier than the one it was rolled to by at least half a window, remove the finished window that the roll recorded, and SHALL restore the usage that window held when the reading carries no amount of its own.
+
+#### Scenario: Reset time typed a day early
+- **WHEN** a weekly meter set to reset on Wednesday is rolled forward at that time with 62% used, and an hour later a reading says 70% used, resetting Thursday
+- **THEN** the ledger holds no finished window, the meter is at 70% in the window ending Thursday, and exactly one window is recorded when Thursday comes
+
+### Requirement: Editing keeps what a reading would keep
+The system SHALL, when a meter's reset time is edited without its rule being edited in the same change, adopt the schedule from that time as a reading does, and SHALL, when a percentage meter is given a counted unit and a limit, carry the share that was used over to the new limit.
+
+#### Scenario: Billing day supplied by editing
+- **WHEN** a billing-cycle meter that was added without a billing day has its reset time edited to the 12th of next month
+- **THEN** its rule becomes monthly on that day and later windows end on that day
+
+#### Scenario: Percent to credits
+- **WHEN** a percentage meter at 62% is changed to credits with a limit of 2,500
+- **THEN** it holds 1,550 used
 
 ### Requirement: Windows roll over automatically
 The system SHALL advance a meter whose reset time has passed without waiting for a reading. Interval, daily and monthly meters SHALL enter the next window with nothing used and be marked estimated until a new reading arrives. Rolling meters SHALL become idle. `once` meters SHALL be marked expired.

@@ -16,8 +16,6 @@ import {
   formatMoment,
   iso,
   localZone,
-  monthNames,
-  weekdayNames,
   zonedParts,
   zonedTimeToUtc
 } from './time.js';
@@ -32,8 +30,12 @@ export type QuickResult =
   | { ok: true; account: Account; meter: Meter; reading: Reading; preview: string }
   | { ok: false; error: string; candidates: QuickCandidate[] };
 
-const AMOUNT = /^\$?(\d[\d,]*(?:\.\d+)?)([kKmM]?)(%?)$/;
-const RATIO = /^\$?(\d[\d,]*(?:\.\d+)?)([kKmM]?)\/\$?(\d[\d,]*(?:\.\d+)?)([kKmM]?)$/;
+// A number: plain digits, or digits grouped in threes by commas, with an optional decimal point. A comma
+// anywhere else ("1,5k", "12,40") is somebody's decimal comma, and guessing which makes it ten or a
+// hundred times too large. Those are not read as amounts at all, so the line is refused instead.
+const NUMBER = '(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d+)?';
+const AMOUNT = new RegExp(`^\\$?(${NUMBER})([kKmM]?)(%?)$`);
+const RATIO = new RegExp(`^\\$?(${NUMBER})([kKmM]?)\\/\\$?(${NUMBER})([kKmM]?)$`);
 const RESET_WORDS = new Set(['resets', 'reset', 'until', 'ends', 'renews', 'expires']);
 const LEFT_WORDS = new Set(['left', 'remaining', 'remain', 'free', 'unused']);
 const USED_WORDS = new Set(['used', 'spent', 'consumed', 'gone']);
@@ -222,6 +224,9 @@ function parseClockLoose(text: string): { hour: number; minute: number } | null 
  * Parses a reset time relative to `nowMs`, read in `tz` (the viewer's zone by default). Returns a UTC instant
  * strictly in the future, or null when the text is not understood.
  */
+const WEEKDAYS: readonly string[][] = [['sunday'], ['monday'], ['tuesday'], ['wednesday', 'weds'], ['thursday'], ['friday'], ['saturday']];
+const MONTHS: readonly string[] = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+
 export function parseWhen(text: string, nowMs: number, tz: string = localZone()): number | null {
   const stripped = text.trim().replace(/^(in|at|on)\s+/i, '');
   const source = stripped.toLowerCase();
@@ -237,14 +242,23 @@ export function parseWhen(text: string, nowMs: number, tz: string = localZone())
   }
 
   const today = zonedParts(nowMs, tz);
-  const future = (ms: number): number | null => (ms > nowMs ? ms : null);
+  const future = (ms: number | null): number | null => (ms !== null && ms > nowMs ? ms : null);
+  /**
+   * The instant of a calendar date and clock time, or null when the calendar has no such day. Asked for
+   * 31 November the arithmetic answers 1 December; a reset must never land on a day nobody typed.
+   */
+  const dated = (year: number, month: number, day: number, clock: { hour: number; minute: number }): number | null => {
+    const ms = zonedTimeToUtc(year, month, day, clock.hour, clock.minute, tz);
+    const back = zonedParts(ms, tz);
+    return back.month === month && back.day === day ? ms : null;
+  };
 
   // ISO date with an optional local clock: "2026-11-21", "2026-11-21 09:00", "2026-11-21T09:00"
   const isoDate = /^(\d{4})-(\d{2})-(\d{2})(?:[t\s]+(.+))?$/.exec(source);
   if (isoDate) {
     const clock = isoDate[4] ? parseClockLoose(isoDate[4]) : { hour: 0, minute: 0 };
     if (!clock) return null;
-    return future(zonedTimeToUtc(Number(isoDate[1]), Number(isoDate[2]), Number(isoDate[3]), clock.hour, clock.minute, tz));
+    return future(dated(Number(isoDate[1]), Number(isoDate[2]), Number(isoDate[3]), clock));
   }
 
   const parts = source.split(/[\s,]+/).filter(Boolean);
@@ -266,7 +280,9 @@ export function parseWhen(text: string, nowMs: number, tz: string = localZone())
     return zonedTimeToUtc(today.year, today.month, today.day + 1, clock.hour, clock.minute, tz);
   }
 
-  const weekday = weekdayNames.findIndex((name) => head.startsWith(name.toLowerCase()) && head.length >= 3);
+  // The typed word has to be the start of the day's name, not the other way round: "thu", "thurs" and
+  // "thursday" are Thursday, while "monthly", "sunset" and "friend" are not days at all.
+  const weekday = head.length >= 3 ? WEEKDAYS.findIndex((names) => names.some((name) => name.startsWith(head))) : -1;
   if (weekday >= 0 && /^[a-z]+$/.test(head)) {
     const clock = clockOf(true);
     if (!clock) return null;
@@ -280,8 +296,7 @@ export function parseWhen(text: string, nowMs: number, tz: string = localZone())
   }
 
   // "nov 21 [clock]" or "21 nov [clock]"
-  const monthOf = (word: string): number =>
-    word.length >= 3 ? monthNames.findIndex((name) => word.startsWith(name.toLowerCase())) : -1;
+  const monthOf = (word: string): number => (word.length >= 3 ? MONTHS.findIndex((name) => name.startsWith(word)) : -1);
   let month = -1;
   let day = Number.NaN;
   let clockText = '';
@@ -297,8 +312,8 @@ export function parseWhen(text: string, nowMs: number, tz: string = localZone())
   if (month >= 0 && day >= 1 && day <= 31) {
     const clock = clockText ? parseClockLoose(clockText) : { hour: 0, minute: 0 };
     if (!clock) return null;
-    const thisYear = zonedTimeToUtc(today.year, month + 1, day, clock.hour, clock.minute, tz);
-    return thisYear > nowMs ? thisYear : zonedTimeToUtc(today.year + 1, month + 1, day, clock.hour, clock.minute, tz);
+    // This year if that is still ahead, otherwise next year. A day the month does not have is no date.
+    return future(dated(today.year, month + 1, day, clock)) ?? future(dated(today.year + 1, month + 1, day, clock));
   }
 
   // A bare clock time: the next time the clock reads it.

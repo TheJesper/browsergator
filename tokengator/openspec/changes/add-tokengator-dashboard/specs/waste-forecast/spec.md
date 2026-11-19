@@ -26,7 +26,7 @@ The system SHALL project, for every allowance meter with an active window, the s
 - **THEN** its projected unused share is 0 and it never contributes to value at risk
 
 ### Requirement: Value at risk
-The system SHALL express the projected unused share of an allowance meter as money when its account has a price: the price per month, scaled by the window's length relative to a month and by the meter's value share, multiplied by the projected unused share. Amounts SHALL be kept in the account's currency and totals SHALL be reported per currency without conversion.
+The system SHALL express the projected unused share of an allowance meter as money when its account has a price: the price per month, scaled by the window's length relative to a month and by the meter's value share, multiplied by the projected unused share. A window of 27 to 32 days SHALL count as exactly one month, and a longer window SHALL be valued in proportion to its length. Amounts SHALL be kept in the account's currency and totals SHALL be reported per currency without conversion.
 
 #### Scenario: Weekly window on a monthly price
 - **WHEN** an account costs 100 USD per month and its weekly meter with value share 1 projects 40% unused
@@ -39,6 +39,32 @@ The system SHALL express the projected unused share of an allowance meter as mon
 #### Scenario: Mixed currencies
 - **WHEN** one account is priced in USD and another in SEK
 - **THEN** totals are reported separately for USD and SEK
+
+#### Scenario: Yearly allowance on a yearly price
+- **WHEN** an account priced at 1,200 USD per year has a yearly allowance
+- **THEN** the window is worth 1,200 USD, within a dollar
+
+#### Scenario: February
+- **WHEN** a monthly allowance on a 10 USD plan is in a 28-day window
+- **THEN** the window is worth 10 USD
+
+### Requirement: One fee is split, never counted twice
+The system SHALL, when the value shares of an account's plan-valued allowances add up to more than 1, scale each in proportion so that together they stand for one plan fee. Meters counted in dollars and rate limits SHALL take no share of the fee.
+
+#### Scenario: Every quota marked as the whole fee
+- **WHEN** a 20 USD plan has three allowances, each with a value share of 1
+- **THEN** the plan money at risk across them is never more than 20 USD for a month of windows
+
+### Requirement: A pack is paced from when tracking began
+The system SHALL, for a one-off meter, measure pace from the usage at the first reading of the tracked window, so that what was spent before tracking began counts neither as pace nor towards running out.
+
+#### Scenario: Tracked with 30 of 50 dollars already spent
+- **WHEN** a pack with 30 of 50 USD used and 60 days to its expiry is tracked and not used again
+- **THEN** it is never "running hot", it is "behind pace" within the first week, and nearly all of the 20 USD left is at risk
+
+#### Scenario: Spent quickly since tracking began
+- **WHEN** the same pack goes from 30 to 45 USD used in ten days
+- **THEN** it is "running hot" and is expected to run out in three and a third days
 
 ### Requirement: Credits counted in dollars are valued at face and kept apart
 The system SHALL value an allowance meter whose unit is dollars at its own amount, in USD, whatever the account's price or currency, and SHALL mark its money figures as credits. Totals of money at risk and of money that expired SHALL keep plan money (shares of plan fees) and dollar credits as two figures and SHALL NOT add one to the other. Wherever a credit figure is shown or said, it SHALL be called credits.
