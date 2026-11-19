@@ -93,8 +93,8 @@
 
 - [x] 13.1 Add a CI job that lints, type-checks, tests, builds and audits `tokengator/` on the existing OS and Node matrix
 - [x] 13.2 Run an end-to-end pass: start the service on a temporary home, add accounts over HTTP, report over MCP, confirm the dashboard updates live
-- [ ] 13.3 Run an independent review of correctness, security and the interface, and resolve what it finds
-- [ ] 13.4 Run `npm run lint`, `npm run typecheck`, `npm test` and `npm run build` in both the root and `tokengator/`, and `openspec validate --all --strict`
+- [x] 13.3 Run an independent review of correctness, security and the interface, and resolve what it finds
+- [x] 13.4 Run `npm run lint`, `npm run typecheck`, `npm test` and `npm run build` in both the root and `tokengator/`, and `openspec validate --all --strict`
 
 ## Workflow follow-up
 

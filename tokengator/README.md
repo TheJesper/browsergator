@@ -245,8 +245,9 @@ npm run spec:validate     # OpenSpec
 ```
 
 The package is spec-driven with [OpenSpec](https://github.com/Fission-AI/OpenSpec): requirements
-live in `openspec/specs/`, and the change that introduced the package, with its research and
-design decisions, is archived under `openspec/changes/archive/`.
+live in `openspec/specs/` (ten capabilities), and the change that introduced the package, with its
+research, design decisions and task list, is archived under
+`openspec/changes/archive/2026-11-19-add-tokengator-dashboard/`.
 
 Layout: `src/core` is pure TypeScript shared by everything (reset rules, forecast, wording, the
 quick-entry parser, the catalog); `src/server` is the store, HTTP API, MCP server and collectors;

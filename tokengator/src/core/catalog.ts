@@ -2,7 +2,8 @@
 //
 // Presets are a starting point, not a source of truth. Limits and prices drift, and several providers
 // publish no numbers at all (their meters are percent-only). Every field can be edited after adding.
-// Sources and verification notes are in the OpenSpec change that introduced the catalog (research.md).
+// Sources and verification notes are in the OpenSpec change that introduced the catalog:
+// openspec/changes/archive/2026-11-19-add-tokengator-dashboard/research.md
 
 import { BILLING_MONTH_HOURS, type PresetMeter, type PresetPlan, type ProviderPreset } from './catalog-types.js';
 import type { Price, Unit } from './types.js';
