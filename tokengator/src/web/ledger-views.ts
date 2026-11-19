@@ -182,7 +182,7 @@ export function historyView(ctx: Ctx): HTMLElement {
         'div',
         { class: 'section-head' },
         h('h2', null, 'By quota'),
-        h('p', null, 'One column per finished window, oldest on the left. A faded column is an estimate: nothing was read near that reset.'),
+        h('p', null, 'One column per finished window, oldest on the left. An outlined column is an estimate: nothing was read near that reset.'),
         h('span', { class: 'sp' }),
         h('div', { class: 'legend', 'aria-hidden': 'true' }, h('span', null, h('i', { class: 'l-used' }), 'Used'), h('span', null, h('i', { class: 'l-fact' }), 'Expired'), h('span', null, h('i', { class: 'l-ok' }), 'Fully used'))
       ),
