@@ -145,7 +145,16 @@ export function forecastBar(view: MeterView, nowMs: number, size: 'sm' | 'lg' | 
 }
 
 /** The bar's legend, shown once per view rather than on every row. */
-export function barLegend(): HTMLElement {
+/** What the marks of a forecast bar mean. The Timeline draws two of them along a time axis instead. */
+export function barLegend(timeline = false): HTMLElement {
+  if (timeline) {
+    return h(
+      'div',
+      { class: 'legend', 'aria-hidden': 'true' },
+      h('span', null, h('i', { class: 'l-proj' }), 'Time to reset'),
+      h('span', null, h('i', { class: 'l-exp' }), 'Will expire at the reset')
+    );
+  }
   return h(
     'div',
     { class: 'legend', 'aria-hidden': 'true' },

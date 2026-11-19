@@ -236,7 +236,7 @@ export function dailyBars(summary: SpendSummary): HTMLElement {
       );
     }
     const hit = s('rect', { class: 'hit', x: left + index * slot, y: top, width: slot, height: plotH, tabindex: -1 });
-    withTip(hit, () => [h('b', null, formatMoney(point.amount, currency)), h('br'), h('span', null, point.date)]);
+    withTip(hit, () => [h('b', null, formatMoney(point.amount, currency)), h('br'), h('span', null, dayLabel(point.date))]);
     svg.appendChild(hit);
   });
   if (budgetPerDay !== null) {
@@ -245,10 +245,28 @@ export function dailyBars(summary: SpendSummary): HTMLElement {
   const firstPoint = series[0];
   const lastPoint = series[series.length - 1];
   if (firstPoint && lastPoint) {
-    svg.appendChild(s('text', { x: left, y: H - 5, 'text-anchor': 'start' }, firstPoint.date.slice(5)));
+    svg.appendChild(s('text', { x: left, y: H - 5, 'text-anchor': 'start' }, dayLabel(firstPoint.date)));
     svg.appendChild(s('text', { x: W - right, y: H - 5, 'text-anchor': 'end' }, 'today'));
   }
-  return h('div', { class: 'chart' }, svg);
+  return h(
+    'div',
+    { class: 'chart' },
+    svg,
+    h(
+      'div',
+      { class: 'legend', 'aria-hidden': 'true' },
+      h('span', null, h('i', { class: 'l-used' }), 'Daily spend'),
+      h('span', null, h('i', { class: 'l-today' }), 'Today so far'),
+      budgetPerDay !== null ? h('span', null, h('i', { class: 'l-budget' }), 'Budget per day') : null
+    )
+  );
+}
+
+/** A calendar day ("2026-10-21") the way every other date on the page reads: "21 Oct". */
+function dayLabel(date: string): string {
+  const [, month, day] = date.split('-').map(Number);
+  const name = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][(month ?? 1) - 1] ?? '';
+  return day && name ? `${day} ${name}` : date;
 }
 
 /** Rounds a maximum up to a clean axis value: 1, 2, 2.5, 5 or 10 times a power of ten. */

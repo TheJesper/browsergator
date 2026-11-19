@@ -70,8 +70,10 @@ export function costsView(ctx: Ctx): HTMLElement {
               ? h(
                   'div',
                   { class: 'budget-bar', role: 'img', 'aria-label': `${formatPercent(Math.min(1, summary.budgetFraction ?? 0))} of the ${formatMoney(budget, source.currency)} budget used` },
-                  h('i', { class: summary.overBudget ? 'over' : '', style: { width: `${Math.min(100, (summary.budgetFraction ?? 0) * 100)}%` } }),
-                  h('b', { style: { left: `${Math.min(100, (summary.projected / budget) * 100)}%` }, title: 'Projected month end' })
+                  // The bar takes the colour of what the sentence under it says, and the month-end mark stays
+                  // inside the bar when the projection is past its end.
+                  h('i', { class: summary.overBudget ? 'over' : summary.headingOver ? 'heading' : '', style: { width: `${Math.min(100, (summary.budgetFraction ?? 0) * 100)}%` } }),
+                  h('b', { style: { left: `min(calc(100% - 2px), ${Math.min(100, (summary.projected / budget) * 100)}%)` }, title: 'Projected month end' })
                 )
               : null,
             h(

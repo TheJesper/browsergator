@@ -132,7 +132,8 @@ Visual language:
 
 - **Ground:** Solarized's hues with the chroma taken down until the base tones read as warm-cool grey rather than teal or cream. Text is lifted above classic Solarized body contrast, which is known to be too low.
 - **Colour means state, never identity.** Light blue is quota used and anything informational. Pastel Solarized orange is quota that will expire. Muted green is "used up, nothing wasted". Yellow is "running hot". Red is reserved for blocked and expired. Providers are told apart by name and a two-letter monogram, not by hue, so the eye is free to find the orange.
-- **Hatching means forecast, solid means fact.** The expiring segment of a forecast bar is hatched orange because it has not happened yet; the same share in the History view is solid because it did.
+- **Solid means fact; a forecast is never a solid fill.** What has been used is solid blue. What will be used at this pace is an outline in the same blue, an empty box still to be filled. What will expire is hatched orange because it has not happened yet; the same share in the History view is solid because it did.
+- **Orange follows urgency, not size.** Rows to use now sit on a warm wash, with the countdown as their largest figure and the hatching drawn on a tinted ground. Every other row has thin stripes on the bare track, so a large leftover that is ten days away does not out-shout a small one that is gone tomorrow. An old reading is drawn with its saturation reduced, never faded, so its marks keep their contrast.
 - **The forecast bar** is the unit the whole interface is built from: used, projected, expiring, and a tick where an even pace would be. It is drawn the same way in every view at different sizes.
 - **Type:** IBM Plex Sans for interface text and figures, IBM Plex Mono only for literals. Both are bundled, so the page makes no font request.
 - No gradients, glass, glows or decorative icons. Borders and fills are used by role: the selected row, the inspector and dialogs are surfaces; rows in a list are separated by hairlines, not boxed.
@@ -141,10 +142,12 @@ Measured on the shipped tokens (WCAG 2 ratio; colour-blind separation as OKLab d
 
 | Check | Light | Dark |
 | --- | --- | --- |
-| Lowest text contrast on page, surface and selected row | 4.73:1 | 4.74:1 |
-| Lowest mark contrast on page, surface and track | 3.08:1 | 5.10:1 |
+| Lowest text contrast on page, surface, raised, selected row and urgent wash | 4.57:1 | 4.74:1 |
+| Lowest contrast of a solid mark, an outline or a stripe on page, surface and track | 3.08:1 | 5.10:1 |
 | Used blue against expiring orange, red-green colour blindness | 19.2 | 17.7 |
 | Used blue against expiring orange, full colour vision | 24.1 | 21.5 |
+
+The first two rows and the separation of the blue and orange pair are recomputed from the stylesheet by `test/design-tokens.test.ts`. The two pale tokens (`--projected`, `--expiring-soft`) are grounds and selection colour only: no mark is drawn in them alone.
 
 The target for separation is 8 and the floor is 6, so the one pair the product depends on is safe by a wide margin. Two deliberate deviations: the dark-theme marks are lighter than the validator's band for categorical series, because the brief asks for pastel light blue and pastel orange and the pair still clears every separation and contrast check; and the status hues (orange, yellow, green, raspberry) are not separable from each other by hue under colour blindness, which is why every state also has its own shape and its label, and why yellow and orange never touch inside one bar.
 

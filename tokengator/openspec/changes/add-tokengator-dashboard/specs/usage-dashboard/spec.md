@@ -17,6 +17,18 @@ The dashboard SHALL open on a ranked queue of allowance meters grouped by urgenc
 - **WHEN** no meter is `use-now` or `behind`
 - **THEN** the summary says so in words and the queue starts with the on-pace group
 
+#### Scenario: Urgent rows stand apart
+- **WHEN** the queue holds meters to use now and meters that are only behind pace
+- **THEN** only the rows to use now are tinted, and in them the time to the reset is the largest figure
+
+#### Scenario: Value on a narrow list
+- **WHEN** the list is narrowed by the inspector or by the screen
+- **THEN** each row still shows its value at risk
+
+#### Scenario: Clicking a figure
+- **WHEN** the user clicks the share left or the time to reset on a row
+- **THEN** the row's details open and no display setting changes
+
 ### Requirement: Forecast bar
 The dashboard SHALL draw each allowance meter as one bar divided into the share used, the share projected to be used by the reset and the share projected to expire, with a marker at the elapsed share of the window, and SHALL state the same three figures as text next to the bar.
 
@@ -27,6 +39,10 @@ The dashboard SHALL draw each allowance meter as one bar divided into the share 
 #### Scenario: Estimated or stale data
 - **WHEN** a meter is estimated or stale
 - **THEN** its bar is visibly marked as uncertain and the text says when it was last updated
+
+#### Scenario: A forecast is not drawn as a fact
+- **WHEN** a bar has a share projected to be used and a share projected to expire
+- **THEN** only the share already used is a solid fill; the projection is an outline and the expiring share is hatched, each at 3:1 or better against its ground, stale bars included
 
 ### Requirement: View modes
 The dashboard SHALL offer six views of the same data: Queue, Board (one card per account with all its meters), Timeline (meters placed at their reset time on a time axis), Table (one sortable row per meter), Costs and History. The selected view SHALL be restored on the next visit and SHALL be addressable in the page address.
@@ -208,7 +224,7 @@ The dashboard SHALL offer a setting that hides account names for screen sharing.
 
 #### Scenario: Sharing a screen
 - **WHEN** the user switches on "Hide names"
-- **THEN** the summary's next-reset sentence, every row, card and table cell, the inspector's agent hint and the row menus show no account name
+- **THEN** the summary's next-reset sentence, every row, card and table cell, the inspector's agent hint and the row menus show no account name, the two-letter chip beside each name shows no letters, and the plan and price are hidden with the name
 
 ### Requirement: Themes
 The dashboard SHALL provide a light and a dark theme built on one greyed Solarized palette, SHALL follow the system setting by default, SHALL remember an explicit choice, and SHALL keep body text at a contrast of at least 4.5:1 and meaningful graphical marks at least 3:1 against their background in both themes.
@@ -227,6 +243,10 @@ The dashboard SHALL pair every colour-coded state with a text label or icon, SHA
 #### Scenario: Tier without colour
 - **WHEN** the page is viewed in greyscale
 - **THEN** each meter's tier is still readable from its label
+
+#### Scenario: Queue in another order
+- **WHEN** the queue is sorted by anything other than "use first", so that it has no tier headings
+- **THEN** every row carries its tier as a mark and a label
 
 #### Scenario: Reduced motion
 - **WHEN** the system requests reduced motion

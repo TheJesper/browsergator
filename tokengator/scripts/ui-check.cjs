@@ -475,6 +475,103 @@ async function sampleStaysQuiet(browser) {
   await context.close();
 }
 
+// What the design review found: where the eye lands, and what a narrow list keeps.
+async function designed(browser) {
+  console.log('\nDesign review findings');
+  const { context, page, errors } = await open(browser);
+  const rgb = (value) => (value.match(/\d+/g) ?? []).slice(0, 3).map(Number);
+
+  const urgent = await page.evaluate(() => {
+    const style = (selector) => {
+      const el = document.querySelector(selector);
+      return el ? { background: getComputedStyle(el).backgroundColor, size: parseFloat(getComputedStyle(el).fontSize) } : null;
+    };
+    return {
+      urgentRow: style('.row.r-use-now'),
+      quietRow: style('.row.r-quiet'),
+      urgentCountdown: style('.row.r-use-now .row-reset .v'),
+      urgentLeft: style('.row.r-use-now .row-left .v'),
+      quietCountdown: style('.row.r-quiet .row-reset .v'),
+      quietLeft: style('.row.r-quiet .row-left .v'),
+      tinted: document.querySelectorAll('.row.r-use-now').length,
+      underUseNow: [...document.querySelectorAll('.group')][0]?.querySelectorAll('.row').length ?? 0
+    };
+  });
+  check('only the rows to use now are tinted', urgent.tinted > 0 && urgent.tinted === urgent.underUseNow && rgb(urgent.urgentRow.background).length === 3 && urgent.quietRow.background === 'rgba(0, 0, 0, 0)', JSON.stringify(urgent));
+  check('in an urgent row the countdown is the largest figure, elsewhere the share left is', urgent.urgentCountdown.size > urgent.urgentLeft.size && urgent.quietLeft.size > urgent.quietCountdown.size, JSON.stringify(urgent));
+
+  const bar = await page.evaluate(() => {
+    const proj = document.querySelector('.fbar .seg-proj');
+    const stale = document.querySelector('.fbar.uncertain .fbar-track');
+    return {
+      projection: proj ? { background: getComputedStyle(proj).backgroundColor, outline: getComputedStyle(proj).boxShadow } : null,
+      stale: stale ? { opacity: getComputedStyle(stale).opacity, filter: getComputedStyle(stale).filter } : null
+    };
+  });
+  check('the projection is an outline, not a fill', bar.projection !== null && bar.projection.background === 'rgba(0, 0, 0, 0)' && /inset/.test(bar.projection.outline), JSON.stringify(bar.projection));
+  check('a stale bar is washed out, not faded', bar.stale !== null && bar.stale.opacity === '1' && /saturate/.test(bar.stale.filter), JSON.stringify(bar.stale));
+
+  // A click on a figure opens the row, and nothing else changes.
+  const leftBefore = await page.locator('.row .row-left .v').first().innerText();
+  await page.locator('.row .row-left').first().click();
+  await page.waitForSelector('.insp');
+  check('clicking the share left opens the row and leaves the figure as it was', (await page.locator('.row .row-left .v').first().innerText()) === leftBefore);
+  const valueShown = await page.evaluate(() => {
+    const value = document.querySelector('.row .row-value');
+    return value ? getComputedStyle(value).display !== 'none' && value.getBoundingClientRect().width > 0 : false;
+  });
+  check('the value at risk stays on the row beside the open details at 1280px', valueShown);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+
+  // Every menu item is in view.
+  await page.click('[aria-label="Menu"]');
+  await page.waitForSelector('.menu');
+  const menu = await page.evaluate(() => {
+    const el = document.querySelector('.menu');
+    const last = [...el.querySelectorAll('.menu-item')].at(-1).getBoundingClientRect();
+    return { scrolls: el.scrollHeight > el.clientHeight + 1, lastBottom: last.bottom, menuBottom: el.getBoundingClientRect().bottom, viewport: innerHeight };
+  });
+  check('the main menu shows its last item whole', !menu.scrolls && menu.lastBottom <= menu.menuBottom && menu.menuBottom <= menu.viewport, JSON.stringify(menu));
+  await page.keyboard.press('Escape');
+
+  // Without tier headings every row names its own state.
+  await page.click('#sort-button');
+  await menuItem(page, 'Soonest reset').click();
+  const chips = await page.evaluate(() => ({ rows: document.querySelectorAll('.row').length, chips: document.querySelectorAll('.row .row-name .state').length }));
+  check('in any other order every row carries its state', chips.rows > 3 && chips.chips === chips.rows, JSON.stringify(chips));
+  await page.click('#sort-button');
+  await menuItem(page, 'Use first').click();
+  check('under the tier headings the heading carries it', (await page.locator('.row .row-name .state').count()) === 0);
+
+  // The table's header stays under the app bar when the table is scrolled.
+  await page.setViewportSize({ width: 1440, height: 420 });
+  await page.keyboard.press('4');
+  await page.waitForSelector('.tbl');
+  await page.evaluate(() => window.scrollTo(0, 400));
+  await page.waitForTimeout(150);
+  const head = await page.evaluate(() => ({ top: document.querySelector('.tbl thead th').getBoundingClientRect().top, bar: document.querySelector('header.bar').getBoundingClientRect().bottom, overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth }));
+  check('the table header stays under the app bar while the table scrolls', Math.abs(head.top - head.bar) <= 1.5 && head.overflow <= 0, JSON.stringify(head));
+  check('no script errors', errors.length === 0, errors.join(' | '));
+  await context.close();
+
+  // Phone: the list starts in the top half and the toolbar is one line.
+  const phone = await open(browser, { width: 400, height: 860 });
+  const layout = await phone.page.evaluate(() => ({
+    firstRow: document.querySelector('.row').getBoundingClientRect().top,
+    toolbar: document.querySelector('.toolbar').getBoundingClientRect().height,
+    value: getComputedStyle(document.querySelector('.row .row-value')).display,
+    overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
+  }));
+  check('at 400px the list starts in the top half of the screen', layout.firstRow < 440 && layout.toolbar < 60 && layout.overflow <= 0, JSON.stringify(layout));
+  check('at 400px a row still shows its value at risk', layout.value !== 'none', layout.value);
+  await phone.page.keyboard.press('3');
+  await phone.page.waitForSelector('.tl-grid');
+  const ticks = await phone.page.evaluate(() => [...document.querySelectorAll('.tl-tick')].filter((tick) => getComputedStyle(tick).display !== 'none').map((tick) => tick.getBoundingClientRect()).map((box) => [box.left, box.right]));
+  check('at 400px no two axis labels of the Timeline overlap', ticks.every((box, index) => index === 0 || box[0] >= ticks[index - 1][1] - 0.5), JSON.stringify(ticks));
+  await phone.context.close();
+}
+
 // What the independent review found in the dashboard's logic, each pinned by a check.
 async function reviewed(browser) {
   console.log('\nReview findings');
@@ -611,6 +708,8 @@ async function reviewed(browser) {
   check('hiding names covers the menus', /Delete this subscription/.test(await page.locator('.menu').innerText()) && (await leaks()).length === 0, (await leaks()).join(' | '));
   await page.keyboard.press('Escape');
 
+  check('hiding names replaces the letters of every chip', await page.evaluate(() => [...document.querySelectorAll('.mono')].every((chip) => getComputedStyle(chip).fontSize === '0px' && getComputedStyle(chip, '::before').content.includes('·'))));
+
   // A category nothing belongs to any more does not hide every quota.
   await page.evaluate(() => {
     const prefs = JSON.parse(localStorage.getItem('tokengator.prefs.v1') ?? '{}');
@@ -638,6 +737,7 @@ async function reviewed(browser) {
     await keyboard(browser);
     await motion(browser);
     await sampleStaysQuiet(browser);
+    await designed(browser);
     await reviewed(browser);
   } catch (error) {
     failures += 1;

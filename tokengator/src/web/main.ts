@@ -176,8 +176,8 @@ function start(app: App, fellBack: boolean): void {
       { kind: 'sep' },
       { label: 'Compact rows', icon: 'rows', checked: prefs.density === 'compact', onSelect: () => app.setPrefs({ density: prefs.density === 'compact' ? 'comfortable' : 'compact' }) },
       { label: 'Hide names (screen sharing)', icon: 'eye', checked: prefs.privacy, onSelect: () => app.setPrefs({ privacy: !prefs.privacy }) },
-      // The same two switches a click on a row's figures flips, for people who do not use a mouse.
-      { label: 'Show what is used, not what is left', icon: 'rows', checked: prefs.amounts === 'used', onSelect: () => app.setPrefs({ amounts: prefs.amounts === 'used' ? 'left' : 'used' }) },
+      // What the two figures on every row show.
+      { label: 'Show what is used, not what is left', icon: 'sort', checked: prefs.amounts === 'used', onSelect: () => app.setPrefs({ amounts: prefs.amounts === 'used' ? 'left' : 'used' }) },
       { label: 'Show reset times, not countdowns', icon: 'clock', checked: prefs.times === 'clock', onSelect: () => app.setPrefs({ times: prefs.times === 'clock' ? 'countdown' : 'clock' }) },
       { kind: 'sep' },
       { label: 'Copy everything as JSON', icon: 'copy', onSelect: () => void copyText(JSON.stringify(app.model.state, null, 2), 'State copied as JSON') },
@@ -368,7 +368,8 @@ function start(app: App, fellBack: boolean): void {
           h(
             'dd',
             { title: PLAN_VALUE_NOTE },
-            `${s.lostIsEstimate ? '~' : ''}${formatMoneyTotals(s.lost30, currency, formatMoney(0, currency))}`,
+            // An estimate is not given to the cent.
+            s.lostIsEstimate ? `about ${formatMoneyTotals(roundedMoney(s.lost30), currency, formatMoney(0, currency)).replace(/\.00\b/g, '')}` : formatMoneyTotals(s.lost30, currency, formatMoney(0, currency)),
             credits(s.creditsLost30),
             s.utilisation30 !== null ? h('small', null, `${formatPercent(s.utilisation30)} used`) : null
           )
@@ -376,6 +377,9 @@ function start(app: App, fellBack: boolean): void {
       )
     );
   }
+
+  /** Every amount of a per-currency total, to the whole unit. */
+  const roundedMoney = (totals: Record<string, number>): Record<string, number> => Object.fromEntries(Object.entries(totals).map(([code, amount]) => [code, Math.round(amount)]));
 
   function renderToolbar(queue: MeterView[]): void {
     const { prefs, state } = app.model;
@@ -426,7 +430,7 @@ function start(app: App, fellBack: boolean): void {
         : null,
       h('span', { class: 'spacer' }),
       view === 'table' ? tableTools(ctx, queue) : null,
-      view === 'queue' || view === 'board' ? barLegend() : null
+      view === 'queue' || view === 'board' || view === 'table' || view === 'timeline' ? barLegend(view === 'timeline') : null
     );
   }
 

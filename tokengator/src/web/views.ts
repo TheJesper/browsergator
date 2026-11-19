@@ -90,9 +90,11 @@ function queueRow(ctx: Ctx, view: MeterView): HTMLElement {
   const risk = riskText(view);
   const caption = barCaption(view, now);
   const select = (): void => ctx.app.select(selectedId === view.id ? null : view.id);
-  const classes = ['row'];
+  // Urgency is drawn on the row itself, so it is there whichever way the list is sorted or grouped.
+  const classes = ['row', view.tier === 'use-now' && !view.snoozed ? 'r-use-now' : 'r-quiet'];
   if (selectedId === view.id) classes.push('selected');
   if (view.snoozed) classes.push('snoozed');
+  // Under the tier headings the heading names the state. In any other order each row has to.
   return h(
     'li',
     // The whole row is a click target for the mouse; the name inside it is the real control.
@@ -109,18 +111,20 @@ function queueRow(ctx: Ctx, view: MeterView): HTMLElement {
         onclick: isolated(select)
       },
       h('span', { class: 'a' }, h('span', null, view.account.label), flags(view, now)),
-      h('span', { class: 'm' }, view.meter.label)
+      h('span', { class: 'm' }, prefs.sort !== 'use-first' ? stateChip(view) : null, view.meter.label)
     ),
     h('div', { class: 'row-bar' }, forecastBar(view, now), h('div', { class: 'fcap' }, caption.nodes)),
+    // A click on a figure opens the row like a click anywhere else on it. What the figures show (left or
+    // used, countdown or clock) is chosen in the menu, where it is visible as a choice.
     h(
       'div',
-      { class: 'row-left', title: 'Click to switch between left and used', onclick: isolated(() => ctx.app.setPrefs({ amounts: prefs.amounts === 'left' ? 'used' : 'left' })) },
+      { class: 'row-left' },
       h('div', { class: 'v' }, figure.value),
       h('div', { class: 'u' }, figure.unit)
     ),
     h(
       'div',
-      { class: 'row-reset', onclick: isolated(() => ctx.app.setPrefs({ times: prefs.times === 'countdown' ? 'clock' : 'countdown' })) },
+      { class: 'row-reset' },
       h('div', { class: 'v' }, resetText(view.msLeft === null ? null : view.resetsAtMs, now, prefs)),
       h('div', { class: 'u' }, view.msLeft === null ? 'no reset' : prefs.times === 'countdown' ? 'to reset' : 'resets')
     ),
@@ -148,7 +152,7 @@ export function queueView(ctx: Ctx, queue: MeterView[]): HTMLElement {
   const root = h('div', { class: 'queue' });
   if (prefs.sort !== 'use-first') {
     const label = SORT_ORDERS.find((order) => order.id === prefs.sort)?.label ?? 'Sorted';
-    root.appendChild(group(label, queue.length, 'Grouping by urgency is shown when sorted by "Use first".', queue.map((view) => queueRow(ctx, view))));
+    root.appendChild(group(label, queue.length, 'Each row shows its state. Sort by "Use first" to group by urgency.', queue.map((view) => queueRow(ctx, view))));
     return root;
   }
   const active = queue.filter((view) => !view.snoozed);
@@ -309,7 +313,8 @@ export function timelineView(ctx: Ctx, queue: MeterView[]): HTMLElement {
     h(
       'div',
       { class: 'tl-axis', 'aria-hidden': 'true' },
-      ticks.map((tick, index) => h('span', { class: index === 0 ? 'tl-tick first' : 'tl-tick', style: { left: `${tick.at * 100}%` } }, tick.label))
+      // A mark close to the start is flagged, so a narrow screen can drop it instead of printing it over "now".
+      ticks.map((tick, index) => h('span', { class: index === 0 ? 'tl-tick first' : tick.at < 0.14 ? 'tl-tick near' : 'tl-tick', style: { left: `${tick.at * 100}%` } }, tick.label))
     )
   );
 
@@ -442,8 +447,10 @@ function tableColumns(ctx: Ctx): Column[] {
       id: 'used',
       label: 'Used',
       right: true,
-      cell: (view) => (view.meter.unit === 'percent' ? formatPercent(view.usedFraction) : formatAmount(view.meter, view.used)),
-      text: (view) => (view.meter.unit === 'percent' ? formatPercent(view.usedFraction) : formatAmount(view.meter, view.used))
+      // One unit down the whole column, so it can be scanned and compared. The amount is a hover away, and
+      // in the copied table.
+      cell: (view) => h('span', { title: view.meter.unit === 'percent' ? null : `${formatAmount(view.meter, view.used)} of ${formatAmount(view.meter, view.limit)}` }, formatPercent(view.usedFraction)),
+      text: (view) => (view.meter.unit === 'percent' ? formatPercent(view.usedFraction) : `${formatPercent(view.usedFraction)} (${formatAmount(view.meter, view.used)})`)
     },
     { id: 'left', label: 'Left', right: true, sort: 'left', cell: (view) => formatPercent(view.remainingFraction), text: (view) => formatPercent(view.remainingFraction) },
     {

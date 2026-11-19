@@ -296,7 +296,8 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 .t-open { color: var(--ink-3); }
 .state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; white-space: nowrap; }
 .tag { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: var(--r-1); font-size: 11px; color: var(--ink-3); white-space: nowrap; }
-.tag.warn { color: var(--hot-ink); border-color: currentColor; }
+/* A caution about the reading, not a state of the quota: neutral and dashed, so it never competes with one. */
+.tag.warn { color: var(--ink-2); border: 1px dashed var(--control); }
 .tag.on { color: var(--ok-ink); border-color: currentColor; }
 .uses { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .uses li { display: grid; gap: 1px; font-size: 12.5px; color: var(--ink-3); }
@@ -321,7 +322,9 @@ button.link:hover { color: var(--ink); }
 .fbar.lg .fbar-track { height: 12px; border-radius: 6px; }
 .fbar.thin .fbar-track { height: 4px; border-radius: 2px; }
 .fbar .seg-used { background: var(--used); }
-.fbar .seg-proj { background: var(--projected); }
+/* A forecast is never a solid fill: the projection is an outline of what will be filled, the part that
+   expires is hatched. The outline is the "used" blue, so it holds 3:1 where a pale fill would not. */
+.fbar .seg-proj { background: transparent; box-shadow: inset 0 0 0 1.5px var(--used); }
 .fbar .seg-exp {
   background-color: var(--expiring-soft);
   background-image: repeating-linear-gradient(135deg, var(--expiring) 0 2.5px, transparent 2.5px 5px);
@@ -333,7 +336,8 @@ button.link:hover { color: var(--ink); }
 .fbar-now { position: absolute; top: 1px; bottom: 1px; width: 2px; margin-left: -1px; background: var(--ink); border-radius: 1px; box-shadow: 0 0 0 1.5px var(--bg); }
 .insp .fbar-now, .card .fbar-now, .dialog .fbar-now, .row:hover .fbar-now { box-shadow: 0 0 0 1.5px var(--surface); }
 .selected .fbar-now, .selected:hover .fbar-now { box-shadow: 0 0 0 1.5px var(--select); }
-.fbar.uncertain .fbar-track { opacity: 0.55; }
+/* An old reading is shown washed out, not faded: fading would take the marks below 3:1. */
+.fbar.uncertain .fbar-track { filter: saturate(0.55); }
 .fcap { margin-top: 2px; font-size: 12px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fcap b { font-weight: 500; color: var(--ink-2); }
 .fcap .exp { color: var(--expiring-ink); font-weight: 500; }
@@ -341,14 +345,16 @@ button.link:hover { color: var(--ink); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .legend i { width: 10px; height: 10px; border-radius: 2px; flex: none; }
 .legend .l-used { background: var(--used); }
-.legend .l-proj { background: var(--projected); }
+.legend .l-proj { background: transparent; box-shadow: inset 0 0 0 1.5px var(--used); }
 .legend .l-exp { background-color: var(--expiring-soft); background-image: repeating-linear-gradient(135deg, var(--expiring) 0 2.5px, transparent 2.5px 5px); }
 .legend .l-fact { background: var(--expiring); }
 .legend .l-pace { width: 2px; height: 12px; background: var(--ink); border-radius: 1px; }
 .legend .l-ok { background: var(--ok); }
+.legend .l-today { background: var(--ink-2); }
+.legend .l-budget { width: 14px; height: 0; border-top: 1px dashed var(--ink); background: none; border-radius: 0; }
 .legend .l-line { width: 14px; height: 2px; border-radius: 1px; background: var(--used); }
 .legend .l-guide { width: 14px; height: 1px; background: var(--line-strong); }
-.legend .l-dash { width: 14px; height: 0; border-top: 2px dashed var(--projected); background: none; }
+.legend .l-dash { width: 14px; height: 0; border-top: 2px dashed var(--used); background: none; }
 
 /* ---- queue ---------------------------------------------------------------- */
 .group { border-bottom: 1px solid var(--line); }
@@ -358,7 +364,7 @@ button.link:hover { color: var(--ink); }
 }
 .group-head h2 { display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; font-weight: 600; }
 .group-head .n { font-size: 12.5px; font-weight: 500; color: var(--ink-3); }
-.group-head p { font-size: 12.5px; color: var(--ink-3); margin-left: auto; text-align: right; }
+.group-head p { font-size: 12.5px; color: var(--ink-3); }
 .row {
   display: grid; align-items: center; column-gap: 14px;
   grid-template-columns: 30px minmax(150px, 1.15fr) minmax(170px, 2fr) 78px 104px 76px 60px;
@@ -368,6 +374,19 @@ button.link:hover { color: var(--ink); }
   cursor: pointer; position: relative;
 }
 .row:hover { background: var(--surface); }
+/* What to use now is the one place on the page that is tinted, and there the countdown leads: time is what
+   makes these rows urgent. Everywhere else the share left leads and the hatching is drawn quieter, so the
+   amount of orange on screen follows urgency and not the size of a far-off leftover. */
+.row.r-use-now, .row.r-use-now:hover { background: var(--risk-wash); }
+.row.r-use-now .row-reset .v { font: 600 17px/1.15 var(--font-ui); letter-spacing: -0.015em; color: var(--expiring-ink); }
+.row.r-use-now .row-left .v { font: 500 14px/1.25 var(--font-ui); letter-spacing: 0; }
+.row.r-use-now .fbar-now, .row.r-use-now:hover .fbar-now { box-shadow: 0 0 0 1.5px var(--risk-wash); }
+/* Thinner stripes without the tinted ground under them: a third of the orange, and each stripe still 3:1
+   against the track. */
+.row.r-quiet .fbar:not(.is-settled) .seg-exp {
+  background-color: transparent;
+  background-image: repeating-linear-gradient(135deg, var(--expiring) 0 1.5px, transparent 1.5px 5px);
+}
 .row.selected, .row.selected:hover { background: var(--select); }
 .row.snoozed { opacity: 0.6; }
 .row > .mono { grid-area: mono; }
@@ -377,6 +396,7 @@ button.link:hover { color: var(--ink); }
 .row-name .a > span:first-child { min-width: 0; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row-name .a .tag { flex: none; }
 .row-name .m { display: block; font-size: 12.5px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row-name .m .state { margin-right: 7px; vertical-align: -1px; }
 .row-bar { grid-area: bar; min-width: 0; }
 .row-left { grid-area: left; text-align: right; }
 .row-left .v { font: 600 17px/1.15 var(--font-ui); letter-spacing: -0.015em; }
@@ -389,7 +409,10 @@ button.link:hover { color: var(--ink); }
 .row-act { grid-area: act; display: flex; justify-content: flex-end; gap: 2px; opacity: 0; }
 .row:hover .row-act, .row:focus-within .row-act, .row.selected .row-act { opacity: 1; }
 @media (hover: none) { .row-act { opacity: 1; } }
-.privacy .private, .privacy .row-name .a > span:first-child, .privacy .card-title, .privacy .insp-title, .privacy .tbl .c-name, .privacy .tl-label b, .privacy .tl-later-name b, .privacy .hist-row .who b, .privacy .spend h3 { filter: blur(5px); }
+/* The chip beside a name is its first two letters, so with names hidden it shows two dots instead. */
+.privacy .mono { font-size: 0; }
+.privacy .mono::before { content: "··"; font-size: 12px; }
+.privacy .private, .privacy .card-sub, .privacy .insp-sub, .privacy .row-name .a > span:first-child, .privacy .card-title, .privacy .insp-title, .privacy .tbl .c-name, .privacy .tl-label b, .privacy .tl-later-name b, .privacy .hist-row .who b, .privacy .spend h3 { filter: blur(5px); }
 
 @container (max-width: 860px) {
   .row {
@@ -397,9 +420,16 @@ button.link:hover { color: var(--ink); }
     grid-template-areas: "mono name left reset" "bar bar bar bar";
     row-gap: 8px;
   }
-  .row-value, .row-act { display: none; }
+  /* The money stays on the row at every width: it is what the headline above is made of. */
+  .row { grid-template-columns: 30px minmax(0, 1fr) auto auto auto; grid-template-areas: "mono name left reset value" "bar bar bar bar bar"; }
+  .row-value { min-width: 76px; }
+  .row-act { display: none; }
   .row-reset { min-width: 84px; }
   .group-head p { display: none; }
+}
+@container (max-width: 520px) {
+  .row { grid-template-columns: 30px minmax(0, 1fr) auto auto; grid-template-areas: "mono name left reset" "bar bar bar value"; }
+  .row-value { align-self: end; min-width: 0; }
 }
 
 /* ---- inspector ------------------------------------------------------------ */
@@ -458,7 +488,7 @@ button.link:hover { color: var(--ink); }
 .chart .guide { stroke: var(--line-strong); stroke-width: 1; fill: none; }
 .chart .actual { stroke: var(--used); stroke-width: 2; fill: none; stroke-linejoin: round; stroke-linecap: round; }
 .chart .area { fill: var(--used); opacity: 0.1; }
-.chart .proj { stroke: var(--projected); stroke-width: 2; fill: none; stroke-dasharray: 4 4; stroke-linecap: round; }
+.chart .proj { stroke: var(--used); stroke-width: 2; fill: none; stroke-dasharray: 4 4; stroke-linecap: round; }
 .chart .nowline { stroke: var(--ink); stroke-width: 1; }
 .chart .dot { fill: var(--used); stroke: var(--surface); stroke-width: 2; }
 .chart .waste { fill: url(#hatch); }
@@ -481,7 +511,7 @@ button.link:hover { color: var(--ink); }
 .tip span { opacity: 0.75; }
 
 /* ---- board ---------------------------------------------------------------- */
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 14px; padding: 16px var(--gutter-r) 16px var(--gutter); }
+.cards { display: grid; align-items: start; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 14px; padding: 16px var(--gutter-r) 16px var(--gutter); }
 .card { display: flex; flex-direction: column; gap: 12px; padding: 14px 14px 12px; border: 1px solid var(--line); border-radius: var(--r-3); background: var(--surface); min-width: 0; }
 .card.selected { border-color: var(--ink); }
 .card-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -517,7 +547,7 @@ button.link:hover { color: var(--ink); }
 .tl-gridline { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); }
 .tl-row:hover .tl-lane, .tl-row:hover .tl-label { background-color: var(--surface); }
 .tl-row.selected .tl-lane, .tl-row.selected .tl-label { background-color: var(--select); }
-.tl-span { position: absolute; top: 50%; left: 0; height: 8px; margin-top: -4px; border-radius: 0 4px 4px 0; background: var(--projected); min-width: 3px; }
+.tl-span { position: absolute; top: 50%; left: 0; height: 8px; margin-top: -4px; border-radius: 0 4px 4px 0; background: transparent; box-shadow: inset 0 0 0 1.5px var(--used); min-width: 3px; }
 .tl-span.exp { background-color: var(--expiring-soft); background-image: repeating-linear-gradient(135deg, var(--expiring) 0 2.5px, transparent 2.5px 5px); }
 .tl-span.ok { background: var(--ok); }
 .tl-span.over { border-radius: 0; }
@@ -541,7 +571,13 @@ button.link:hover { color: var(--ink); }
 }
 
 /* ---- table ---------------------------------------------------------------- */
+/* Scrolled sideways only where it has to be. A scroll container would take the sticky header with it,
+   so on a wide screen the wrapper clips instead and the header sticks under the app bar. */
 .table-wrap { overflow-x: auto; }
+@media (min-width: 1040px) {
+  .table-wrap { overflow-x: clip; }
+  .table-wrap .tbl thead th { top: calc(var(--header-h) + env(safe-area-inset-top, 0px)); z-index: 1; }
+}
 .tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .tbl th, .tbl td { padding: 8px 12px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line); }
 .tbl th:first-child, .tbl td:first-child { padding-left: var(--gutter); }
@@ -577,22 +613,23 @@ button.link:hover { color: var(--ink); }
 .budget-bar { margin-top: 10px; position: relative; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
 .budget-bar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--used); border-radius: 3px; }
 .budget-bar i.over { background: var(--stop); }
+.budget-bar i.heading { background: var(--hot); }
 .budget-bar b { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ink); }
 @media (max-width: 720px) { .spend { grid-template-columns: minmax(0, 1fr); } }
-.hist-row { display: grid; grid-template-columns: minmax(160px, 260px) minmax(0, 1fr) 210px; gap: 12px 20px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); }
+.hist-row { display: grid; grid-template-columns: minmax(160px, 260px) minmax(0, 420px) minmax(0, 1fr); gap: 12px 20px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); }
 .hist-row:first-of-type { border-top: 0; }
 .hist-row .who { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .hist-row .who div { min-width: 0; }
 .hist-row .who b { display: block; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hist-row .who span { font-size: 12px; color: var(--ink-3); }
-.hist-row .tot { text-align: right; }
+.hist-row .tot { text-align: left; }
 .hist-row .tot b { display: block; font-size: 15.5px; font-weight: 600; }
 .hist-row .tot span { font-size: 12px; color: var(--ink-3); }
 @media (max-width: 720px) { .hist-row { grid-template-columns: minmax(0, 1fr); } .hist-row .tot { text-align: left; } }
 
 /* ---- popover menu --------------------------------------------------------- */
 .menu {
-  position: fixed; z-index: 60; min-width: 190px; max-width: min(320px, calc(100vw - 16px)); max-height: min(70vh, 520px); overflow-y: auto;
+  position: fixed; z-index: 60; min-width: 190px; max-width: min(320px, calc(100vw - 16px)); max-height: min(calc(100dvh - 60px), 640px); overflow-y: auto;
   padding: 5px; border: 1px solid var(--line-strong); border-radius: var(--r-3); background: var(--surface); box-shadow: var(--shadow);
 }
 .menu-item { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 9px; border: 0; border-radius: var(--r-2); background: transparent; text-align: left; font-size: 13px; cursor: pointer; }
@@ -699,9 +736,21 @@ textarea.input { height: auto; min-height: 72px; padding: 8px 10px; resize: vert
 }
 @media (max-width: 560px) {
   .filter { display: none; }
+  /* A phone shows the list in its top half: the summary is tighter, the figure the headline already
+     carries is not repeated, and the toolbar is one line that scrolls sideways. */
+  .summary { padding-top: 14px; padding-bottom: 12px; gap: 10px; }
   .summary-line { font-size: 18px; }
-  .stat { padding: 0 14px; }
+  .stat.risk { display: none; }
+  .stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; width: 100%; }
+  .stat, .stat:first-child { padding: 0; border-left: 0; }
   .stat dd { font-size: 16px; }
+  .toolbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .toolbar::-webkit-scrollbar { display: none; }
+  .chips { flex-wrap: nowrap; }
+  .select-btn, .check, .chip-btn, .seg { flex: none; white-space: nowrap; }
+  .toolbar .legend, .toolbar .spacer { display: none; }
+  /* The first day mark would sit on top of "now". */
+  .tl-tick.near { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -709,7 +758,7 @@ textarea.input { height: auto; min-height: 72px; padding: 8px 10px; resize: vert
 }
 @media (forced-colors: active) {
   .fbar .seg-used { background: Highlight; }
-  .fbar .seg-proj { background: GrayText; }
+  .fbar .seg-proj, .tl-span { background: transparent; box-shadow: inset 0 0 0 2px GrayText; }
   .fbar .seg-exp { background: Mark; }
   .fbar-now { background: CanvasText; box-shadow: none; }
 }
