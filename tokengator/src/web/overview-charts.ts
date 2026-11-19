@@ -2,17 +2,32 @@
 // labels keep their size from a phone to a wide screen. Colour still means state: hatched orange is what is
 // expected to expire, solid orange what did, blue what was used. Providers are told apart by name only.
 
+import { hasMoney } from '../core/brief.js';
 import type { MeterView, Money } from '../core/forecast.js';
 import { formatMoney, formatMoneyTotals, formatPercent } from '../core/format.js';
-import type { ExpiryOutlook, LedgerWeek } from '../core/insights.js';
+import { FORECAST_TIERS, expectsToExpire, type ExpiryEntry, type ExpiryOutlook, type LedgerWeek } from '../core/insights.js';
 import { formatMoment } from '../core/time.js';
-import { TIER_LABEL, moneyPair } from '../core/wording.js';
+import { TIER_LABEL, lostText, moneyPair } from '../core/wording.js';
 import { niceCeil, roundedTop, shortDate } from './charts.js';
 import { h, s, type Child } from './dom.js';
 import { barCaption, stateKey, stateMark } from './parts.js';
 import { withTip } from './ui.js';
 
 let patternSeq = 0;
+
+/** The even-pace mark that last had focus, so the chart's one tab stop survives a redraw. */
+let lastPaceMark: string | null = null;
+
+/** About how wide a label is drawn, in pixels: the chart text is 11px and its digits are tabular. */
+function labelWidth(text: string): number {
+  return text.length * 6.4 + 2;
+}
+
+/** The x of a label centred on `px`, kept inside `from`..`to`. */
+function clampLabel(px: number, text: string, from: number, to: number): number {
+  const half = labelWidth(text) / 2;
+  return Math.min(Math.max(px, from + half), to - half);
+}
 
 /** Orange stripes, on the soft orange ground or on nothing. Classes, not inline styles, so contrast themes can repaint them. */
 function hatch(id: string, period: number, ground = true): SVGElement {
@@ -36,6 +51,21 @@ export function pick(money: Money, currency: string): { amount: number; currency
   return { amount, currency: code };
 }
 
+/** A day's quota that is expected to lose part of itself at the reset: the test `expectsToExpire` applies. */
+function forecastLoss(entry: ExpiryEntry): boolean {
+  return entry.current && FORECAST_TIERS.includes(entry.tier) && entry.projectedUnused >= 0.05;
+}
+
+/** What one quota does at a day's reset, for the tooltip. A new window has no forecast, so it gets none. */
+function entryLine(entry: ExpiryEntry, name: string, nowMs: number, tz: string): string {
+  const at = formatMoment(entry.atMs, nowMs, tz).replace(/^.* (\d\d:\d\d)$/, '$1');
+  if (!entry.current) return `${name}: renews, nothing forecast yet`;
+  if (entry.tier === 'spent') return `${name}: used up`;
+  if (entry.tier === 'fresh') return `${name}: too early to forecast, resets ${at}`;
+  if (!FORECAST_TIERS.includes(entry.tier)) return `${name}: ${TIER_LABEL[entry.tier].toLowerCase()}, resets ${at}`;
+  return `${name}: ${formatPercent(entry.projectedUnused)} unused at this pace, resets ${at}`;
+}
+
 // ---------------------------------------------------------------------------
 // What expires, and when
 // ---------------------------------------------------------------------------
@@ -53,7 +83,8 @@ export interface ExpiryChartOptions {
 /**
  * One column per day for the next 30 days: the money expected to expire at that day's resets, hatched because
  * it is a forecast. Dollar credits get their own lane and scale below, so the two are never stacked or added.
- * A day with resets that cost nothing gets a small tick under the axis.
+ * A day whose resets put nothing at stake gets a small tick under the axis. A bracket over the first seven
+ * days marks the span the tile's "next 7 days" figure covers; the figure itself is text beside the chart.
  */
 export function expiryColumns(outlook: ExpiryOutlook, W: number, opts: ExpiryChartOptions): SVGElement {
   const days = outlook.days;
@@ -61,7 +92,9 @@ export function expiryColumns(outlook: ExpiryOutlook, W: number, opts: ExpiryCha
   const narrow = W < 360;
   const left = narrow ? 4 : 44;
   const right = 8;
-  const top = narrow && W < 300 ? 34 : 22;
+  // A band at the top holds the bracket; the plot starts below it, so the peak label never reaches it.
+  const bracketY = 5;
+  const top = 25;
   const PH = 96;
   const axisY = top + PH;
   const creditsCurrency = days.map((day) => Object.keys(day.credits)[0]).find(Boolean) ?? 'USD';
@@ -69,7 +102,8 @@ export function expiryColumns(outlook: ExpiryOutlook, W: number, opts: ExpiryCha
   const planOf = (day: (typeof days)[number]): number => (opts.noPrices ? day.count : (day.plan[opts.currency] ?? 0));
   const hasCredits = !opts.noPrices && days.some((day) => creditOf(day) > 0.004);
   const CH = 30;
-  const creditsTop = axisY + 30;
+  // Room under the axis labels for the credit lane's own labels, which sit above its columns.
+  const creditsTop = axisY + 40;
   const creditsAxis = creditsTop + CH;
   const H = hasCredits ? creditsAxis + 6 : axisY + 20;
   const slot = (W - left - right) / n;
@@ -82,7 +116,6 @@ export function expiryColumns(outlook: ExpiryOutlook, W: number, opts: ExpiryCha
   const x = (i: number): number => left + i * slot + (slot - bar) / 2;
   const y = (value: number): number => top + PH * (1 - Math.min(value, scale) / scale);
 
-  const figure = moneyPair(outlook.firstWeek.plan, outlook.firstWeek.credits, opts.currency);
   const svg = s(
     'svg',
     { viewBox: `0 0 ${W} ${H}`, width: W, height: H, 'aria-hidden': 'true' },
@@ -96,17 +129,9 @@ export function expiryColumns(outlook: ExpiryOutlook, W: number, opts: ExpiryCha
     }
   }
   svg.appendChild(s('line', { class: 'axis', x1: left, x2: W - right, y1: axisY, y2: axisY }));
-  // The first seven days are bracketed: "this week" is the figure people act on.
+  // The first seven days, bracketed from above: the span the "next 7 days" figure adds up.
   const divider = left + Math.min(7, n) * slot;
-  svg.appendChild(s('line', { class: 'grid week', x1: divider, x2: divider, y1: top - 4, y2: hasCredits ? creditsAxis : axisY }));
-  svg.appendChild(
-    s(
-      'text',
-      { class: 'bracket', x: left, y: 12 },
-      `${opts.noPrices ? 'Next 7 days, quotas losing 5% or more: ' : 'Next 7 days: '}`,
-      s('tspan', { class: 'fig' }, opts.noPrices ? String(days.slice(0, 7).reduce((sum, day) => sum + day.count, 0)) : figure || formatMoney(0, opts.currency))
-    )
-  );
+  svg.appendChild(s('path', { class: 'bracket-line', d: `M${left + 0.5} ${bracketY + 5}V${bracketY + 0.5}H${divider - 1.5}V${bracketY + 5}` }));
 
   let tallest = -1;
   days.forEach((day, i) => {
@@ -115,7 +140,8 @@ export function expiryColumns(outlook: ExpiryOutlook, W: number, opts: ExpiryCha
     if (value > 0.004) {
       const height = Math.max(2, PH * (Math.min(value, scale) / scale));
       svg.appendChild(s('path', { class: day.uncertain ? 'exp-col uncertain' : 'exp-col', d: roundedTop(x(i), axisY - height, bar, height, 3), fill: `url(#${patternId})` }));
-    } else if (day.entries.length > 0) {
+    } else if (day.entries.length > 0 && !hasMoney(day.plan) && !hasMoney(day.credits)) {
+      // Only where nothing is at stake in any currency: money in another currency or in credits is not "nothing".
       svg.appendChild(s('line', { class: 'reset-tick', x1: left + i * slot + slot / 2, x2: left + i * slot + slot / 2, y1: axisY + 2, y2: axisY + 6 }));
     }
     if (hasCredits && creditOf(day) > 0.004) {
@@ -127,8 +153,8 @@ export function expiryColumns(outlook: ExpiryOutlook, W: number, opts: ExpiryCha
   const peak = days[tallest];
   if (peak && planOf(peak) > 0.004) {
     const label = opts.noPrices ? String(planOf(peak)) : axisMoney(planOf(peak), opts.currency);
-    const px = x(tallest) + bar / 2;
-    svg.appendChild(s('text', { class: 'peak', x: Math.min(Math.max(px, left + 12), W - right - 12), y: y(planOf(peak)) - 5, 'text-anchor': 'middle' }, label));
+    // Never higher than the band under the bracket, and never off the plot's ends.
+    svg.appendChild(s('text', { class: 'peak', x: clampLabel(x(tallest) + bar / 2, label, left, W - right), y: Math.max(y(planOf(peak)) - 5, top - 5), 'text-anchor': 'middle' }, label));
   }
   // Labels along the axis: today, the end of the first week, the last day.
   const last = days[n - 1];
@@ -138,33 +164,46 @@ export function expiryColumns(outlook: ExpiryOutlook, W: number, opts: ExpiryCha
 
   if (hasCredits) {
     svg.appendChild(s('line', { class: 'axis', x1: left, x2: W - right, y1: creditsAxis, y2: creditsAxis }));
-    svg.appendChild(s('text', { class: 'lane', x: narrow ? left + 2 : left - 6, y: creditsTop + 4, 'text-anchor': narrow ? 'start' : 'end' }, 'Credits'));
     const topCredit = days.reduce((best, day, i) => (creditOf(day) > creditOf(days[best] as (typeof days)[number]) ? i : best), 0);
     const credit = creditOf(days[topCredit] as (typeof days)[number]);
+    // The largest credit column carries its value above it, as the plan peak does, kept inside the lane.
+    let peakFrom = Infinity;
     if (credit > 0.004) {
-      const px = x(topCredit) + bar + 4;
-      const anchor = px > W - 60 ? 'end' : 'start';
-      svg.appendChild(s('text', { class: 'peak', x: anchor === 'end' ? x(topCredit) - 4 : px, y: creditsAxis - 4, 'text-anchor': anchor }, axisMoney(credit, creditsCurrency)));
+      const label = axisMoney(credit, creditsCurrency);
+      const height = Math.max(2, CH * (credit / creditMax));
+      const px = clampLabel(x(topCredit) + bar / 2, label, left, W - right);
+      peakFrom = px - labelWidth(label) / 2;
+      svg.appendChild(s('text', { class: 'peak', x: px, y: creditsAxis - height - 4, 'text-anchor': 'middle' }, label));
+    }
+    if (!narrow) svg.appendChild(s('text', { class: 'lane', x: left - 6, y: creditsTop + 4, 'text-anchor': 'end' }, 'Credits'));
+    else {
+      // No gutter on a narrow chart: the lane is named above its columns, at whichever end its peak label leaves free.
+      const atStart = peakFrom > left + labelWidth('Credits') + 6;
+      svg.appendChild(s('text', { class: 'lane', x: atStart ? left : W - right, y: creditsTop - 4, 'text-anchor': atStart ? 'start' : 'end' }, 'Credits'));
     }
   }
 
-  // One hit area per day, the full height: the pointer only has to be on the right day.
+  // One hit area per day, the full height: the pointer only has to be on the right day. Out of the tab
+  // order: the drawing is hidden from assistive technology, and the table says the same.
   days.forEach((day, i) => {
-    const hit = s('rect', { class: 'hit', x: left + i * slot, y: 0, width: slot, height: H });
+    const hit = s('rect', { class: 'hit', x: left + i * slot, y: 0, width: slot, height: H, tabindex: -1 });
     const current = day.entries.filter((entry) => entry.current);
     if (day.entries.length > 0) {
       withTip(hit, () => {
         const money = opts.noPrices ? '' : moneyPair(day.plan, day.credits, opts.currency);
-        const lines: Child[] = [h('b', null, money ? `${money} expires` : current.some((entry) => entry.projectedUnused >= 0.05) ? 'Some quota expires, no price set' : 'Nothing expires'), h('br'), h('span', null, formatMoment(day.startMs, opts.nowMs, opts.tz).replace(/ \d\d:\d\d$/, ''))];
-        for (const entry of day.entries.slice(0, 5)) {
-          const name = opts.nameOf(entry.id);
-          const text = !entry.current
-            ? `${name}: renews, nothing forecast yet`
-            : entry.tier === 'spent'
-              ? `${name}: used up`
-              : `${name}: ${formatPercent(entry.projectedUnused)} unused at this pace, resets ${formatMoment(entry.atMs, opts.nowMs, opts.tz).replace(/^.* (\d\d:\d\d)$/, '$1')}`;
-          lines.push(h('br'), h('span', null, text));
-        }
+        // The same test as the even-pace chart's orange: a new window is too early to say it expires.
+        const losing = current.filter(forecastLoss);
+        const unpriced = losing.filter((entry) => entry.valueAtRisk === null).length;
+        const headline = money
+          ? `${money} expires`
+          : unpriced > 0
+            ? 'Some quota expires, no price set'
+            : losing.length > 0
+              ? 'Some quota expires'
+              : 'Nothing expected to expire';
+        const also = money && unpriced > 0 ? h('span', null, `, and ${unpriced === 1 ? '1 more quota' : `${unpriced} more quotas`} with no price set`) : null;
+        const lines: Child[] = [h('b', null, headline), also, h('br'), h('span', null, formatMoment(day.startMs, opts.nowMs, opts.tz).replace(/ \d\d:\d\d$/, ''))];
+        for (const entry of day.entries.slice(0, 5)) lines.push(h('br'), h('span', null, entryLine(entry, opts.nameOf(entry.id), opts.nowMs, opts.tz)));
         if (day.entries.length > 5) lines.push(h('br'), h('span', null, `and ${day.entries.length - 5} more`));
         return lines;
       });
@@ -188,6 +227,8 @@ export function expiryColumns(outlook: ExpiryOutlook, W: number, opts: ExpiryCha
  * Two panels on one twelve-week axis: the money that expired each week (solid, with the estimated part
  * outlined above it), and the share used over the 30 days ending with each week (a line). Two charts that
  * share the time axis, never two scales on one plot. A week in which no window closed has no column.
+ * The money panel charts plan money in the preferred currency, or, when no week holds any in it, in the
+ * currency that holds the most, as `pick` does. Credits and other currencies are in the tooltip and the table.
  */
 export function weeklyPanels(weeks: readonly LedgerWeek[], W: number, currency: string, nowMs: number): SVGElement {
   const left = W < 300 ? 30 : 40;
@@ -202,8 +243,11 @@ export function weeklyPanels(weeks: readonly LedgerWeek[], W: number, currency: 
   const n = Math.max(1, weeks.length);
   const slot = (W - left - right) / n;
   const bar = Math.max(4, Math.min(16, slot - 6));
-  const amount = (week: LedgerWeek): number => week.lost[currency] ?? 0;
-  const estimated = (week: LedgerWeek): number => week.lostEstimated[currency] ?? 0;
+  const held: Money = {};
+  for (const week of weeks) for (const [code, value] of Object.entries(week.lost)) held[code] = (held[code] ?? 0) + value;
+  const shown = pick(held, currency).currency;
+  const amount = (week: LedgerWeek): number => week.lost[shown] ?? 0;
+  const estimated = (week: LedgerWeek): number => week.lostEstimated[shown] ?? 0;
   const scale = niceCeil(Math.max(...weeks.map(amount), 1));
   const cx = (i: number): number => left + i * slot + slot / 2;
   const y1 = (value: number): number => base1 - panel * (Math.min(value, scale) / scale);
@@ -211,9 +255,9 @@ export function weeklyPanels(weeks: readonly LedgerWeek[], W: number, currency: 
 
   const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, 'aria-hidden': 'true' });
   // Panel titles sit in the plot's top-left, so neither panel needs a legend.
-  svg.appendChild(s('text', { class: 'panel', x: left, y: top1 - 4 }, `Expired each week, ${currency === 'USD' ? 'plan money' : currency}`));
+  svg.appendChild(s('text', { class: 'panel', x: left, y: top1 - 4 }, `Expired each week, plan money${shown === 'USD' ? '' : ` in ${shown}`}`));
   svg.appendChild(s('line', { class: 'grid', x1: left, x2: W - right, y1: y1(scale), y2: y1(scale) }));
-  svg.appendChild(s('text', { class: 'tick', x: left - 6, y: y1(scale) + 4, 'text-anchor': 'end' }, axisMoney(scale, currency)));
+  svg.appendChild(s('text', { class: 'tick', x: left - 6, y: y1(scale) + 4, 'text-anchor': 'end' }, axisMoney(scale, shown)));
   svg.appendChild(s('line', { class: 'axis', x1: left, x2: W - right, y1: base1, y2: base1 }));
 
   svg.appendChild(s('text', { class: 'panel', x: left, y: top2 - 4 }, 'Used, trailing 30 days'));
@@ -230,8 +274,9 @@ export function weeklyPanels(weeks: readonly LedgerWeek[], W: number, currency: 
     const measured = total - est;
     const x0 = cx(i) - bar / 2;
     if (total <= 0.004) {
-      // Windows closed and nothing expired: a hairline on the axis says "zero", unlike an empty week.
-      svg.appendChild(s('rect', { class: 'zero-tick', x: x0, y: base1 - 2, width: bar, height: 2 }));
+      // Windows closed and no money expired: a hairline on the axis says "zero", unlike an empty week. Not
+      // for a week whose money is in credits or another currency: that is not zero, only not on this scale.
+      if (!hasMoney(week.lost) && !hasMoney(week.creditsLost)) svg.appendChild(s('rect', { class: 'zero-tick', x: x0, y: base1 - 2, width: bar, height: 2 }));
       return;
     }
     const hMeasured = measured > 0.004 ? Math.max(2, panel * (measured / scale)) : 0;
@@ -268,14 +313,14 @@ export function weeklyPanels(weeks: readonly LedgerWeek[], W: number, currency: 
   svg.appendChild(s('text', { x: W - right, y: H - 4, 'text-anchor': 'end' }, 'this week'));
 
   weeks.forEach((week, i) => {
-    const hit = s('rect', { class: 'hit', x: left + i * slot, y: 0, width: slot, height: H });
+    const hit = s('rect', { class: 'hit', x: left + i * slot, y: 0, width: slot, height: H, tabindex: -1 });
     withTip(hit, () => {
       const lines: Child[] = [];
       if (week.windows === 0) lines.push(h('b', null, 'No window closed'));
       else {
-        const money = moneyPair(week.lost, week.creditsLost, currency);
-        const estimate = (week.lostEstimated[currency] ?? 0) > 0.004;
-        lines.push(h('b', null, money ? `${estimate ? 'about ' : ''}${money} expired` : 'Nothing expired'), h('br'), h('span', null, `${week.windows === 1 ? '1 window' : `${week.windows} windows`} closed${week.estimatedWindows ? `, ${week.estimatedWindows} estimated` : ''}`));
+        // The shared wording: each part "about" a whole amount when estimated windows are behind it.
+        const money = hasMoney(week.lost) || hasMoney(week.creditsLost) ? lostText(week.lost, week.creditsLost, currency, hasMoney(week.lostEstimated), hasMoney(week.creditsLostEstimated)) : '';
+        lines.push(h('b', null, money ? `${money} expired` : 'No money expired'), h('br'), h('span', null, `${week.windows === 1 ? '1 window' : `${week.windows} windows`} closed${week.estimatedWindows ? `, ${week.estimatedWindows} estimated` : ''}`));
       }
       if (week.trailingUtilisation !== null) lines.push(h('br'), h('span', null, `${formatPercent(week.trailingUtilisation)} used over the 30 days to ${formatMoment(week.endMs, nowMs).replace(/ \d\d:\d\d$/, '')}`));
       lines.push(h('br'), h('span', null, `week of ${shortDate(week.startMs)}`));
@@ -298,9 +343,12 @@ export interface PaceOptions {
   onSelect: (id: string) => void;
 }
 
-/** True when part of a quota is expected to expire: the one thing the even-pace chart colours. */
+/**
+ * True when part of a quota is expected to expire: the one thing the even-pace chart colours. The same test
+ * as the expiry chart's, so a new window, too early to forecast, is never orange.
+ */
 export function willExpire(view: MeterView): boolean {
-  return view.projectedUnused >= 0.05 && view.meter.rollover !== 'carries';
+  return expectsToExpire(view);
 }
 
 /**
@@ -348,6 +396,10 @@ export function paceMap(views: readonly MeterView[], W: number, opts: PaceOption
 
   const holder = h('div', { class: 'pm', style: { width: `${W}px`, height: `${H}px` } }, svg);
   const ordered = [...views].sort((a, b) => opts.rankOf(a.id) - opts.rankOf(b.id));
+  // The one tab stop: the selected mark, else the mark last focused if it is still drawn, else the first.
+  // Chosen from state a redraw keeps, so returning by Tab lands where the reader left.
+  const stopAt = (id: string | null | undefined): number => (id ? ordered.findIndex((view) => view.id === id) : -1);
+  const stop = [stopAt(opts.selected?.id), stopAt(lastPaceMark), 0].find((index) => index >= 0) ?? 0;
   const marks: HTMLButtonElement[] = [];
   ordered.forEach((view, index) => {
     const key = stateKey(view);
@@ -362,7 +414,7 @@ export function paceMap(views: readonly MeterView[], W: number, opts: PaceOption
         class: classes.join(' '),
         type: 'button',
         id: `ov-pm-${view.id}`,
-        tabindex: index === 0 ? 0 : -1,
+        tabindex: index === stop ? 0 : -1,
         'aria-label': `${rank}. ${opts.nameOf(view.id)}: ${TIER_LABEL[view.tier ?? 'idle'] ?? ''}, ${formatPercent(view.usedFraction)} used with ${formatPercent(view.elapsedFraction ?? 0)} of the window gone. ${barCaption(view, opts.nowMs).text}`,
         'aria-pressed': String(chosen?.id === view.id),
         dataset: { id: view.id, nav: 'row' },
@@ -383,7 +435,14 @@ export function paceMap(views: readonly MeterView[], W: number, opts: PaceOption
     marks.push(mark);
     holder.appendChild(mark);
   });
-  // Roving focus: one tab stop for the whole chart, arrows to move, in the order of the queue.
+  // Roving focus: one tab stop for the whole chart, arrows to move, in the order of the queue. Whatever puts
+  // focus on a mark (arrows, a click, or focus put back after a redraw) makes it the tab stop.
+  holder.addEventListener('focusin', (event) => {
+    const index = marks.indexOf(event.target as HTMLButtonElement);
+    if (index < 0) return;
+    lastPaceMark = ordered[index]?.id ?? null;
+    marks.forEach((mark, i) => mark.setAttribute('tabindex', i === index ? '0' : '-1'));
+  });
   holder.addEventListener('keydown', (event) => {
     const index = marks.indexOf(document.activeElement as HTMLButtonElement);
     if (index < 0) return;
@@ -393,8 +452,6 @@ export function paceMap(views: readonly MeterView[], W: number, opts: PaceOption
     const next = Math.min(marks.length - 1, Math.max(0, target));
     // Taken here, so the page's own arrow keys (which move through the rows) do not act as well.
     event.preventDefault();
-    marks[index]?.setAttribute('tabindex', '-1');
-    marks[next]?.setAttribute('tabindex', '0');
     marks[next]?.focus();
   });
   return holder;

@@ -7,7 +7,7 @@ import { SORT_ORDERS, type MeterView, type Money, type SortOrder } from '../core
 import { formatMoney, formatMoneyTotals, formatPercent } from '../core/format.js';
 import { rememberReminders } from '../core/reminders.js';
 import { formatAge, formatDuration } from '../core/time.js';
-import { CREDIT_VALUE_NOTE, PLAN_VALUE_NOTE, leftText, lostMoney, summaryLine } from '../core/wording.js';
+import { CREDIT_VALUE_NOTE, FIGURE_LABEL, PLAN_VALUE_NOTE, leftText, lostText, summaryLine } from '../core/wording.js';
 import { App, OVERVIEW_TILES, VIEWS, type ViewId } from './app.js';
 import { HttpBackend, MemoryBackend, type Backend } from './backend.js';
 import type { Actions, Ctx } from './ctx.js';
@@ -16,7 +16,25 @@ import { brandMark, h, icon, mount } from './dom.js';
 import { inspector } from './inspector.js';
 import { costsView, historyView } from './ledger-views.js';
 import { barLegend, refreshCountdowns } from './parts.js';
-import { DIALOG_SCOPES, closeMenu, confirmDialog, copyText, hideTip, isDialogOpen, isMenuOpen, markFocus, onMenuClosed, restoreFocus, showMenu, toast, type FocusMark, type MenuEntry } from './ui.js';
+import {
+  DIALOG_SCOPES,
+  closeMenu,
+  confirmDialog,
+  copyText,
+  dismissTip,
+  focusFirst,
+  hideTip,
+  isDialogOpen,
+  isMenuOpen,
+  isShown,
+  markFocus,
+  onMenuClosed,
+  restoreFocus,
+  showMenu,
+  toast,
+  type FocusMark,
+  type MenuEntry
+} from './ui.js';
 import { drawOverviewCharts, figuresInTiles, overviewView } from './overview.js';
 import { boardView, queueView, tableTools, tableView, timelineView } from './views.js';
 
@@ -89,17 +107,19 @@ function start(app: App, fellBack: boolean): void {
       if (account) editDialog(ctx, account);
     },
     removeAccount: (view) => {
+      // A dialog and a message are drawn outside the page, where a hidden name cannot be blurred.
+      const named = app.model.prefs.privacy ? 'this subscription' : view.account.label;
       void confirmDialog({
-        title: `Delete ${view.account.label}?`,
-        message: `This removes ${view.account.label} and its ${view.account.meters.length} meter${view.account.meters.length === 1 ? '' : 's'} (${view.account.meters.map((meter) => meter.label).join(', ')}). Its finished windows stay in History.`,
+        title: `Delete ${named}?`,
+        message: `This removes ${named} and its ${view.account.meters.length} meter${view.account.meters.length === 1 ? '' : 's'} (${view.account.meters.map((meter) => meter.label).join(', ')}). Its finished windows stay in History.`,
         confirm: 'Delete'
       }).then((yes) => {
         if (!yes) return;
         if (app.model.selectedId && view.account.meters.some((meter) => meter.id === app.model.selectedId)) app.select(null);
-        void actions.run(app.model.backend.removeAccount(view.account.id), `${view.account.label} deleted`).then(() => {
-          // The row that had focus is gone. The next one takes it, or the Add button when none is left.
+        void actions.run(app.model.backend.removeAccount(view.account.id), app.model.prefs.privacy ? 'Subscription deleted' : `${view.account.label} deleted`).then(() => {
+          // The row that had focus is gone. The next one shown takes it, or the Add button when none is left.
           if (document.activeElement && document.activeElement !== document.body) return;
-          (pane.querySelector<HTMLElement>('[data-nav="row"]') ?? header.querySelector<HTMLElement>('.btn.primary'))?.focus({ preventScroll: true });
+          focusFirst([...pane.querySelectorAll<HTMLElement>('[data-nav="row"]'), header.querySelector<HTMLElement>('.btn.primary')]);
         });
       });
     },
@@ -290,11 +310,15 @@ function start(app: App, fellBack: boolean): void {
   const narrow = matchMedia('(max-width: 1039px)');
 
   // With seven tabs a phone cannot show them all. The current one is kept in view, and each edge fades
-  // while tabs are hidden beyond it.
+  // while a tab is cut off beyond it. Measured from the first and last tab rather than the scroll range,
+  // which includes the strip's padding: scrolled to the end, the last tab is whole and must not fade.
   let tabsShown: ViewId | null = null;
   function tabEdges(): void {
-    tabs.classList.toggle('more-right', tabs.scrollLeft + tabs.clientWidth < tabs.scrollWidth - 1);
-    tabs.classList.toggle('more-left', tabs.scrollLeft > 1);
+    const strip = tabs.getBoundingClientRect();
+    const first = tabs.firstElementChild?.getBoundingClientRect();
+    const last = tabs.lastElementChild?.getBoundingClientRect();
+    tabs.classList.toggle('more-right', last !== undefined && last.right > strip.right + 1);
+    tabs.classList.toggle('more-left', first !== undefined && first.left < strip.left - 1);
   }
   tabs.addEventListener('scroll', tabEdges, { passive: true });
   if (typeof ResizeObserver !== 'undefined') new ResizeObserver(tabEdges).observe(tabs);
@@ -365,9 +389,17 @@ function start(app: App, fellBack: boolean): void {
       // Starts with a space, so the figure before it and this one are read and copied as two.
       return text ? h('small', { title: CREDIT_VALUE_NOTE }, ` + ${text} in credits`) : null;
     };
+    // Money that expired is worded as the Finished windows tile, the brief, the command line and the MCP
+    // server word it: "about" a whole amount where windows were estimated, plan money and credits never
+    // added. The plan figure leads; the credits follow, quieter.
+    const lost = lostText(s.lost30, s.creditsLost30, currency, s.lostIsEstimate, s.creditsLostIsEstimate);
+    const split = lost.indexOf(', plus ');
+    const lostLead = split >= 0 ? lost.slice(0, split) : lost;
+    const lostCredits = split >= 0 ? lost.slice(split) : '';
+    const onlyCredits = lostCredits === '' && lost.endsWith(' in credits');
     // On the Overview a figure that a tile states is not repeated here; hiding the tile brings it back.
     const overview = app.model.prefs.view === 'overview';
-    const inTiles = overview ? figuresInTiles(app.model.prefs.overviewHidden) : { atRisk: false, lost: false, stale: false };
+    const inTiles = overview ? figuresInTiles(app.model.prefs.overviewHidden, app) : { atRisk: false, lost: false, stale: false };
     const liveClass = demo ? 'live sample' : online ? 'live' : 'live off';
     const liveText = demo ? 'Sample data' : online ? `Live${lastSync ? `, synced ${formatAge(now - lastSync)}` : ''}` : 'Offline';
     mount(
@@ -419,12 +451,12 @@ function start(app: App, fellBack: boolean): void {
           : h(
               'div',
               { class: 'stat' },
-              h('dt', { class: 'label' }, 'Expired, last 30 days'),
+              h('dt', { class: 'label' }, FIGURE_LABEL.lost30),
               h(
                 'dd',
-                { title: PLAN_VALUE_NOTE },
-                lostMoney(s.lost30, currency, s.lostIsEstimate),
-                credits(s.creditsLost30),
+                { title: onlyCredits ? CREDIT_VALUE_NOTE : PLAN_VALUE_NOTE },
+                lostLead,
+                lostCredits ? h('small', { title: CREDIT_VALUE_NOTE }, lostCredits) : null,
                 // The space is text, so the two figures are read and copied as two.
                 s.utilisation30 !== null ? [' ', h('small', null, `${formatPercent(s.utilisation30)} used`)] : null
               )
@@ -553,6 +585,8 @@ function start(app: App, fellBack: boolean): void {
 
     const s = app.summary();
     const queue = app.queue();
+    const viewChanged = viewShown !== null && viewShown !== prefs.view;
+    viewShown = prefs.view;
     // What a rebuild would otherwise throw away: where the keyboard is, and how far two panes are scrolled.
     const focusMark = markFocus(root, DIALOG_SCOPES);
     const shownBefore = layout.querySelector<HTMLElement>('.insp')?.dataset['meter'] ?? null;
@@ -608,22 +642,35 @@ function start(app: App, fellBack: boolean): void {
     // When the pane closes, focus goes back to the row it was showing, whichever of its controls had it.
     // Looking for "the same control elsewhere" would pick some other row's button.
     const paneClosed = insp === null && shownBefore !== null && (focusMark === null || focusMark.scope === '.insp');
-    const row = shownBefore ? pane.querySelector<HTMLElement>(`[data-nav="row"][data-id="${CSS.escape(shownBefore)}"]`) : null;
+    // The quota's rows, of which the first shown takes focus: a chart and the table standing in for it both
+    // have one, and only one of the two is drawn.
+    const rows = shownBefore ? [...pane.querySelectorAll<HTMLElement>(`[data-nav="row"][data-id="${CSS.escape(shownBefore)}"]`)] : [];
     // Back to the control that opened the pane (a mark on a chart, a row in a tile), if it was opened for
     // the quota it is closing on; otherwise to that quota's first row.
     const opener = paneClosed && openedFrom?.within === shownBefore ? openedFrom : null;
     if (paneClosed) openedFrom = null;
-    if (paneClosed && opener && restoreFocus(root, opener)) {
-      // restored
-    } else if (paneClosed && row) row.focus({ preventScroll: true });
-    else if (!restoreFocus(root, focusMark) && focusMark?.scope === '.insp') row?.focus({ preventScroll: true });
+    const restored =
+      (paneClosed && opener !== null && restoreFocus(root, opener)) ||
+      (paneClosed && focusFirst(rows)) ||
+      restoreFocus(root, focusMark) ||
+      (focusMark?.scope === '.insp' && focusFirst(rows));
     if (insp && overlay && !insp.contains(document.activeElement)) insp.querySelector<HTMLElement>('.insp-close')?.focus({ preventScroll: true });
     if (window.scrollY !== scrollY) window.scrollTo({ top: scrollY });
+    // Focus that was in the page and has nowhere to go back to: its control went with the view it was in
+    // (a tile's "5 more in the Queue" opens the Queue). It goes to the new view's first row, or to the tab
+    // of the view shown, rather than to nothing, from where the next Tab would start at the top.
+    if (!restored && focusMark !== null && !overlay) {
+      const first = viewChanged ? [...pane.querySelectorAll<HTMLElement>('[data-nav="row"]')].find(isShown) : undefined;
+      if (first && focusFirst([first])) first.scrollIntoView({ block: 'nearest' });
+      else focusFirst([tabs.querySelector<HTMLElement>('[aria-current="page"]')]);
+    }
     notify();
   }
 
   /** What had focus when the inspector opened, so closing it can return there. */
   let openedFrom: FocusMark | null = null;
+  /** The view the last rebuild drew, to tell a switch of view from a redraw of the same one. */
+  let viewShown: ViewId | null = null;
   // A tile's width changes without a rebuild (the window is resized, a scrollbar comes or goes); only the
   // charts are drawn again.
   if (typeof ResizeObserver !== 'undefined') {
@@ -700,13 +747,16 @@ function start(app: App, fellBack: boolean): void {
 
   // -- keyboard ----------------------------------------------------------------
   function moveSelection(delta: number): void {
-    // A quota can appear in several places (the Overview's tiles); J and K visit it once, at its first.
+    // A quota can appear in several places (the Overview's tiles); J and K visit it once, where it is first
+    // shown. Only what is drawn counts: a chart's table is in the page while the chart is shown, and a quota
+    // first met there would otherwise be skipped everywhere. From a later place (a mark on a chart), the
+    // next quota is the one after it in that same order.
     const seen = new Set<string>();
-    const rows = [...pane.querySelectorAll<HTMLElement>('[data-nav="row"]')].filter((row) => {
+    const rows = [...pane.querySelectorAll<HTMLElement>('[data-nav="row"]')].filter(isShown).filter((row) => {
       const id = row.dataset['id'] ?? '';
       if (seen.has(id)) return false;
       seen.add(id);
-      return row.offsetParent !== null;
+      return true;
     });
     if (rows.length === 0) return;
     const active = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>('[data-nav="row"]');
@@ -724,6 +774,9 @@ function start(app: App, fellBack: boolean): void {
     const typing = target !== null && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable);
     if (event.key === 'Escape') {
       if (isDialogOpen() || isMenuOpen()) return; // they handle Escape themselves
+      // A tooltip goes first: it can cover the marks around it, and Escape puts it away without moving the
+      // pointer or focus. A second Escape does what Escape otherwise does.
+      if (dismissTip()) return;
       if (typing && target === filterInput) {
         filterInput.value = '';
         app.setFilter('');

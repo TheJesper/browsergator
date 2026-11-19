@@ -35,11 +35,11 @@ import {
   type MeterInput,
   type MeterPatch
 } from '../core/accounts.js';
-import { costsMarkdown, meterMarkdown, meterRecord, queueText, snapshot, stamp, weeksMarkdown, type MeterRecord } from '../core/brief.js';
+import { costsMarkdown, hasMoney, meterMarkdown, meterRecord, queueText, snapshot, stamp, weeksMarkdown, type MeterRecord } from '../core/brief.js';
 import { CATALOG, CATALOG_CHECKED } from '../core/catalog.js';
 import { automaticSources, findProvider, type PresetMeter, type ProviderPreset } from '../core/catalog-types.js';
 import { cyclesOf, ledgerTotals, viewAccount, type MeterView, type Money } from '../core/forecast.js';
-import { ledgerWeeks } from '../core/insights.js';
+import { ledgerWeeks, weeksCovering } from '../core/insights.js';
 import { formatAmount, formatMoney, formatMoneyTotals, formatPercent } from '../core/format.js';
 import { addSpendSource, recordSpend, summariseSpend } from '../core/spend.js';
 import { DAY, HOUR, MINUTE, dateKey, iso, toMs } from '../core/time.js';
@@ -259,12 +259,17 @@ const refreshUsageInput = z.strictObject({
   collectors: z.array(z.string().min(1).max(60)).max(50).optional().describe('Collector ids to run. Omit to run every enabled collector.')
 });
 
+/** The most weeks `waste_report` returns week by week: half a year. */
+const MAX_WEEKS = 26;
+
 const wasteReportInput = z.strictObject({
   days: z.number().int().min(1).max(365).default(30).describe('How far back to look. 1 to 365, default 30.'),
   byWeek: z
     .boolean()
     .default(false)
-    .describe('Also return the totals week by week (Monday to Monday, at most 26 weeks): windows closed, money expired and the share used over the trailing 30 days. Use it to answer whether the user is improving.')
+    .describe(
+      `Also return the totals week by week, Monday to Monday: every week that holds part of the last \`days\` days, up to ${MAX_WEEKS} weeks (the latest ${MAX_WEEKS} when \`days\` reaches further back). Each has the windows closed, the money expired and the share used over the trailing 30 days. Use it to answer whether the user is improving.`
+    )
 });
 
 const recordSpendInput = z.strictObject({
@@ -371,6 +376,8 @@ const whatToUseOutput = z.looseObject({
     creditsAtRisk: moneyOut,
     lost30: moneyOut,
     creditsLost30: moneyOut,
+    lost30IsEstimate: z.boolean().describe('True when part of lost30, the plan money, comes from windows nobody read near their end.'),
+    creditsLost30IsEstimate: z.boolean().describe('The same for creditsLost30.'),
     utilisation30Percent: maybeNumber,
     nextReset: z.looseObject({ meter: text, account: text, resetsAt: text }).nullable()
   }),
@@ -445,7 +452,8 @@ const wasteReportOutput = z.looseObject({
   utilisationPercent: maybeNumber,
   lost: moneyOut,
   creditsLost: moneyOut,
-  lostIsEstimate: z.boolean(),
+  lostIsEstimate: z.boolean().describe('True when part of lost, the plan money, comes from windows nobody read near their end.'),
+  creditsLostIsEstimate: z.boolean().describe('The same for creditsLost.'),
   weeks: z
     .array(
       z.looseObject({
@@ -455,6 +463,7 @@ const wasteReportOutput = z.looseObject({
         lost: moneyOut,
         lostEstimated: moneyOut,
         creditsLost: moneyOut,
+        creditsLostEstimated: moneyOut,
         utilisationPercentTrailing30: maybeNumber
       })
     )
@@ -1069,8 +1078,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
       reading(async () => {
         const { state, now } = await read();
         const totals = ledgerTotals(state.cycles, now, days);
-        // The same weekly record as the Overview's "Finished windows" tile.
-        const weeks = byWeek ? ledgerWeeks(state.cycles, now, Math.min(26, Math.ceil(days / 7)), tz) : null;
+        // The same weekly record as the Overview's "Finished windows" tile, from the week the period starts in.
+        const weeks = byWeek ? ledgerWeeks(state.cycles, now, Math.min(MAX_WEEKS, weeksCovering(now, days, tz)), tz) : null;
         const since = now - days * DAY;
         const inWindow = state.cycles.filter((cycle) => {
           const ended = toMs(cycle.endedAt);
@@ -1110,9 +1119,15 @@ export function createMcpServer(deps: McpDeps): McpServer {
         if (inWindow.length === 0) {
           lines.push(`No window finished in the last ${days} days, so there is nothing to report yet. The ledger fills as tracked windows reset.`);
         } else {
-          // Worded as on the dashboard, the brief and the command line.
-          const lost = lostText(totals.lost30, totals.creditsLost30, state.settings.currency, totals.lostIsEstimate, totals.creditsLostIsEstimate);
-          lines.push(`Last ${days} days: ${utilisationText(totals.utilisation30, totals.cycles30)}; ${lost} expired unused.`, '');
+          // Worded as on the dashboard, the brief and the command line, with an amount only when money expired:
+          // "$0.00 expired unused" would tell an agent that nothing went to waste.
+          const used = utilisationText(totals.utilisation30, totals.cycles30);
+          const lost = hasMoney(totals.lost30) || hasMoney(totals.creditsLost30)
+            ? `${lostText(totals.lost30, totals.creditsLost30, state.settings.currency, totals.lostIsEstimate, totals.creditsLostIsEstimate)} expired unused`
+            : inWindow.some((cycle) => cycle.wastedFraction >= 0.005 && cycle.wastedValue === null)
+              ? 'what was left unused has no price set, so no money is counted'
+              : 'nothing expired unused';
+          lines.push(`Last ${days} days: ${used}; ${lost}.`, '');
           lines.push('| Subscription | Meter | Windows | Unused on average | Expired value |', '| --- | --- | --- | --- | --- |');
           for (const row of meters.slice(0, 20)) {
             lines.push(
@@ -1131,6 +1146,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           lost: roundMoney(totals.lost30),
           creditsLost: roundMoney(totals.creditsLost30),
           lostIsEstimate: totals.lostIsEstimate,
+          creditsLostIsEstimate: totals.creditsLostIsEstimate,
           ...(weeks
             ? {
                 weeks: weeks.map((week) => ({
@@ -1140,6 +1156,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
                   lost: roundMoney(week.lost),
                   lostEstimated: roundMoney(week.lostEstimated),
                   creditsLost: roundMoney(week.creditsLost),
+                  creditsLostEstimated: roundMoney(week.creditsLostEstimated),
                   utilisationPercentTrailing30: week.trailingUtilisation === null ? null : round(week.trailingUtilisation * 100)
                 }))
               }

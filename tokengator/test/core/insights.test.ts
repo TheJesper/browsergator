@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { addAccount, updateAccount, type AccountInput, type MeterInput } from '../../src/core/accounts.js';
 import { demoState } from '../../src/core/demo.js';
 import { ledgerTotals, summarise, viewState, type MeterView } from '../../src/core/forecast.js';
-import { blockedLimits, countTiers, expiryOutlook, ledgerWeeks, nextUseNow, plottable, refreshList, upcomingResets, wasteBy } from '../../src/core/insights.js';
+import { weeksMarkdown } from '../../src/core/brief.js';
+import { FORECAST_TIERS, blockedLimits, countTiers, expectsToExpire, expiryOutlook, ledgerWeeks, nextUseNow, plottable, refreshList, upcomingResets, wasteBy, weeksCovering } from '../../src/core/insights.js';
 import { rollState } from '../../src/core/reset.js';
 import { DAY, HOUR, iso } from '../../src/core/time.js';
 import { emptyState, type ClosedCycle, type Price, type State } from '../../src/core/types.js';
@@ -124,6 +125,69 @@ describe('expiryOutlook', () => {
     expect(outlook.later.credits['USD']).toBeGreaterThan(0);
     expect(outlook.days.some((day) => day.urgent)).toBe(true);
   });
+
+  it('leaves out an expired one-off pack: it has no reset ahead', () => {
+    const state = add(emptyState(), 'Credit pack', [{ label: 'Pack', unit: 'usd', limit: 50, used: 10, reset: { kind: 'once' }, resetsAt: iso(NOW + 2 * DAY) }]);
+    const later = NOW + 12 * DAY;
+    const views = viewState(rollState(state, later), later);
+    expect(views[0]?.tier).toBe('expired');
+    const outlook = expiryOutlook(views, later, 30, 'UTC');
+    expect(outlook.days.flatMap((day) => day.entries)).toEqual([]);
+    expect(outlook.later).toMatchObject({ count: 0, firstMs: null, plan: {}, credits: {} });
+  });
+
+  it('puts a reset just due on today, and drops one that passed days ago', () => {
+    const state = add(emptyState(), 'Claude Max', [weekly(14, 10)], { price: USD_100 });
+    const resetMs = NOW + 14 * HOUR;
+    // Read before the next reading rolls the window on: two hours past its reset, it is closing now.
+    const due = expiryOutlook(viewState(state, resetMs + 2 * HOUR), resetMs + 2 * HOUR, 30, 'UTC');
+    expect(due.days[0]?.entries.map((entry) => entry.atMs)).toEqual([resetMs]);
+    // Three days past, the window has closed: it is not drawn on today.
+    const past = expiryOutlook(viewState(state, resetMs + 3 * DAY), resetMs + 3 * DAY, 30, 'UTC');
+    expect(past.days.flatMap((day) => day.entries)).toEqual([]);
+    expect(past.unvalued + past.stale + past.later.count).toBe(0);
+  });
+
+  it('counts a quota resetting after the range by the same test as its money', () => {
+    // A quarter on pace with 54% used five ninths in: about 3% left at the reset, worth a few dollars.
+    const state = add(emptyState(), 'Quarterly', [{ label: 'Quarter', reset: { kind: 'interval', hours: 2160 }, used: 54, resetsAt: iso(NOW + 40 * DAY) }], { price: USD_100 });
+    const views = viewState(state, NOW);
+    expect(views[0]?.tier).toBe('on-pace');
+    expect(views[0]?.projectedUnused).toBeLessThan(0.05);
+    const outlook = expiryOutlook(views, NOW, 30, 'UTC');
+    expect(outlook.later.plan['USD']).toBeGreaterThan(0);
+    expect(outlook.later.count).toBe(1);
+    expect(outlook.later.firstMs).toBe(NOW + 40 * DAY);
+  });
+});
+
+describe('expectsToExpire', () => {
+  it('is true only for a forecast that leaves 5% or more that does not carry over', () => {
+    const state = add(emptyState(), 'Claude Max', [
+      { ...weekly(40, 20), key: 'behind', label: 'Behind' },
+      { ...weekly(160, 1), key: 'fresh', label: 'Fresh' },
+      { ...weekly(40, 20, { rollover: 'carries' }), key: 'carries', label: 'Carries' },
+      { ...weekly(40, 100), key: 'spent', label: 'Spent' },
+      { key: 'session', label: 'Session', role: 'throttle', reset: { kind: 'rolling', hours: 5 }, used: 10, resetsAt: iso(NOW + HOUR) }
+    ], { price: USD_100 });
+    const byKey = new Map(viewState(state, NOW).map((view) => [view.meter.key, view]));
+    expect(byKey.get('behind')?.tier).toBe('behind');
+    expect(expectsToExpire(byKey.get('behind') as MeterView)).toBe(true);
+    // Too early to forecast, however much would be left at this pace.
+    expect(byKey.get('fresh')).toMatchObject({ tier: 'fresh' });
+    expect(byKey.get('fresh')?.projectedUnused).toBeGreaterThanOrEqual(0.05);
+    expect(expectsToExpire(byKey.get('fresh') as MeterView)).toBe(false);
+    for (const key of ['carries', 'spent', 'session']) expect(expectsToExpire(byKey.get(key) as MeterView), key).toBe(false);
+  });
+
+  it('agrees with the forecasting states on the sample', () => {
+    const { views } = sample();
+    expect([...FORECAST_TIERS]).toEqual(['use-now', 'behind', 'on-pace']);
+    const expiring = views.filter(expectsToExpire);
+    expect(expiring.length).toBeGreaterThan(0);
+    expect(views.filter((view) => view.tier === 'fresh').some(expectsToExpire)).toBe(false);
+    for (const view of expiring) expect(FORECAST_TIERS).toContain(view.tier);
+  });
 });
 
 describe('ledgerWeeks', () => {
@@ -155,6 +219,51 @@ describe('ledgerWeeks', () => {
     const inUtc = ledgerWeeks(cycles, NOW, 2, 'UTC');
     expect(local.map((week) => week.windows)).toEqual([0, 1]);
     expect(inUtc.map((week) => week.windows)).toEqual([1, 0]);
+  });
+});
+
+describe('weeksCovering', () => {
+  it('counts the weeks from the one the span starts in to the current one', () => {
+    // Thursday: seven days back is last Thursday, in last week.
+    expect(weeksCovering(NOW, 7, 'UTC')).toBe(2);
+    expect(weeksCovering(NOW, 3, 'UTC')).toBe(1);
+    expect(weeksCovering(NOW, 30, 'UTC')).toBe(5);
+    expect(weeksCovering(NOW, 365, 'UTC')).toBe(53);
+    // Across the end of summer time in Stockholm a week is an hour long, and still one week.
+    expect(weeksCovering(NOW, 30, 'Europe/Stockholm')).toBe(5);
+  });
+
+  it('gives weeks that hold every window the totals count over the same days', () => {
+    const ended = [0.5, 3, 5, 6.9, 7.2, 12, 29.5, 31].map((daysAgo) => NOW - daysAgo * DAY);
+    const cycles = ended.map((at) => cycle({ endedAt: iso(at) }));
+    for (const tz of ['UTC', 'Europe/Stockholm', 'America/Los_Angeles']) {
+      for (const days of [1, 7, 14, 30]) {
+        const weeks = ledgerWeeks(cycles, NOW, weeksCovering(NOW, days, tz), tz);
+        const inWeeks = weeks.reduce((sum, week) => sum + week.windows, 0);
+        const first = weeks[0]?.startMs ?? NOW;
+        expect(first, `${tz} ${days}`).toBeLessThanOrEqual(NOW - days * DAY);
+        expect(inWeeks, `${tz} ${days}`).toBeGreaterThanOrEqual(ledgerTotals(cycles, NOW, days).cycles30);
+        expect(inWeeks, `${tz} ${days}`).toBe(ended.filter((at) => at >= first).length);
+      }
+    }
+  });
+});
+
+describe('weeksMarkdown', () => {
+  it('writes an estimated amount as about a whole amount, and keeps credits and their estimate apart', () => {
+    const cycles = [
+      cycle({ endedAt: iso(utc(2026, 11, 3, 12)), wastedValue: 9.68 }),
+      cycle({ endedAt: iso(utc(2026, 11, 17, 12)), wastedValue: 12.19, confidence: 'estimated' }),
+      cycle({ endedAt: iso(utc(2026, 11, 18, 12)), meterId: 'acc:credits', unit: 'usd', wastedValue: 52, confidence: 'estimated' })
+    ];
+    const lines = weeksMarkdown(ledgerWeeks(cycles, NOW, 3, 'UTC'), 'USD', 'UTC').split('\n');
+    expect(lines[0]).toBe('| Week of | Windows | Expired | Of which estimated | Credits expired | Credits estimated | Used, trailing 30 days |');
+    // Every window left 40% unused.
+    expect(lines.slice(2)).toEqual([
+      '| 2026-11-02 | 1 | $9.68 |  |  |  | 60% |',
+      '| 2026-11-09 | 0 | no window closed |  |  |  | 60% |',
+      '| 2026-11-16 | 2 | about $12 | about $12 | about $52 | about $52 | 60% |'
+    ]);
   });
 });
 
@@ -194,6 +303,18 @@ describe('what needs attention', () => {
     expect(ids).toContain('alpha:weekly-limit');
     expect(ids).toContain('bravo:weekly-limit');
     expect(ids).not.toContain('charlie:weekly-limit');
+  });
+
+  it('orders never read, then no reset time, then the most overdue for how often each should be read', () => {
+    const daily = { kind: 'daily', time: '00:00', tz: 'UTC' } as const;
+    const monthly = { kind: 'monthly', day: 1, time: '00:00', tz: 'UTC' } as const;
+    // A daily quota read 10 hours ago is further past due (stale after 4.8 hours) than a monthly one read
+    // three days ago (stale after 48 hours), although its reading is younger.
+    let state = addAccount(emptyState(), { label: 'Daily', meters: [{ label: 'Day', reset: daily, used: 10 }] }, NOW - 10 * HOUR).state;
+    state = addAccount(state, { label: 'Monthly', meters: [{ label: 'Month', reset: monthly, used: 10 }] }, NOW - 3 * DAY).state;
+    state = add(state, 'Unread', [{ label: 'Week', reset: { kind: 'interval', hours: 168 }, resetsAt: iso(NOW + 2 * DAY) }]);
+    state = add(state, 'No reset', [{ label: 'Week', reset: { kind: 'interval', hours: 168 }, used: 30 }]);
+    expect(refreshList(viewState(state, NOW)).map((view) => view.account.label)).toEqual(['Unread', 'No reset', 'Daily', 'Monthly']);
   });
 
   it('lists closed rate limits soonest first', () => {

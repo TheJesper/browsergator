@@ -459,7 +459,7 @@ async function overview(browser) {
 
   // Each figure once: the strip leaves out what a tile states, and gives it back when the tile is hidden.
   const strip = () => page.locator('.summary').innerText();
-  check('the summary keeps its sentence and leaves the tiles\' figures to them', !/At risk, all windows|Expired, last 30 days|readings? (is|are) stale/.test(await strip()) && /quotas? need/.test(await strip()));
+  check('the summary keeps its sentence and leaves the tiles\' figures to them', !/At risk, all windows|Expired unused, last 30 days|readings? (is|are) stale/.test(await strip()) && /quotas? need/.test(await strip()));
   const leadRows = await page.locator('.tile[data-tile="lead"] .row').count();
   const useNow = await page.evaluate(() => Number(document.querySelector('.tabs .count')?.textContent ?? '0'));
   check('the lead tile lists the quotas to use now, tinted, with the rate for the first', leadRows === Math.min(4, useNow) && (await page.locator('.tile[data-tile="lead"] .row.r-use-now').count()) === leadRows && /an (hour|day) uses it up by/.test(await page.locator('.ov-finish').innerText()));
@@ -473,9 +473,25 @@ async function overview(browser) {
   check('the expiry chart is drawn at its tile\'s width, with hatched columns and a credits lane', expiry.svg > 0 && Math.abs(expiry.svg - expiry.slot) < 9 && expiry.viewBox === `0 0 ${expiry.svg} ${expiry.viewBox?.split(' ')[3]}` && expiry.columns >= 3 && expiry.lane, JSON.stringify(expiry));
   const label = await page.locator('.tile[data-tile="expiry"] .ov-stat .big').innerText();
   check('the expiry tile states the money at risk across all windows, plan money and credits apart', /^\$[\d.,]+, plus \$[\d.,]+ in credits$/.test(label), label);
+  // The next seven days are page text, read out with the tile, not a label inside the hidden drawing.
+  const week = await page.evaluate(() => {
+    const el = document.querySelector('.tile[data-tile="expiry"] .ov-week');
+    return {
+      text: el?.textContent ?? '',
+      inDrawing: el ? el.closest('svg, [aria-hidden="true"]') !== null : true,
+      drawingSays: [...document.querySelectorAll('.tile[data-tile="expiry"] svg text')].some((text) => /7 days/.test(text.textContent ?? ''))
+    };
+  });
+  check('the next 7 days are stated as page text above the expiry chart, not inside the drawing', /^Next 7 days: \$[\d.,]+/.test(week.text) && !week.inDrawing && !week.drawingSays, JSON.stringify(week));
+  check('no chart hit area is a tab stop', await page.evaluate(() => { const hits = [...document.querySelectorAll('.ov-grid .hit')]; return hits.length > 0 && hits.every((hit) => hit.getAttribute('tabindex') === '-1'); }));
 
   // A table in a chart's place stays after a redraw, and its quotas open the inspector.
+  const toggleState = async (id) => page.locator(`#ov-tbl-${id}`).evaluate((button) => ({ label: button.textContent.trim(), pressed: button.getAttribute('aria-pressed') }));
+  const unpressed = await toggleState('expiry');
   await page.click('#ov-tbl-expiry');
+  const pressed = await toggleState('expiry');
+  check('the Table button keeps its label and states whether the table is shown as pressed', unpressed.label === 'Table' && pressed.label === 'Table' && unpressed.pressed === 'false' && pressed.pressed === 'true', JSON.stringify({ unpressed, pressed }));
+  check('the next 7 days stay stated while the table replaces the chart', (await page.locator('.tile[data-tile="expiry"] .ov-week').isVisible()) && (await page.locator('.tile[data-tile="expiry"] .tile-chart').isHidden()));
   await page.keyboard.press('t');
   await page.keyboard.press('t');
   await page.keyboard.press('t');
@@ -487,7 +503,31 @@ async function overview(browser) {
   await page.keyboard.press('Escape');
   await page.click('#ov-tbl-expiry');
   await page.waitForTimeout(150);
-  check('switching back draws the chart again', (await page.locator('.tile[data-tile="expiry"] .tile-chart svg').count()) === 1);
+  check('switching back draws the chart again', (await page.locator('.tile[data-tile="expiry"] .tile-chart svg').count()) === 1 && (await toggleState('expiry')).pressed === 'false');
+
+  // At 1440 two tiles share the width: a table wider than its tile scrolls sideways, by keyboard too, to its last column.
+  for (const id of ['expiry', 'pace', 'windows']) {
+    await page.click(`#ov-tbl-${id}`);
+    const wrap = page.locator(`.tile[data-tile="${id}"] .ov-figure > .ov-table`);
+    await wrap.focus();
+    for (let i = 0; i < 30; i += 1) await page.keyboard.press('ArrowRight');
+    await page.waitForTimeout(60);
+    const reach = await wrap.evaluate((el) => {
+      const last = [...el.querySelectorAll('thead th')].at(-1).getBoundingClientRect();
+      return {
+        named: el.tabIndex === 0 && el.getAttribute('role') === 'region' && /, as a table$/.test(el.getAttribute('aria-label') ?? ''),
+        focused: document.activeElement === el,
+        fits: el.scrollWidth <= el.clientWidth,
+        scrolls: ['auto', 'scroll'].includes(getComputedStyle(el).overflowX),
+        scrolled: el.scrollLeft,
+        lastRight: Math.round(last.right),
+        right: Math.round(el.getBoundingClientRect().right)
+      };
+    });
+    const toggle = await toggleState(id);
+    check(`at 1440px every column of the ${id} table can be reached, by keyboard where it is wider than its tile`, reach.named && reach.focused && toggle.label === 'Table' && toggle.pressed === 'true' && (reach.fits || (reach.scrolls && reach.scrolled > 0 && reach.lastRight <= reach.right + 1)), JSON.stringify({ ...reach, toggle }));
+    await page.click(`#ov-tbl-${id}`);
+  }
 
   // The even-pace chart: one tab stop, arrows in queue order, focus back on the mark after the inspector.
   const marks = await page.locator('.pm-mark').count();
@@ -495,6 +535,21 @@ async function overview(browser) {
   check('every quota with a running window is a mark on the even-pace chart', marks > 3 && String(marks) === plotted, `${marks} marks, caption says ${plotted}`);
   check('the marks are one tab stop', (await page.locator('.pm-mark[tabindex="0"]').count()) === 1);
   check('a mark is orange only when part of it is expected to expire', await page.evaluate(() => [...document.querySelectorAll('.pm-mark')].every((mark) => mark.classList.contains('risk') !== mark.classList.contains('quiet'))));
+  // A window too new to forecast expects nothing to expire: neutral ink, and no share in either table.
+  const fresh = await page.evaluate(() => {
+    const mark = [...document.querySelectorAll('.pm-mark')].find((el) => /: New window,/.test(el.getAttribute('aria-label') ?? ''));
+    const risk = document.querySelector('.pm-mark.risk');
+    const rowOf = (tile) => (mark ? [...document.querySelectorAll(`.tile[data-tile="${tile}"] .ov-figure > .ov-table tbody tr`)].find((tr) => tr.querySelector(`[data-id="${mark.dataset.id}"]`)) : null);
+    return {
+      id: mark?.dataset.id ?? null,
+      quiet: mark ? mark.classList.contains('quiet') && !mark.classList.contains('risk') : false,
+      colour: mark ? getComputedStyle(mark).color : '',
+      orange: risk ? getComputedStyle(risk).color : '',
+      paceWillExpire: rowOf('pace')?.cells[6]?.textContent ?? null,
+      expiryWillExpire: rowOf('expiry')?.cells[3]?.textContent ?? null
+    };
+  });
+  check('a new window, too early to forecast, is not orange and its tables expect nothing to expire', fresh.id !== null && fresh.quiet && fresh.colour !== fresh.orange && fresh.paceWillExpire === '' && fresh.expiryWillExpire === 'too early', JSON.stringify(fresh));
   await page.locator('.pm-mark[tabindex="0"]').focus();
   const first = await page.evaluate(() => document.activeElement?.id);
   await page.keyboard.press('ArrowRight');
@@ -521,6 +576,39 @@ async function overview(browser) {
   }
   const run = visited.slice(0, visited.indexOf(visited[visited.length - 1]) + 1);
   check('J visits each quota once on the Overview', new Set(run).size === run.length, run.join(', '));
+  // ...and none is skipped: every quota a tile shows, in the order each first appears on the page.
+  const shownOrder = await page.evaluate(() => {
+    const order = [];
+    for (const el of document.querySelectorAll('#main [data-nav="row"]')) if (el.getClientRects().length > 0 && !order.includes(el.dataset.id)) order.push(el.dataset.id);
+    const tiles = {};
+    for (const tile of ['lead', 'attention', 'pace']) tiles[tile] = [...document.querySelectorAll(`.tile[data-tile="${tile}"] [data-nav="row"]`)].filter((el) => el.getClientRects().length > 0).map((el) => el.dataset.id);
+    return { order, tiles };
+  });
+  const everyShown = [...new Set(Object.values(shownOrder.tiles).flat())];
+  check('J visits every quota the lead, attention and pace tiles show, in the order each first appears', JSON.stringify(run) === JSON.stringify(shownOrder.order) && everyShown.every((id) => run.includes(id)) && everyShown.length > 10, `${run.join(', ')} vs ${shownOrder.order.join(', ')}`);
+  const back = [];
+  for (let i = 0; i < run.length + 1; i += 1) {
+    await page.keyboard.press('k');
+    back.push(await page.evaluate(() => document.activeElement?.getAttribute('data-id')));
+  }
+  const backRun = back.slice(0, back.indexOf(back[back.length - 1]) + 1);
+  check('K visits the same quotas in reverse', JSON.stringify(backRun) === JSON.stringify(run.slice(0, -1).reverse()), backRun.join(', '));
+  await page.locator('.pm-mark').nth(3).focus();
+  const fromMark = await page.evaluate(() => document.activeElement?.getAttribute('data-id'));
+  await page.keyboard.press('j');
+  const afterMark = await page.evaluate(() => document.activeElement?.getAttribute('data-id'));
+  check('from an even-pace mark, J moves on to the next quota, not back to the top', afterMark === run[run.indexOf(fromMark) + 1], `${fromMark} -> ${afterMark}`);
+
+  // The chart's one tab stop is the mark that last had focus, also after a redraw.
+  await page.locator('.pm-mark[tabindex="0"]').focus();
+  for (let i = 0; i < 3; i += 1) await page.keyboard.press('ArrowRight');
+  const fourth = await page.evaluate(() => document.activeElement?.id);
+  await page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement.blur() : undefined));
+  await page.keyboard.press('t');
+  await page.keyboard.press('t');
+  await page.waitForTimeout(150);
+  const stops = await page.evaluate(() => [...document.querySelectorAll('.pm-mark[tabindex="0"]')].map((mark) => mark.id));
+  check('after a redraw the even-pace chart is still one tab stop, on the mark last focused', stops.length === 1 && stops[0] === fourth && /^ov-pm-/.test(fourth ?? ''), `${stops.join(', ')} vs ${fourth}`);
 
   // Hiding a tile: from the Tiles menu, as a checkbox, remembered, and its figure back in the strip.
   await page.click('#tiles-button');
@@ -528,7 +616,10 @@ async function overview(browser) {
   check('the Tiles menu offers the hideable tiles as checkboxes', (await page.locator('.menu [role="menuitemcheckbox"]').count()) === 5);
   await menuItem(page, 'Finished windows').click();
   await page.waitForTimeout(150);
-  check('a hidden tile is gone and its figure is back in the summary', (await page.locator('.tile[data-tile="windows"]').count()) === 0 && /Expired, last 30 days/.test(await strip()));
+  check('a hidden tile is gone and its figure is back in the summary', (await page.locator('.tile[data-tile="windows"]').count()) === 0 && /Expired unused, last 30 days/.test(await strip()));
+  // Worded as the tile words it: estimated amounts are "about" whole units, credits included.
+  const stripLost = await page.evaluate(() => [...document.querySelectorAll('.summary .stat')].find((stat) => /Expired unused/.test(stat.textContent ?? ''))?.querySelector('dd')?.textContent ?? '');
+  check('the summary words the expired figure as the tile does', /^about \$\d+, plus about \$\d+ in credits\b/.test(stripLost) && !/\.\d\d in credits/.test(stripLost), stripLost);
   await page.reload();
   await page.waitForSelector('.ov-grid');
   check('the choice survives a reload', (await page.locator('.tile[data-tile="windows"]').count()) === 0);

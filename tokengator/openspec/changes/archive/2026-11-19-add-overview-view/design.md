@@ -29,7 +29,9 @@ stored (money at risk over time, forecast accuracy).
 **Each figure once.** On the Overview the summary strip keeps its sentence, its connection state and the
 next reset. It leaves out a figure while the tile that states it is shown: the money at risk across all
 windows (always in "What expires"), the money expired and the share used (in "Finished windows") and the
-stale count (in "Needs attention"). Hiding a tile puts its figure back in the strip.
+stale count (in "Needs attention"). Hiding a tile puts its figure back in the strip, and so does a filter
+that leaves out every finished window on record: the tile then says that no window matches, not that
+nothing expired.
 
 **Filters.** The category, text and "Hide used up" filters scope every tile; the category and text filters
 also scope finished windows, matched through the live account when it still exists. A line says the tiles
@@ -49,13 +51,27 @@ only the charts when a slot's width changes by 8 pixels or more, keeping focus b
 **Colour still means state.** Columns that will expire are hatched orange; what did expire is solid orange,
 with its estimated part outlined; the share used is the "used" blue. On the even-pace map a quota is
 orange when part of it is expected to expire and a neutral ink otherwise, and its shape gives its tier,
-so running hot and used up are never repainted in a colour that means something else. Providers are told
-apart by name and position only.
+so running hot and used up are never repainted in a colour that means something else. A window too new to
+forecast counts as nothing expected to expire. In forced colours, where every colour becomes the same
+system ink, a mark expected to expire is a filled disc and one with nothing expected to expire a hollow
+ring, and the legend keys are drawn the same way. Providers are told apart by name and position only.
+
+**The first seven days.** A quiet bracket above the expiry chart spans its first seven days, the span the
+"Next 7 days" figure adds up. The figure itself is page text, so the drawing carries no number that the
+page does not also state.
 
 **Marks that can take focus are HTML.** The even-pace marks are buttons positioned over the SVG, because
 focus on an SVG element is lost on every rebuild. Column hit areas are pointer-only; their keyboard
-equivalent is the tile's table, whose quota cells open the inspector.
+equivalent is the tile's table, whose quota cells open the inspector. The button that shows a table is
+always labelled "Table" and is pressed while the table is shown; it is hidden where a narrow tile already
+draws the table in the chart's place. Each table sits in a named region that takes focus, so it can be
+scrolled sideways by keyboard. The total for the next seven days is written in the page above the expiry
+chart, not in the drawing, so it is read out and stays when the table is shown.
 
-**One wording.** `lostText`, `utilisationText`, `trendText`, `finishLine` and the figure labels live in
-`src/core/wording.ts`. The brief, `tokengator status` and `waste_report` use them, so "about $39 expired,
-80% used over 15 windows" reads the same everywhere.
+**Needs attention.** Closed rate limits come first and always have a place among the five entries: the
+Queue, which the tile's link opens for the readings that do not fit, does not list them. Closed limits
+beyond five are linked to the Board.
+
+**One wording.** `lostText`, `utilisationText`, `trendText`, `finishLine`, the chart captions and the
+figure labels live in `src/core/wording.ts`. The brief, `tokengator status` and `waste_report` use them, so
+"about $39 expired, 80% used over 15 windows" reads the same everywhere.

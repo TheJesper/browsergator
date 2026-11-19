@@ -82,7 +82,10 @@ export interface ExpiryDay {
 export interface ExpiryOutlook {
   days: ExpiryDay[];
   firstWeek: { plan: Money; credits: Money };
-  /** Current windows that reset after the last day. */
+  /**
+   * Current windows that reset after the last day. `count` is those with money at stake or that will lose
+   * 5% or more, so it counts every quota behind the money; `firstMs` is the first of their resets with money.
+   */
   later: { plan: Money; credits: Money; count: number; firstMs: number | null };
   /** Allowances of snoozed subscriptions, left out like everywhere else. */
   snoozed: number;
@@ -93,11 +96,23 @@ export interface ExpiryOutlook {
 }
 
 const LOSES = 0.05;
-const FORECAST_TIERS: readonly Tier[] = ['use-now', 'behind', 'on-pace'];
+/** The states that carry a forecast of what expires. A new window is too early to forecast. */
+export const FORECAST_TIERS: readonly Tier[] = ['use-now', 'behind', 'on-pace'];
+/** How long after its reset time a window still counts as closing now, before the next reading rolls it on. */
+const DUE_NOW_MS = DAY;
+
+/**
+ * True when part of a quota is expected to expire at its reset: it has a forecast, 5% or more of it will be
+ * left at this pace, and what is left does not carry over. The one test behind every "will expire".
+ */
+export function expectsToExpire(view: MeterView): boolean {
+  return view.tier !== null && FORECAST_TIERS.includes(view.tier) && view.projectedUnused >= LOSES && view.meter.rollover !== 'carries';
+}
 
 /**
  * The money expected to expire at each reset over the next `days` days, by calendar day in `tz`. Plan money
- * and dollar credits are kept in separate totals; no field adds them.
+ * and dollar credits are kept in separate totals; no field adds them. An expired one-off pack, and a window
+ * whose reset passed more than a day ago, have no reset ahead and are left out.
  */
 export function expiryOutlook(views: readonly MeterView[], nowMs: number, days: number, tz: string): ExpiryOutlook {
   const out: ExpiryOutlook = {
@@ -118,7 +133,8 @@ export function expiryOutlook(views: readonly MeterView[], nowMs: number, days: 
   const endMs = dayStart(nowMs, days, tz);
 
   for (const view of views) {
-    if (view.tier === null) continue;
+    // An expired pack keeps the date it expired on, which is behind us: nothing of it resets again.
+    if (view.tier === null || view.tier === 'expired') continue;
     if (view.snoozed) {
       out.snoozed += 1;
       continue;
@@ -126,18 +142,20 @@ export function expiryOutlook(views: readonly MeterView[], nowMs: number, days: 
     // Carried-over quota is not lost at its reset.
     if (view.meter.rollover === 'carries') continue;
     const atMs = view.resetsAtMs;
-    if (atMs === null) continue;
-    const loses = view.projectedUnused >= LOSES && FORECAST_TIERS.includes(view.tier);
+    // A reset long past is a window that has closed, not one closing now.
+    if (atMs === null || atMs < nowMs - DUE_NOW_MS) continue;
+    const loses = expectsToExpire(view);
     const money = view.valueAtRisk !== null && view.valueAtRisk > 0.004;
     const uncertain = view.stale || view.meter.estimated;
     const credit = view.valueBasis === 'credit';
     if (atMs >= endMs) {
       addMoney(credit ? out.later.credits : out.later.plan, view.currency, view.valueAtRisk);
-      if (loses) out.later.count += 1;
+      // Counted by the same test as the money beside it, so "0 quotas" never stands next to an amount.
+      if (money || loses) out.later.count += 1;
       if (money && (out.later.firstMs === null || atMs < out.later.firstMs)) out.later.firstMs = atMs;
       continue;
     }
-    // A reset already due (the window is closing now) belongs to today.
+    // A reset just due (the window is closing now) belongs to today.
     const day = out.days[index.get(dateKey(Math.max(atMs, nowMs), tz)) ?? 0];
     if (!day) continue;
     day.entries.push({
@@ -203,6 +221,19 @@ export interface LedgerWeek {
 function mondayIndex(ms: number, tz: string): number {
   const p = zonedParts(ms, tz);
   return (new Date(Date.UTC(p.year, p.month - 1, p.day)).getUTCDay() + 6) % 7;
+}
+
+/**
+ * How many weeks, Monday to Monday in `tz`, it takes to cover the last `days` days: from the week holding
+ * the start of that span to the one holding `nowMs`. With that many, `ledgerWeeks` holds every window that
+ * `ledgerTotals` counts over the same days.
+ */
+export function weeksCovering(nowMs: number, days: number, tz: string): number {
+  const sinceMs = nowMs - days * DAY;
+  const first = dayStart(sinceMs, -mondayIndex(sinceMs, tz), tz);
+  const current = dayStart(nowMs, -mondayIndex(nowMs, tz), tz);
+  // Rounded: a week across a clock change is an hour short or long.
+  return Math.round((current - first) / (7 * DAY)) + 1;
 }
 
 /** The last `weeks` weeks, Monday to Monday in `tz`, the last one holding `nowMs`. Oldest first. */

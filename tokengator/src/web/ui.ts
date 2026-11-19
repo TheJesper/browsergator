@@ -42,26 +42,46 @@ export function markFocus(root: HTMLElement, scopes: readonly string[]): FocusMa
 }
 
 /**
+ * Whether an element is drawn, so it can take focus. A quota can have a control in a chart and another in the
+ * table that stands in for it; only one of the two is shown, and focus on the hidden one goes nowhere.
+ */
+export function isShown(el: Element | null | undefined): el is HTMLElement | SVGElement {
+  return el !== null && el !== undefined && el.isConnected && el.getClientRects().length > 0;
+}
+
+/** Focuses the first of `candidates` that is shown and takes focus. True when one did. */
+export function focusFirst(candidates: Iterable<Element | null | undefined>, options: FocusOptions = { preventScroll: true }): boolean {
+  for (const el of candidates) {
+    if (!isShown(el)) continue;
+    el.focus(options);
+    if (document.activeElement === el) return true;
+  }
+  return false;
+}
+
+/**
  * Puts focus back on the control a mark describes, if the rebuild dropped it. True when focus is on a
- * control. `byPlace` also accepts the control now standing where the marked one stood: right for a panel
- * that is redrawn with the same controls in the same order, where a switch changes its own wording.
+ * control afterwards: one that is hidden, or will not take focus, does not count. `byPlace` also accepts the
+ * control now standing where the marked one stood: right for a panel that is redrawn with the same controls
+ * in the same order, where a switch changes its own wording.
  */
 export function restoreFocus(root: HTMLElement, mark: FocusMark | null, byPlace = false): boolean {
   const current = document.activeElement;
   if (current instanceof HTMLElement && current !== document.body && current.isConnected) return true;
   if (!mark) return false;
   const exact = lookalikes(root, mark, mark.within);
-  const target =
-    (mark.id ? root.querySelector<HTMLElement>(`#${CSS.escape(mark.id)}`) : null) ??
-    exact[mark.nth] ??
-    exact[0] ??
+  const region = mark.scope ? root.querySelector<HTMLElement>(mark.scope) : root;
+  // In order of preference; the first one that is shown and takes focus wins.
+  return focusFirst([
+    mark.id ? root.querySelector<HTMLElement>(`#${CSS.escape(mark.id)}`) : null,
+    exact[mark.nth],
+    ...exact,
     // The same control for another meter: the inspector's buttons after the selection moved.
-    lookalikes(root, mark, undefined)[0] ??
+    ...lookalikes(root, mark, undefined),
     // Or the row the control belonged to.
-    (mark.within ? root.querySelector<HTMLElement>(`[data-nav="row"][data-id="${CSS.escape(mark.within)}"]`) : null) ??
-    (byPlace && mark.order >= 0 ? ((mark.scope ? root.querySelector<HTMLElement>(mark.scope) : root)?.querySelectorAll<HTMLElement>(mark.tag)[mark.order] ?? null) : null);
-  target?.focus({ preventScroll: true });
-  return target !== null && target !== undefined;
+    ...(mark.within ? root.querySelectorAll<HTMLElement>(`[data-nav="row"][data-id="${CSS.escape(mark.within)}"]`) : []),
+    byPlace && mark.order >= 0 ? (region?.querySelectorAll<HTMLElement>(mark.tag)[mark.order] ?? null) : null
+  ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +346,13 @@ export function confirmDialog(options: { title: string; message: string; confirm
 // ---------------------------------------------------------------------------
 
 let tipEl: HTMLElement | null = null;
+/**
+ * The mark whose tooltip is showing, and the mark whose tooltip Escape put away until it is left. A mark is
+ * known by its id where it has one, so the same mark redrawn by a rebuild keeps its tooltip away.
+ */
+let tipOwner: string | Element | null = null;
+let tipDismissed: string | Element | null = null;
+const tipKey = (el: Element): string | Element => el.id || el;
 
 export function showTip(x: number, y: number, ...content: Child[]): void {
   if (!tipEl) {
@@ -349,23 +376,51 @@ export function showTip(x: number, y: number, ...content: Child[]): void {
 
 export function hideTip(): void {
   if (tipEl) tipEl.hidden = true;
+  tipOwner = null;
+}
+
+/**
+ * Puts away a tooltip that is showing, as Escape does: it covers its neighbours, and must be dismissable
+ * without moving the pointer or focus. It stays away until its mark is left and entered again. True when
+ * there was one to put away.
+ */
+export function dismissTip(): boolean {
+  if (!tipEl || tipEl.hidden) return false;
+  tipDismissed = tipOwner;
+  hideTip();
+  return true;
 }
 
 /** Attaches a tooltip to a mark for pointer and keyboard focus alike. */
 export function withTip<T extends Element>(target: T, content: () => Child[]): T {
   const show = (event: Event): void => {
+    // The pointer arriving afresh brings back a tooltip Escape put away; moving over the mark does not.
+    if (event.type === 'pointerenter') tipDismissed = null;
+    if (tipDismissed !== null && tipDismissed === tipKey(target)) return;
     const pointer = event as PointerEvent;
     if (pointer.clientX !== undefined && event.type !== 'focus') showTip(pointer.clientX, pointer.clientY, content());
     else {
       const box = target.getBoundingClientRect();
       showTip(box.left + box.width / 2, box.top, content());
     }
+    tipOwner = tipKey(target);
+  };
+  const leave = (): void => {
+    hideTip();
+    // A mark a rebuild removes reports a blur as it goes, but it has not been left: its replacement takes
+    // focus. Whether it is still in the page is known once the rebuild is done.
+    const key = tipKey(target);
+    if (tipDismissed === key) {
+      queueMicrotask(() => {
+        if (target.isConnected && tipDismissed === key) tipDismissed = null;
+      });
+    }
   };
   target.addEventListener('pointerenter', show);
   target.addEventListener('pointermove', show);
-  target.addEventListener('pointerleave', hideTip);
+  target.addEventListener('pointerleave', leave);
   target.addEventListener('focus', show);
-  target.addEventListener('blur', hideTip);
+  target.addEventListener('blur', leave);
   return target;
 }
 

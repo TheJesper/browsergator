@@ -3,9 +3,9 @@
 
 import type { MeterView, Summary } from './forecast.js';
 import { TIER_ORDER, allowanceQueue, summarise, viewState } from './forecast.js';
-import { formatMoney, formatMoneyTotals, formatPercent } from './format.js';
+import { formatMoney, formatPercent } from './format.js';
 import type { LedgerWeek } from './insights.js';
-import { FIGURE_LABEL, TIER_LABEL, explain, headline, leftText, lostText, recommend, riskMoney, stateLabel, statusLine, summaryLine, usedText, utilisationText } from './wording.js';
+import { FIGURE_LABEL, TIER_LABEL, explain, headline, leftText, lostMoney, lostText, recommend, riskMoney, stateLabel, statusLine, summaryLine, usedText, utilisationText } from './wording.js';
 import type { State } from './types.js';
 import { summariseSpend } from './spend.js';
 import { dateKey, formatAge, formatDuration, formatMoment, iso, localZone } from './time.js';
@@ -227,8 +227,10 @@ export interface Snapshot {
     creditsAtRisk: Summary['creditsAtRisk'];
     lost30: Summary['lost30'];
     creditsLost30: Summary['creditsLost30'];
-    /** True when part of `lost30` comes from windows with no reading near their end. */
+    /** True when part of `lost30`, the plan money, comes from windows with no reading near their end. */
     lost30IsEstimate: boolean;
+    /** The same for `creditsLost30`. Each flag covers its own total only. */
+    creditsLost30IsEstimate: boolean;
     utilisation30Percent: number | null;
     nextReset: { meter: string; account: string; resetsAt: string } | null;
   };
@@ -262,6 +264,7 @@ export function snapshot(state: State, nowMs: number, tz: string = localZone()):
       lost30: cents(summary.lost30),
       creditsLost30: cents(summary.creditsLost30),
       lost30IsEstimate: summary.lostIsEstimate,
+      creditsLost30IsEstimate: summary.creditsLostIsEstimate,
       utilisation30Percent: summary.utilisation30 === null ? null : round(summary.utilisation30 * 100),
       nextReset:
         next && next.resetsAtMs !== null
@@ -316,17 +319,26 @@ export function costsMarkdown(state: State, nowMs: number, tz?: string): string 
   return lines.join('\n');
 }
 
-/** The weekly record of finished windows as a Markdown table, for the dashboard's copy action and `waste_report`. */
+/**
+ * The weekly record of finished windows as a Markdown table, for the dashboard's copy action and
+ * `waste_report`. A week's amount that includes estimated windows is "about" a whole amount, as everywhere.
+ */
 export function weeksMarkdown(weeks: readonly LedgerWeek[], currency: string, tz?: string): string {
-  const lines = ['| Week of | Windows | Expired | Of which estimated | Credits expired | Used, trailing 30 days |', '| --- | --- | --- | --- | --- | --- |'];
+  const lines = [
+    '| Week of | Windows | Expired | Of which estimated | Credits expired | Credits estimated | Used, trailing 30 days |',
+    '| --- | --- | --- | --- | --- | --- | --- |'
+  ];
   for (const week of weeks) {
     const day = dateKey(week.startMs, tz);
+    const used = week.trailingUtilisation === null ? '' : formatPercent(week.trailingUtilisation);
     if (week.windows === 0) {
-      lines.push(`| ${day} | 0 | no window closed | | | ${week.trailingUtilisation === null ? '' : formatPercent(week.trailingUtilisation)} |`);
+      lines.push(`| ${day} | 0 | no window closed |  |  |  | ${used} |`);
       continue;
     }
+    const estimated = (money: LedgerWeek['lost']): string => (hasMoney(money) ? lostMoney(money, currency, true) : '');
+    const credits = hasMoney(week.creditsLost) ? lostMoney(week.creditsLost, currency, hasMoney(week.creditsLostEstimated)) : '';
     lines.push(
-      `| ${day} | ${week.windows} | ${formatMoneyTotals(week.lost, currency, formatMoney(0, currency))} | ${formatMoneyTotals(week.lostEstimated, currency)} | ${formatMoneyTotals(week.creditsLost, currency)} | ${week.trailingUtilisation === null ? '' : formatPercent(week.trailingUtilisation)} |`
+      `| ${day} | ${week.windows} | ${lostMoney(week.lost, currency, hasMoney(week.lostEstimated))} | ${estimated(week.lostEstimated)} | ${credits} | ${estimated(week.creditsLostEstimated)} | ${used} |`
     );
   }
   return lines.join('\n');

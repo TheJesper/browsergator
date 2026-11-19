@@ -150,7 +150,8 @@ export function inspector(ctx: Ctx, view: MeterView): HTMLElement {
 
   return h(
     'aside',
-    { class: 'insp', 'aria-label': `${account.label}, ${view.meter.label}`, dataset: { meter: view.id } },
+    // An accessible name is not blurred with the page: only the meter is named while names are hidden.
+    { class: 'insp', 'aria-label': ctx.app.model.prefs.privacy ? view.meter.label : `${account.label}, ${view.meter.label}`, dataset: { meter: view.id } },
     h(
       'div',
       { class: 'insp-head' },

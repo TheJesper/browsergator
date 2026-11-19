@@ -63,6 +63,19 @@ function openExternal(url: string): void {
   link.remove();
 }
 
+/**
+ * A quota's name for what CSS cannot blur: a tooltip, an accessible name. With names hidden it is the meter's
+ * name only (such as "Weekly limit"), which is not an account name.
+ */
+function quotaName(ctx: Ctx, view: MeterView): string {
+  return ctx.app.model.prefs.privacy ? view.meter.label : `${view.account.label}, ${view.meter.label}`;
+}
+
+/** An account's name for the same places: with names hidden, the meter that stands for it. */
+function accountName(ctx: Ctx, view: MeterView): string {
+  return ctx.app.model.prefs.privacy ? view.meter.label : view.account.label;
+}
+
 function moreButton(ctx: Ctx, view: MeterView): HTMLButtonElement {
   const button = h(
     'button',
@@ -70,7 +83,7 @@ function moreButton(ctx: Ctx, view: MeterView): HTMLButtonElement {
       class: 'icon-btn',
       type: 'button',
       title: 'More',
-      'aria-label': `More actions for ${view.account.label}`,
+      'aria-label': `More actions for ${accountName(ctx, view)}`,
       onclick: (event: Event) => {
         event.stopPropagation();
         showMenu(button, meterMenu(ctx, view));
@@ -108,7 +121,7 @@ export function queueRow(ctx: Ctx, view: MeterView): HTMLElement {
         type: 'button',
         'aria-expanded': String(selectedId === view.id),
         // The label replaces the button's content for a screen reader, so it has to carry the tags too.
-        'aria-label': `${view.account.label}, ${view.meter.label}: ${barCaption(view, now).text}.${flagText(view, now) ? ` ${flagText(view, now)}.` : ''} Show details.`,
+        'aria-label': `${quotaName(ctx, view)}: ${barCaption(view, now).text}.${flagText(view, now) ? ` ${flagText(view, now)}.` : ''} Show details.`,
         dataset: { id: view.id, nav: 'row' },
         onclick: isolated(select)
       },
@@ -136,7 +149,7 @@ export function queueRow(ctx: Ctx, view: MeterView): HTMLElement {
       h('div', { class: risk && (view.tier === 'use-now' || view.tier === 'behind') ? 'v risk' : 'v' }, risk || '—'),
       h('div', { class: 'u' }, risk ? (view.valueBasis === 'credit' ? 'credits at risk' : 'at risk') : view.windowValue !== null ? '' : view.account.price ? 'not valued' : 'no price')
     ),
-    h('div', { class: 'row-act' }, copyMenuButton(copyFormats(view, now), `Copy ${view.account.label}`), moreButton(ctx, view))
+    h('div', { class: 'row-act' }, copyMenuButton(copyFormats(view, now), `Copy ${accountName(ctx, view)}`), moreButton(ctx, view))
   );
 }
 
@@ -240,8 +253,8 @@ export function boardView(ctx: Ctx, queue: MeterView[], all: MeterView[]): HTMLE
         'div',
         { class: 'card-foot' },
         h('span', { class: 'sp' }, risk ? h('span', null, risk) : null, h('span', null, ageText(lead))),
-        h('button', { class: 'icon-btn', type: 'button', title: 'Update usage', 'aria-label': `Update ${account.label}`, onclick: () => ctx.actions.quick(`${lead.meter.id} `) }, icon('edit')),
-        copyMenuButton(copyFormats(lead, now), `Copy ${account.label}`),
+        h('button', { class: 'icon-btn', type: 'button', title: 'Update usage', 'aria-label': `Update ${accountName(ctx, lead)}`, onclick: () => ctx.actions.quick(`${lead.meter.id} `) }, icon('edit')),
+        copyMenuButton(copyFormats(lead, now), `Copy ${accountName(ctx, lead)}`),
         moreButton(ctx, lead)
       )
     );
@@ -345,7 +358,7 @@ export function timelineView(ctx: Ctx, queue: MeterView[]): HTMLElement {
             class: 'tl-label',
             type: 'button',
             'aria-expanded': String(selectedId === view.id),
-            'aria-label': `${view.account.label}, ${view.meter.label}: ${leftText(view)}, resets in ${formatDuration(view.msLeft ?? 0)}. Show details.`,
+            'aria-label': `${quotaName(ctx, view)}: ${leftText(view)}, resets in ${formatDuration(view.msLeft ?? 0)}. Show details.`,
             dataset: { id: view.id, nav: 'row' },
             onclick: isolated(select)
           },

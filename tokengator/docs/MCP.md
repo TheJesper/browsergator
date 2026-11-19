@@ -152,7 +152,7 @@ without a reset), and `omitted` counts what was left out. Meters of a snoozed ac
 {
   "generatedAt": "2026-11-19T12:00:00.000Z",
   "timeZone": "UTC",
-  "summary": { "useNow": 1, "behind": 0, "hot": 0, "stale": 0, "utilisation30Percent": 71.7 },
+  "summary": { "useNow": 1, "behind": 0, "hot": 0, "stale": 0, "utilisation30Percent": 71.7, "lost30IsEstimate": true, "creditsLost30IsEstimate": false },
   "queue": [
     { "id": "claude-max:weekly", "tier": "use-now", "remainingPercent": 60, "resetsInMinutes": 600, "resetsAt": "2026-11-19T22:00:00.000Z" },
     { "id": "copilot-pro:premium", "tier": "on-pace" },
@@ -162,6 +162,12 @@ without a reset), and `omitted` counts what was left out. Meters of a snoozed ac
   "omitted": { "settled": 2, "beyondLimit": 0 }
 }
 ```
+
+`summary` also holds what the ledger recorded over the last 30 days: plan money expired in `lost30` and
+dollar credits in `creditsLost30`, per currency and never added together. `lost30IsEstimate` is true when
+part of `lost30` comes from windows nobody read near their end, and `creditsLost30IsEstimate` says the
+same of `creditsLost30`; each flag covers its own total only. `tokengator status --json` prints the same
+record.
 
 ### `list_accounts`
 
@@ -511,6 +517,7 @@ Last 30 days: 72% used on average over 3 windows; about $18 expired unused.
   "utilisationPercent": 71.7,
   "lost": { "USD": 18.25 },
   "lostIsEstimate": true,
+  "creditsLostIsEstimate": false,
   "meters": [
     { "meterId": "claude-max:weekly", "windows": 2, "averageUnusedPercent": 37.5, "lost": { "USD": 17.25 } },
     { "meterId": "suno-pro:credits", "windows": 1, "averageUnusedPercent": 10, "lost": { "USD": 1 } }
@@ -523,12 +530,24 @@ Last 30 days: 72% used on average over 3 windows; about $18 expired unused.
 are never part of `lost`. Each meter says which it is in `valueBasis`, and also has `recent`, its last
 finished windows inside the period.
 
+`lostIsEstimate` is true when part of `lost`, the plan money, comes from windows nobody read near their
+end; `creditsLostIsEstimate` says the same of `creditsLost`. Each flag covers its own total only, so
+measured credits beside estimated plan money keep `creditsLostIsEstimate: false`. The text gives an
+estimated total as "about" a whole amount, and a measured one to the cent. When no money expired it says
+so in words instead of giving an amount: "nothing expired unused", or, when what was left unused has no
+price set, that no money is counted.
+
 With `byWeek: true` the answer also carries `weeks`, one entry per Monday-to-Monday week in the user's
-time zone (at most 26, enough to cover `days`), oldest first: `start`, `windows` closed, how many of those
-were `estimatedWindows`, plan money `lost` with its estimated part in `lostEstimated`, `creditsLost`, and
-`utilisationPercentTrailing30`, the share used over the 30 days ending with that week. A week with no
-closed window has `windows: 0` rather than a zero amount. The text adds the same weeks as a table under
-"Week by week:". It is the record behind the dashboard Overview's "Finished windows" tile.
+time zone, oldest first: every week that holds part of the last `days` days, up to 26 weeks. When `days`
+reaches further back than 26 weeks, the entries are the latest 26 and hold fewer windows than the totals.
+Each entry has `start`, `windows` closed, how many of those were `estimatedWindows`, plan money `lost`
+with its estimated part in `lostEstimated`, dollar credits `creditsLost` with their estimated part in
+`creditsLostEstimated`, and `utilisationPercentTrailing30`, the share used over the 30 days ending with
+that week. The first week starts on the Monday on or before the start of the period, so it can also hold
+windows that closed a few days before it. A week with no closed window has `windows: 0` rather than a
+zero amount. The text adds the same weeks as a table under "Week by week:", with estimated amounts
+written as "about" a whole amount. It is the record behind the dashboard Overview's "Finished windows"
+tile.
 
 ### `record_spend`
 

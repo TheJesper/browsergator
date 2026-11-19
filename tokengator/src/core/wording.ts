@@ -103,12 +103,16 @@ export const CREDIT_VALUE_NOTE = 'The face value of this credit. It can only be 
 
 /**
  * Money that expired, for display: to the cent when every window behind it was observed, and "about" with
- * whole units when part of it is an estimate. An estimate given to the cent claims a precision it lacks.
+ * whole units when part of it is an estimate, or "under $1" when the estimate is less than half a unit. An
+ * estimate given to the cent claims a precision it lacks.
  */
 export function lostMoney(totals: Money, currency: string, estimate: boolean): string {
   if (!estimate) return formatMoneyTotals(totals, currency, formatMoney(0, currency));
-  const whole = Object.fromEntries(Object.entries(totals).map(([code, amount]) => [code, Math.round(amount)]));
-  return `about ${formatMoneyTotals(whole, currency, formatMoney(0, currency)).replace(/\.00\b/g, '')}`;
+  const held = Object.entries(totals).filter(([, amount]) => amount > 0.004);
+  // An estimate below half a unit is not "about $0", which reads as nothing: it is under one unit.
+  const under = held.length > 0 && held.every(([, amount]) => amount < 0.5);
+  const whole = Object.fromEntries(held.map(([code, amount]) => [code, Math.max(1, Math.round(amount))]));
+  return `${under ? 'under' : 'about'} ${formatMoneyTotals(whole, currency, formatMoney(0, currency)).replace(/\.00\b/g, '')}`;
 }
 
 /** One short line: the state and the two numbers that matter for it. */
@@ -338,17 +342,31 @@ export function utilisationText(fraction: number | null, windows: number): strin
 export type Trend = 'up' | 'down' | 'flat' | null;
 
 /**
- * How the money expired in the last 30 days compares with the 30 days before, in the preferred currency:
- * "down about $11 on the 30 days before". A change under a tenth (and under one unit) reads as the same.
+ * How the money expired in the last 30 days compares with the 30 days before: "down about $11 on the 30
+ * days before". It compares in the preferred currency when either period holds money in it, and otherwise
+ * in the currency that holds the most, as the charts do. A change under a tenth (and under one unit) reads
+ * as the same, but never while another currency moved by more: then that change is given instead.
  */
 export function trendText(current: Money, previous: Money, currency: string, estimate: boolean, previousWindows: number): { text: string; trend: Trend } {
   if (previousWindows === 0) return { text: 'No windows closed in the 30 days before.', trend: null };
-  const now = current[currency] ?? 0;
-  const before = previous[currency] ?? 0;
-  const diff = now - before;
-  if (Math.abs(diff) < Math.max(1, 0.1 * before)) return { text: 'About the same as the 30 days before.', trend: 'flat' };
-  const amount = formatMoney(Math.round(Math.abs(diff)), currency).replace(/\.00\b/, '');
-  return { text: `${diff > 0 ? 'Up' : 'Down'} ${estimate ? 'about ' : ''}${amount} on the 30 days before.`, trend: diff > 0 ? 'up' : 'down' };
+  const held = (code: string): number => Math.max(current[code] ?? 0, previous[code] ?? 0);
+  const codes = [...new Set([...Object.keys(current), ...Object.keys(previous)])].filter((code) => held(code) > 0.004);
+  const lead = codes.includes(currency) ? currency : ([...codes].sort((a, b) => held(b) - held(a))[0] ?? currency);
+  const change = (code: string): { code: string; diff: number; moved: boolean } => {
+    const before = previous[code] ?? 0;
+    const diff = (current[code] ?? 0) - before;
+    return { code, diff, moved: Math.abs(diff) >= Math.max(1, 0.1 * before) };
+  };
+  const others = codes.filter((code) => code !== lead).map(change).sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+  const moved = [change(lead), ...others].find((entry) => entry.moved);
+  if (!moved) return { text: 'About the same as the 30 days before.', trend: 'flat' };
+  const amount = formatMoney(Math.round(Math.abs(moved.diff)), moved.code).replace(/\.00\b/, '');
+  return { text: `${moved.diff > 0 ? 'Up' : 'Down'} ${estimate ? 'about ' : ''}${amount} on the 30 days before.`, trend: moved.diff > 0 ? 'up' : 'down' };
+}
+
+/** The sentences under the weekly charts of finished windows, in the order the charts are read. */
+export function weeksCaption(): string {
+  return 'Expired money is solid; the part from windows nobody read near their reset is outlined. A week with no column had no window close, or lost only credits or money in another currency, which the table lists. The line is the share used over the 30 days ending each week.';
 }
 
 /** A rate in a meter's unit with a decimal where it matters: "2.7%", "45 credits", "$1.20". */

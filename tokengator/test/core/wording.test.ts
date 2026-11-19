@@ -26,7 +26,8 @@ import {
   paceCaption,
   readingAge,
   trendText,
-  utilisationText
+  utilisationText,
+  weeksCaption
 } from '../../src/core/wording.js';
 
 const utc = (y: number, mo: number, d: number, h = 0, mi = 0): number => Date.UTC(y, mo - 1, d, h, mi, 0);
@@ -703,6 +704,14 @@ describe('figures shared by the Overview, the brief, the command line and the MC
     expect(lostText({}, {}, 'USD', false)).toBe('$0.00');
   });
 
+  it('never words an estimate that holds money as "about $0"', () => {
+    expect(lostText({ USD: 0.3 }, {}, 'USD', true)).toBe('under $1');
+    expect(lostText({ USD: 0.3 }, { USD: 0.2 }, 'USD', true)).toBe('under $1, plus under $1 in credits');
+    expect(lostText({ USD: 0.5 }, {}, 'USD', true)).toBe('about $1');
+    expect(lostText({ USD: 12.4, EUR: 0.2 }, {}, 'USD', true)).toBe('about $12 + €1');
+    expect(lostText({ USD: 0.3 }, {}, 'USD', false)).toBe('$0.30');
+  });
+
   it('words the share used, singular and plural, and its absence', () => {
     expect(utilisationText(0.8, 15)).toBe('80% used on average over 15 windows');
     expect(utilisationText(1, 1)).toBe('100% used on average over 1 window');
@@ -714,6 +723,25 @@ describe('figures shared by the Overview, the brief, the command line and the MC
     expect(trendText({ USD: 20 }, { USD: 31 }, 'USD', true, 12)).toEqual({ text: 'Down about $11 on the 30 days before.', trend: 'down' });
     expect(trendText({ USD: 31 }, { USD: 20 }, 'USD', false, 12)).toEqual({ text: 'Up $11 on the 30 days before.', trend: 'up' });
     expect(trendText({ USD: 31 }, {}, 'USD', false, 0)).toEqual({ text: 'No windows closed in the 30 days before.', trend: null });
+  });
+
+  it('compares in the currency that holds the money, and never calls a change in another currency the same', () => {
+    // The settings say USD; the only plan is billed in euros, and ten times as much expired.
+    expect(trendText({ EUR: 80 }, { EUR: 8 }, 'USD', false, 4)).toEqual({ text: 'Up €72 on the 30 days before.', trend: 'up' });
+    expect(trendText({}, { EUR: 30 }, 'USD', true, 4)).toEqual({ text: 'Down about €30 on the 30 days before.', trend: 'down' });
+    // The preferred currency held still while euros rose: that rise is the news.
+    expect(trendText({ USD: 5, EUR: 80 }, { USD: 5, EUR: 8 }, 'USD', false, 4)).toEqual({ text: 'Up €72 on the 30 days before.', trend: 'up' });
+    // Both moved: the preferred currency leads.
+    expect(trendText({ USD: 20, EUR: 80 }, { USD: 31, EUR: 8 }, 'USD', false, 4)).toEqual({ text: 'Down $11 on the 30 days before.', trend: 'down' });
+    // Nothing moved anywhere, or nothing was priced in either period.
+    expect(trendText({ USD: 5, EUR: 8.2 }, { USD: 5, EUR: 8 }, 'USD', false, 4).trend).toBe('flat');
+    expect(trendText({}, {}, 'USD', false, 4)).toEqual({ text: 'About the same as the 30 days before.', trend: 'flat' });
+  });
+
+  it('captions the weekly charts of finished windows in one place', () => {
+    expect(weeksCaption()).toBe(
+      'Expired money is solid; the part from windows nobody read near their reset is outlined. A week with no column had no window close, or lost only credits or money in another currency, which the table lists. The line is the share used over the 30 days ending each week.'
+    );
   });
 
   it('says how hard a quota must be used to finish it, an hour or a day, allowing for a closed session', () => {

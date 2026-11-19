@@ -2,10 +2,23 @@
 // letting quota expire unused. Tiles are built first; their charts are drawn afterwards at the width the
 // tile actually has (see drawOverviewCharts), so labels keep their size on every screen.
 
-import { agentPrompt, weeksMarkdown } from '../core/brief.js';
+import { agentPrompt, hasMoney, weeksMarkdown } from '../core/brief.js';
 import { compareViews, ledgerTotals, type MeterView, type Money } from '../core/forecast.js';
 import { formatMoney, formatMoneyTotals, formatPercent } from '../core/format.js';
-import { blockedLimits, countTiers, expiryOutlook, ledgerWeeks, nextUseNow, plottable, refreshList, wasteBy, type ExpiryOutlook } from '../core/insights.js';
+import {
+  blockedLimits,
+  countTiers,
+  expectsToExpire,
+  expiryOutlook,
+  ledgerWeeks,
+  nextUseNow,
+  plottable,
+  refreshList,
+  wasteBy,
+  type ExpiryOutlook,
+  type LedgerWeek,
+  type WasteRow
+} from '../core/insights.js';
 import { summariseSpend } from '../core/spend.js';
 import { DAY, formatMoment, localZone } from '../core/time.js';
 import {
@@ -21,12 +34,13 @@ import {
   stateLabel,
   trendText,
   utilisationText,
-  expiryCaption
+  expiryCaption,
+  weeksCaption
 } from '../core/wording.js';
 import { OVERVIEW_TILES, type OverviewTileId } from './app.js';
 import type { Ctx } from './ctx.js';
 import { h, icon, type Child } from './dom.js';
-import { expiryColumns, paceMap, weeklyPanels, willExpire } from './overview-charts.js';
+import { expiryColumns, paceMap, weeklyPanels } from './overview-charts.js';
 import { barCaption, barLegend, resetText, stateKey, stateMark } from './parts.js';
 import { copyMenuButton, copyText, markFocus, restoreFocus } from './ui.js';
 import { queueRow } from './views.js';
@@ -35,17 +49,19 @@ import { queueRow } from './views.js';
 const openTables = new Set<OverviewTileId>();
 /** How each chart slot draws itself at a given width. Set when the tiles are built. */
 const drawers = new WeakMap<HTMLElement, (width: number) => Element>();
+/** Told after each drawing whether the slot drew a table in the chart's place, so the tile can hide its toggle. */
+const drawnHooks = new WeakMap<HTMLElement, (asTable: boolean) => void>();
 
 /** Below this many pixels of chart width, or above this many quotas, the even-pace chart gives way to its table. */
 const PACE_MIN_WIDTH = 360;
 const PACE_MAX_MARKS = 60;
+/** Entries "Needs attention" lists before it links the rest elsewhere. */
+const ATTENTION_MAX = 5;
 
 function addMoney(target: Money, currency: string | null, amount: number | null): void {
   if (!currency || amount === null || !(amount > 0)) return;
   target[currency] = (target[currency] ?? 0) + amount;
 }
-
-const hasMoney = (money: Money): boolean => Object.values(money).some((amount) => amount > 0.004);
 
 /**
  * A quota's name for places CSS cannot hide (tooltips live outside the page): account and meter, or only the
@@ -78,10 +94,14 @@ function quotaButton(ctx: Ctx, view: MeterView, tile: string, extra: Child[] = [
   ) as HTMLButtonElement;
 }
 
-function dataTable(head: string[], rows: Child[][], right: number[] = []): HTMLElement {
+/**
+ * A table in a wrapper that scrolls sideways inside a narrow tile. The wrapper takes focus and is named, so a
+ * keyboard can scroll it and a screen reader says which table it is in.
+ */
+function dataTable(label: string, head: string[], rows: Child[][], right: number[] = []): HTMLElement {
   return h(
     'div',
-    { class: 'table-wrap ov-table' },
+    { class: 'table-wrap ov-table', tabindex: 0, role: 'region', 'aria-label': label },
     h(
       'table',
       { class: 'tbl' },
@@ -97,8 +117,16 @@ interface TileParts {
   aside?: Child;
   tools?: Child[];
   body: Child[];
-  /** The chart and its table, when the tile has both: the toggle switches between them. */
-  chart?: { slot: HTMLElement; table: HTMLElement; caption?: string; legend?: Child; forceTable?: boolean };
+  /**
+   * The chart and its table, when the tile has both: the toggle switches between them. `lead` stands above
+   * both and stays whichever is shown.
+   */
+  chart?: { slot: HTMLElement; table: HTMLElement; caption?: string; legend?: Child; lead?: Child; forceTable?: boolean };
+}
+
+/** The name of a tile's table, for the scrolling region that holds it. */
+function tableLabel(id: OverviewTileId): string {
+  return `${OVERVIEW_TILES.find((entry) => entry.id === id)?.title ?? id}, as a table`;
 }
 
 function tile(ctx: Ctx, parts: TileParts): HTMLElement {
@@ -107,11 +135,11 @@ function tile(ctx: Ctx, parts: TileParts): HTMLElement {
   const chart = parts.chart;
   let figure: HTMLElement | null = null;
   if (chart) {
+    // The label stays "Table"; whether the table is shown is the pressed state, so it is announced once.
     const showTable = (open: boolean): void => {
       chart.slot.hidden = open || chart.forceTable === true;
       chart.table.hidden = !open && chart.forceTable !== true;
       toggle.setAttribute('aria-pressed', String(open));
-      toggle.lastChild!.textContent = open ? 'Chart' : 'Table';
       if (!chart.slot.hidden) drawSlot(chart.slot, true);
     };
     const toggle = h(
@@ -129,12 +157,26 @@ function tile(ctx: Ctx, parts: TileParts): HTMLElement {
         }
       },
       icon('rows'),
-      h('span', null, openTables.has(parts.id) ? 'Chart' : 'Table')
+      h('span', null, 'Table')
     );
+    // Where the slot itself draws a table (a narrow tile), the toggle would switch between two tables: it goes.
+    drawnHooks.set(chart.slot, (asTable) => {
+      const hide = chart.forceTable === true || asTable;
+      if (hide && document.activeElement === toggle) chart.slot.querySelector<HTMLElement>('.ov-table')?.focus({ preventScroll: true });
+      toggle.hidden = hide;
+    });
     tools.unshift(toggle);
     chart.slot.hidden = openTables.has(parts.id) || chart.forceTable === true;
     chart.table.hidden = !openTables.has(parts.id) && chart.forceTable !== true;
-    figure = h('figure', { class: 'ov-figure', 'aria-labelledby': `ov-h-${parts.id}` }, chart.slot, chart.table, chart.legend ?? null, chart.caption ? h('figcaption', null, chart.caption) : null);
+    figure = h(
+      'figure',
+      { class: 'ov-figure', 'aria-labelledby': `ov-h-${parts.id}` },
+      chart.lead ?? null,
+      chart.slot,
+      chart.table,
+      chart.legend ?? null,
+      chart.caption ? h('figcaption', null, chart.caption) : null
+    );
   }
   return h(
     'section',
@@ -201,10 +243,11 @@ function expiryTile(ctx: Ctx, filtered: MeterView[], allowances: MeterView[]): H
   const noPrices = awake.length > 0 && !awake.some((view) => view.windowValue !== null);
   const outlook = expiryOutlook(filtered, now, 30, tz);
   const figure = moneyPair(atRisk, credits, currency);
-  const stat = `${FIGURE_LABEL.atRisk}: ${figure || 'nothing is expected to expire'}`;
+  // With no price set, nothing can be valued: "$0.00" would read as nothing at stake.
+  const stat = `${FIGURE_LABEL.atRisk}: ${figure || (noPrices ? 'no price set' : 'nothing is expected to expire')}`;
   const anyReset = outlook.days.some((day) => day.entries.length > 0) || outlook.later.firstMs !== null;
   const views = new Map(filtered.map((view) => [view.id, view]));
-  const body: Child[] = [h('p', { class: 'ov-stat' }, h('span', { class: 'label' }, `${FIGURE_LABEL.atRisk}`), h('span', { class: 'big' }, figure || formatMoney(0, currency)))];
+  const body: Child[] = [h('p', { class: 'ov-stat' }, h('span', { class: 'label' }, `${FIGURE_LABEL.atRisk}`), h('span', { class: 'big' }, figure || (noPrices ? 'no price set' : formatMoney(0, currency))))];
   const tools: Child[] = [
     copyMenuButton(
       [
@@ -218,6 +261,9 @@ function expiryTile(ctx: Ctx, filtered: MeterView[], allowances: MeterView[]): H
     body.push(h('p', { class: 'ov-empty' }, awake.length === 0 && allowances.length > 0 ? 'Every quota is snoozed.' : 'No quota resets in the next 30 days.'));
     return tile(ctx, { id: 'expiry', tools, body });
   }
+  const week = nextWeek(outlook, currency, noPrices);
+  // In the page, not the drawing, so it is read out and stays when the table replaces the chart.
+  const lead = h('p', { class: 'ov-note ov-week' }, `${week.label}: `, h('strong', { class: 'num' }, week.figure));
   const slot = h('div', { class: 'tile-chart', dataset: { chart: 'expiry' } });
   drawers.set(slot, (width) =>
     expiryColumns(outlook, width, {
@@ -229,7 +275,41 @@ function expiryTile(ctx: Ctx, filtered: MeterView[], allowances: MeterView[]): H
       tz
     })
   );
-  return tile(ctx, { id: 'expiry', tools, body, chart: { slot, table: expiryTable(ctx, outlook, views, currency), caption: expiryCaption(outlook, currency, now, tz, noPrices) } });
+  return tile(ctx, {
+    id: 'expiry',
+    tools,
+    body,
+    chart: { slot, lead, table: expiryTable(ctx, outlook, views, currency), caption: expiryCaption(outlook, currency, now, tz, noPrices) }
+  });
+}
+
+/**
+ * The first week's figure, stated above the expiry chart: the money expected to expire in the next 7 days,
+ * plan money and credits never added, or with no prices the count of quotas that lose 5% or more.
+ */
+export function nextWeek(outlook: ExpiryOutlook, currency: string, noPrices: boolean): { label: string; figure: string } {
+  if (noPrices) {
+    const count = outlook.days.slice(0, 7).reduce((sum, day) => sum + day.count, 0);
+    return { label: `${FIGURE_LABEL.nextWeek}, quotas losing 5% or more`, figure: String(count) };
+  }
+  return { label: FIGURE_LABEL.nextWeek, figure: moneyPair(outlook.firstWeek.plan, outlook.firstWeek.credits, currency) || formatMoney(0, currency) };
+}
+
+/**
+ * The "Will expire" cell for a quota that resets within the days shown. A new window is too early to
+ * forecast, so it gets no share; a share is given where part is expected to expire, or where money at stake
+ * stands beside it, so a cell is never blank next to an amount.
+ */
+export function willExpireText(view: MeterView): string {
+  if (view.tier === 'spent') return 'used up';
+  if (view.tier === 'fresh') return 'too early';
+  const money = view.valueAtRisk !== null && view.valueAtRisk > 0.004;
+  return expectsToExpire(view) || money ? formatPercent(view.projectedUnused) : '';
+}
+
+/** The count beside the money that resets after the days shown: "1 quota", "3 quotas". */
+function laterCount(outlook: ExpiryOutlook): string {
+  return outlook.later.count === 1 ? '1 quota' : `${outlook.later.count} quotas`;
 }
 
 function expiryRows(outlook: ExpiryOutlook): { day: string; entry: ExpiryOutlook['days'][number]['entries'][number] }[] {
@@ -242,12 +322,12 @@ function expiryTable(ctx: Ctx, outlook: ExpiryOutlook, views: Map<string, MeterV
     const view = views.get(entry.id);
     if (!view) return [];
     const money = entry.valueAtRisk !== null && entry.valueAtRisk > 0.004 && entry.currency ? formatMoney(entry.valueAtRisk, entry.currency) : '';
-    return [[formatMoment(entry.atMs, now).replace(/ \d\d:\d\d$/, ''), quotaButton(ctx, view, 'expiry'), formatMoment(entry.atMs, now), entry.tier === 'spent' ? 'used up' : formatPercent(entry.projectedUnused), entry.basis === 'credit' ? '' : money, entry.basis === 'credit' ? money : ''] as Child[]];
+    return [[formatMoment(entry.atMs, now).replace(/ \d\d:\d\d$/, ''), quotaButton(ctx, view, 'expiry'), formatMoment(entry.atMs, now), willExpireText(view), entry.basis === 'credit' ? '' : money, entry.basis === 'credit' ? money : ''] as Child[]];
   });
   if (rows.length === 0) rows.push(['', 'No current window resets in the next 30 days.', '', '', '', '']);
   const later = moneyPair(outlook.later.plan, outlook.later.credits, currency);
-  if (later) rows.push(['After 30 days', `${outlook.later.count === 1 ? '1 quota' : `${outlook.later.count} quotas`}`, outlook.later.firstMs ? `from ${formatMoment(outlook.later.firstMs, now)}` : '', '', formatMoneyTotals(outlook.later.plan, currency), formatMoneyTotals(outlook.later.credits, currency)]);
-  return dataTable(['Day', 'Quota', 'Resets', 'Will expire', 'Plan money', 'Credits'], rows, [3, 4, 5]);
+  if (later) rows.push(['After 30 days', laterCount(outlook), outlook.later.firstMs ? `from ${formatMoment(outlook.later.firstMs, now)}` : '', '', formatMoneyTotals(outlook.later.plan, currency), formatMoneyTotals(outlook.later.credits, currency)]);
+  return dataTable(tableLabel('expiry'), ['Day', 'Quota', 'Resets', 'Will expire', 'Plan money', 'Credits'], rows, [3, 4, 5]);
 }
 
 function expiryMarkdown(ctx: Ctx, outlook: ExpiryOutlook, views: Map<string, MeterView>, currency: string): string {
@@ -257,10 +337,13 @@ function expiryMarkdown(ctx: Ctx, outlook: ExpiryOutlook, views: Map<string, Met
     const view = views.get(entry.id);
     if (!view) continue;
     const money = entry.valueAtRisk !== null && entry.valueAtRisk > 0.004 && entry.currency ? formatMoney(entry.valueAtRisk, entry.currency) : '';
-    lines.push(`| ${formatMoment(entry.atMs, now)} | ${nameOf(ctx, view).replace(/\|/g, '\\|')} | ${entry.tier === 'spent' ? 'used up' : formatPercent(entry.projectedUnused)} | ${entry.basis === 'credit' ? '' : money} | ${entry.basis === 'credit' ? money : ''} |`);
+    lines.push(`| ${formatMoment(entry.atMs, now)} | ${nameOf(ctx, view).replace(/\|/g, '\\|')} | ${willExpireText(view)} | ${entry.basis === 'credit' ? '' : money} | ${entry.basis === 'credit' ? money : ''} |`);
   }
   const later = moneyPair(outlook.later.plan, outlook.later.credits, currency);
-  if (later) lines.push(`| after 30 days | ${outlook.later.count} more | | ${formatMoneyTotals(outlook.later.plan, currency)} | ${formatMoneyTotals(outlook.later.credits, currency)} |`);
+  if (later) {
+    const from = outlook.later.firstMs ? `after 30 days, from ${formatMoment(outlook.later.firstMs, now)}` : 'after 30 days';
+    lines.push(`| ${from} | ${laterCount(outlook)} | | ${formatMoneyTotals(outlook.later.plan, currency)} | ${formatMoneyTotals(outlook.later.credits, currency)} |`);
+  }
   return lines.join('\n');
 }
 
@@ -270,7 +353,9 @@ function windowsTile(ctx: Ctx): HTMLElement {
   const tz = localZone();
   const cycles = ctx.app.cycles();
   if (cycles.length === 0) {
-    return tile(ctx, { id: 'windows', body: [h('p', { class: 'ov-empty' }, 'Nothing has expired on record yet. Each window that closes is recorded here.')] });
+    // Windows the filter leaves out still closed: say so, rather than that nothing ever expired.
+    const text = windowsStateLost(ctx.app) ? 'Nothing has expired on record yet. Each window that closes is recorded here.' : 'No finished window matches the filter.';
+    return tile(ctx, { id: 'windows', body: [h('p', { class: 'ov-empty' }, text)] });
   }
   const t30 = ledgerTotals(cycles, now, 30);
   const before = ledgerTotals(cycles, now - 30 * DAY, 30);
@@ -311,30 +396,38 @@ function windowsTile(ctx: Ctx): HTMLElement {
       'Copy finished windows'
     )
   ];
-  if (recorded < 4) {
-    body.push(h('p', { class: 'ov-note' }, 'The weekly charts appear once four weeks hold finished windows.'));
+  if (recorded === 0) {
+    body.push(h('p', { class: 'ov-note' }, `No window closed in the last ${weeks.length} weeks.`));
     return tile(ctx, { id: 'windows', tools, body });
   }
   const slot = h('div', { class: 'tile-chart', dataset: { chart: 'windows' } });
   drawers.set(slot, (width) => weeklyPanels(weeks, width, currency, now));
-  const rows = weeks.map((week) => [
-    formatMoment(week.startMs, now).replace(/ \d\d:\d\d$/, ''),
-    String(week.windows),
-    week.windows === 0 ? 'no window closed' : formatMoneyTotals(week.lost, currency, formatMoney(0, currency)),
-    formatMoneyTotals(week.lostEstimated, currency),
-    formatMoneyTotals(week.creditsLost, currency),
-    week.trailingUtilisation === null ? '' : formatPercent(week.trailingUtilisation)
-  ]);
+  const rows = weeks.map((week) => [formatMoment(week.startMs, now).replace(/ \d\d:\d\d$/, ''), String(week.windows), ...weekMoney(week, currency), week.trailingUtilisation === null ? '' : formatPercent(week.trailingUtilisation)]);
   return tile(ctx, {
     id: 'windows',
     tools,
     body,
     chart: {
       slot,
-      table: dataTable(['Week of', 'Windows', 'Expired', 'Of which estimated', 'Credits expired', 'Used, 30 days'], rows, [1, 2, 3, 4, 5]),
-      caption: 'Expired money is solid; the part from windows nobody read near their reset is outlined. A week with no column had no window close. The line is the share used over the 30 days ending each week.'
+      table: dataTable(tableLabel('windows'), ['Week of', 'Windows', 'Expired', 'Of which estimated', 'Credits expired', 'Credits estimated', 'Used, 30 days'], rows, [1, 2, 3, 4, 5, 6]),
+      caption: weeksCaption()
     }
   });
+}
+
+/**
+ * A week's money for the table, in the columns of the copied Markdown: expired, of which estimated, credits
+ * expired, of which estimated. An amount that includes estimated windows is "about" a whole amount.
+ */
+export function weekMoney(week: LedgerWeek, currency: string): [string, string, string, string] {
+  if (week.windows === 0) return ['no window closed', '', '', ''];
+  const estimated = (money: Money): string => (hasMoney(money) ? lostMoney(money, currency, true) : '');
+  return [
+    lostMoney(week.lost, currency, hasMoney(week.lostEstimated)),
+    estimated(week.lostEstimated),
+    hasMoney(week.creditsLost) ? lostMoney(week.creditsLost, currency, hasMoney(week.creditsLostEstimated)) : '',
+    estimated(week.creditsLostEstimated)
+  ];
 }
 
 function attentionTile(ctx: Ctx, filtered: MeterView[]): HTMLElement {
@@ -342,8 +435,20 @@ function attentionTile(ctx: Ctx, filtered: MeterView[]): HTMLElement {
   const stale = refreshList(filtered);
   const blocked = blockedLimits(filtered, now);
   const enabled = new Set(collectors.filter((collector) => collector.enabled).map((collector) => collector.id));
+  const room = attentionRoom(stale.length, blocked.length);
   const items: HTMLElement[] = [];
-  for (const view of stale) {
+  // Closed limits first: they shut an account now, and the Queue, where the rest are linked, does not list them.
+  for (const view of blocked.slice(0, room.blocked)) {
+    items.push(
+      h(
+        'li',
+        { class: 'ov-item' },
+        quotaButton(ctx, view, 'attention', [h('span', { class: 'ov-sub' }, 'closed, reopens in ', resetText(view.resetsAtMs, now, { times: 'countdown' }))]),
+        h('span', { class: 'state t-blocked' }, stateMark('blocked'), 'Blocked')
+      )
+    );
+  }
+  for (const view of stale.slice(0, room.stale)) {
     const automatic = view.meter.source.kind === 'collector' && view.meter.source.id !== undefined && enabled.has(view.meter.source.id);
     items.push(
       h(
@@ -356,31 +461,33 @@ function attentionTile(ctx: Ctx, filtered: MeterView[]): HTMLElement {
       )
     );
   }
-  for (const view of blocked) {
-    items.push(
-      h(
-        'li',
-        { class: 'ov-item' },
-        quotaButton(ctx, view, 'attention', [h('span', { class: 'ov-sub' }, 'closed, reopens in ', resetText(view.resetsAtMs, now, { times: 'countdown' }))]),
-        h('span', { class: 'state t-blocked' }, stateMark('blocked'), 'Blocked')
-      )
-    );
-  }
   const body: Child[] = [];
   if (items.length === 0) body.push(h('p', { class: 'ov-empty' }, 'Every reading is recent, and no limit is closed.'));
   else {
-    body.push(h('ul', { class: 'ov-list' }, items.slice(0, 5)));
-    if (items.length > 5) {
+    body.push(h('ul', { class: 'ov-list' }, items));
+    // Each link goes where the entries it counts are listed: readings in the Queue, closed limits on the Board.
+    if (room.moreStale > 0) {
       body.push(
-        link(`${items.length - 5} more in the Queue`, () => {
+        link(`${room.moreStale} more in the Queue`, () => {
           ctx.app.setPrefs({ sort: 'updated' });
           ctx.actions.view('queue');
         })
       );
     }
+    if (room.moreBlocked > 0) body.push(link(`${room.moreBlocked === 1 ? '1 more closed limit' : `${room.moreBlocked} more closed limits`} on the Board`, () => ctx.actions.view('board')));
   }
   const aside = stale.length > 0 ? `${stale.length === 1 ? '1 reading' : `${stale.length} readings`} to refresh` : null;
   return tile(ctx, { id: 'attention', aside, body });
+}
+
+/**
+ * How "Needs attention" shares its entries. Closed rate limits always get a place, since the Queue its link
+ * opens lists only readings; the readings fill the rest. What does not fit is counted for each link.
+ */
+export function attentionRoom(stale: number, blocked: number, max = ATTENTION_MAX): { blocked: number; stale: number; moreStale: number; moreBlocked: number } {
+  const shownBlocked = Math.min(blocked, max);
+  const shownStale = Math.min(stale, max - shownBlocked);
+  return { blocked: shownBlocked, stale: shownStale, moreStale: stale - shownStale, moreBlocked: blocked - shownBlocked };
 }
 
 function paceTile(ctx: Ctx, filtered: MeterView[]): HTMLElement | null {
@@ -422,6 +529,7 @@ function paceTile(ctx: Ctx, filtered: MeterView[]): HTMLElement | null {
 function paceTable(ctx: Ctx, plotted: MeterView[], rank: Map<string, number>, where = 'pace'): HTMLElement {
   const { now } = ctx.app.model;
   return dataTable(
+    tableLabel('pace'),
     ['#', 'Quota', 'State', 'Window gone', 'Used', 'On pace for', 'Will expire', 'Resets'],
     plotted.map((view) => [
       String(rank.get(view.id) ?? ''),
@@ -430,45 +538,68 @@ function paceTable(ctx: Ctx, plotted: MeterView[], rank: Map<string, number>, wh
       formatPercent(view.elapsedFraction ?? 0),
       formatPercent(view.usedFraction),
       view.projectedFraction === null || view.tier === 'fresh' ? '' : formatPercent(view.projectedFraction),
-      willExpire(view) ? formatPercent(view.projectedUnused) : '',
+      // The one test behind every "will expire": a new window has no forecast, so nothing to expire yet.
+      expectsToExpire(view) ? formatPercent(view.projectedUnused) : '',
       view.resetsAtMs === null ? '' : formatMoment(view.resetsAtMs, now)
     ]),
     [0, 3, 4, 5, 6]
   );
 }
 
-function fitTile(ctx: Ctx, filtered: MeterView[]): HTMLElement | null {
+/**
+ * What a subscription's finished windows left unused, for its Plan fit row: the money, plan and credits never
+ * added, or the share when no price is set. "Nothing expired" only when every window was used up.
+ */
+export function fitMoneyText(row: Pick<WasteRow, 'utilisation' | 'lost' | 'lostIsEstimate' | 'creditsLost' | 'creditsIsEstimate'>, currency: string): string {
+  const planLost = hasMoney(row.lost) ? lostMoney(row.lost, currency, row.lostIsEstimate) : '';
+  const creditLost = hasMoney(row.creditsLost) ? `${lostMoney(row.creditsLost, currency, row.creditsIsEstimate)} in credits` : '';
+  if (planLost && creditLost) return `${planLost} left unused, plus ${creditLost}`;
+  if (planLost) return `${planLost} left unused`;
+  if (creditLost) return `${creditLost} left unused`;
+  const unused = 1 - row.utilisation;
+  return unused > 0.0001 ? `${formatPercent(unused)} left unused, no price set` : 'nothing expired';
+}
+
+/**
+ * The meter a Plan fit row opens: the one that left the most money unused, or, when that meter is gone, the
+ * subscription's first quota that still exists. Null once the subscription itself is gone. Built from every
+ * meter, not the filtered list, so "Hide used up" does not make a subscription unselectable.
+ */
+export function fitTarget(row: Pick<WasteRow, 'accountId' | 'topMeterId'>, views: readonly MeterView[]): string | null {
+  if (views.some((view) => view.id === row.topMeterId)) return row.topMeterId;
+  const own = views.filter((view) => view.account.id === row.accountId);
+  return (own.find((view) => view.tier !== null) ?? own[0])?.id ?? null;
+}
+
+function fitTile(ctx: Ctx): HTMLElement | null {
   const { now, state, selectedId } = ctx.app.model;
   const currency = state.settings.currency;
   const rows = wasteBy(ctx.app.cycles(), now, 90, currency);
   if (rows.length === 0) return null;
-  const live = new Set(filtered.map((view) => view.id));
+  const every = ctx.app.allViews();
   const shown = rows.slice(0, 6);
   const items = shown.map((row) => {
-    const planLost = hasMoney(row.lost) ? lostMoney(row.lost, currency, row.lostIsEstimate) : '';
-    const creditLost = hasMoney(row.creditsLost) ? `${lostMoney(row.creditsLost, currency, row.creditsIsEstimate)} in credits` : '';
-    const money = planLost && creditLost ? `${planLost} left unused, plus ${creditLost}` : planLost ? `${planLost} left unused` : creditLost ? `${creditLost} left unused` : 'nothing expired';
-    const sub = `${money}, ${row.windows === 1 ? '1 window' : `${row.windows} windows`}`;
+    const sub = `${fitMoneyText(row, currency)}, ${row.windows === 1 ? '1 window' : `${row.windows} windows`}`;
     const content: Child[] = [
       h('span', { class: 'fit-name private' }, row.accountLabel),
       h('span', { class: 'fit-track', 'aria-hidden': 'true' }, h('i', { class: 'fit-used', style: { width: `${Math.round(row.utilisation * 100)}%` } }), h('i', { class: 'fit-lost', style: { width: `${100 - Math.round(row.utilisation * 100)}%` } })),
       h('span', { class: 'fit-fig' }, `${formatPercent(row.utilisation)} used`),
       h('span', { class: 'fit-sub' }, sub)
     ];
-    const open = live.has(row.topMeterId);
+    const target = fitTarget(row, every);
     return h(
       'li',
       null,
-      open
+      target !== null
         ? h(
             'button',
             {
               class: 'fit-row',
               type: 'button',
               id: `ov-fit-${row.accountId}`,
-              'aria-expanded': String(selectedId === row.topMeterId),
-              dataset: { id: row.topMeterId, nav: 'row' },
-              onclick: () => ctx.app.select(ctx.app.model.selectedId === row.topMeterId ? null : row.topMeterId)
+              'aria-expanded': String(selectedId === target),
+              dataset: { id: target, nav: 'row' },
+              onclick: () => ctx.app.select(ctx.app.model.selectedId === target ? null : target)
             },
             ...content
           )
@@ -531,7 +662,7 @@ export function overviewView(ctx: Ctx): HTMLElement {
     windows: () => windowsTile(ctx),
     attention: () => attentionTile(ctx, filtered),
     pace: () => paceTile(ctx, filtered),
-    fit: () => fitTile(ctx, filtered),
+    fit: () => fitTile(ctx),
     spend: () => spendTile(ctx)
   };
   const tiles = visibleTiles(prefs.overviewHidden)
@@ -563,9 +694,11 @@ function drawSlot(slot: HTMLElement, force = false): void {
   const mark = slot.contains(document.activeElement) ? markFocus(slot, []) : null;
   // A drawing gets the chart styles; a table drawn in its place keeps the table's own.
   const drawn_ = draw(width);
-  slot.replaceChildren(drawn_.classList.contains('table-wrap') ? drawn_ : h('div', { class: 'chart' }, drawn_));
+  const asTable = drawn_.classList.contains('table-wrap');
+  slot.replaceChildren(asTable ? drawn_ : h('div', { class: 'chart' }, drawn_));
   slot.dataset['drawn'] = String(width);
   if (mark) restoreFocus(slot, mark);
+  drawnHooks.get(slot)?.(asTable);
 }
 
 /** The second pass: every visible chart drawn at the width its tile has now. */
@@ -578,10 +711,28 @@ export function leadCaption(view: MeterView, nowMs: number): string {
   return barCaption(view, nowMs).text;
 }
 
-/** Figures the summary strip leaves out on the Overview while the tile that states them is shown. */
-export function figuresInTiles(hidden: readonly OverviewTileId[]): { atRisk: boolean; lost: boolean; stale: boolean } {
+/** What the Overview needs to know of the app to tell whether a filter has left every finished window out. */
+export interface WindowsScope {
+  filtering(): boolean;
+  cycles(): readonly unknown[];
+  model: { state: { cycles: readonly unknown[] } };
+}
+
+/**
+ * Whether "Finished windows" states the money expired. It does not while a filter leaves out every window on
+ * record: it then says that no finished window matches, and the figure belongs back in the summary.
+ */
+export function windowsStateLost(app: WindowsScope): boolean {
+  return !(app.filtering() && app.model.state.cycles.length > 0 && app.cycles().length === 0);
+}
+
+/**
+ * Figures the summary strip leaves out on the Overview while the tile that states them is shown. Given the
+ * app, a figure the tile does not state under the current filter stays in the strip.
+ */
+export function figuresInTiles(hidden: readonly OverviewTileId[], app?: WindowsScope): { atRisk: boolean; lost: boolean; stale: boolean } {
   const visible = new Set(visibleTiles(hidden));
-  return { atRisk: visible.has('expiry'), lost: visible.has('windows'), stale: visible.has('attention') };
+  return { atRisk: visible.has('expiry'), lost: visible.has('windows') && (app === undefined || windowsStateLost(app)), stale: visible.has('attention') };
 }
 
 export { barLegend };

@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { addAccount, type AccountInput } from '../src/core/accounts.js';
 import { briefMarkdown, costsMarkdown, meterRecord, queueText, snapshot, stamp } from '../src/core/brief.js';
 import { allowanceQueue, ledgerTotals, summarise, viewAccount, type MeterView } from '../src/core/forecast.js';
+import { ledgerWeeks } from '../src/core/insights.js';
 import { addSpendSource, recordSpend, summariseSpend } from '../src/core/spend.js';
 import { DAY, HOUR, MINUTE, iso } from '../src/core/time.js';
 import { emptyState, type ClosedCycle, type Price, type State } from '../src/core/types.js';
@@ -661,6 +662,85 @@ describe('reading tools', () => {
     expect(quiet.text).toContain('No window finished in the last 1 days');
 
     for (const days of [0, 366]) expect((await refused(harness, 'waste_report', { days })).text).toContain('days');
+  });
+
+  it('waste_report gives weeks only when asked, and refuses a byWeek that is not true or false', async () => {
+    const harness = await connect();
+    const plain = await call(harness, 'waste_report', { days: 30 });
+    expect(plain.data).not.toHaveProperty('weeks');
+    expect(plain.text).not.toContain('Week by week:');
+    for (const byWeek of ['yes', 1, null]) expect((await refused(harness, 'waste_report', { byWeek })).text).toContain('byWeek');
+  });
+
+  it('waste_report byWeek covers every window of the period, week by week', async () => {
+    // Thursday the 19th: five days ago was Saturday, in last week. Every window closed inside the 7 days.
+    const state = fixture();
+    const harness = await connect({ state: { ...state, cycles: state.cycles.map((entry, index) => (index === 1 ? cycle('claude-max', 'weekly', 6 * DAY, 0.5, 11.5, 'estimated') : entry)) } });
+    for (const days of [7, 30]) {
+      const answer = await call(harness, 'waste_report', { days, byWeek: true });
+      const weeks = answer.data.weeks as { start: string; windows: number }[];
+      expect(weeks.reduce((sum, week) => sum + week.windows, 0), `${days} days`).toBe(answer.data.windows);
+      expect(Date.parse(weeks[0]?.start ?? ''), `${days} days`).toBeLessThanOrEqual(NOW - days * DAY);
+      expect(weeks.at(-1)?.start).toBe('2026-11-16T00:00:00.000Z');
+    }
+    const week = await call(harness, 'waste_report', { days: 7, byWeek: true });
+    expect(week.data.weeks.map((entry: { start: string }) => entry.start)).toEqual(['2026-11-09T00:00:00.000Z', '2026-11-16T00:00:00.000Z']);
+    expect(week.data.weeks.map((entry: { windows: number }) => entry.windows)).toEqual([2, 1]);
+
+    // The weeks are the Overview's: the same fields, the same figures.
+    const own = ledgerWeeks((await harness.service.state()).cycles, NOW, 2, TZ);
+    expect(week.data.weeks[0]).toEqual({
+      start: iso(own[0]?.startMs ?? 0),
+      windows: 2,
+      estimatedWindows: 1,
+      lost: { USD: 12.5 },
+      lostEstimated: { USD: 11.5 },
+      creditsLost: {},
+      creditsLostEstimated: {},
+      utilisationPercentTrailing30: own[0]?.trailingUtilisation === null ? null : Math.round((own[0]?.trailingUtilisation ?? 0) * 1000) / 10
+    });
+    expect(week.text).toContain('\n\nWeek by week:\n| Week of | Windows | Expired | Of which estimated | Credits expired | Credits estimated |');
+    expect(week.text).toContain('| 2026-11-09 | 2 | about $13 | about $12 |');
+
+    // On the fixture as it is, the first week also holds a window from just before the 7 days.
+    const before = await call(await connect(), 'waste_report', { days: 7, byWeek: true });
+    expect(before.data.weeks.reduce((sum: number, entry: { windows: number }) => sum + entry.windows, 0)).toBeGreaterThanOrEqual(before.data.windows);
+  });
+
+  it('waste_report byWeek stops at 26 weeks', async () => {
+    const answer = await call(await connect(), 'waste_report', { days: 365, byWeek: true });
+    expect(answer.data.weeks).toHaveLength(26);
+    expect(answer.data.weeks.at(-1).start).toBe('2026-11-16T00:00:00.000Z');
+    expect(answer.data.weeks[0].start).toBe(iso(Date.parse('2026-11-16T00:00:00.000Z') - 25 * 7 * DAY));
+  });
+
+  it('waste_report flags estimated credits apart from plan money, here and in what_to_use', async () => {
+    const state = fixture();
+    const credits: ClosedCycle = { ...cycle('claude-max', 'api', 3 * DAY, 0.5, 52.37, 'estimated'), unit: 'usd', meterLabel: 'API credits' };
+    const harness = await connect({ state: { ...state, cycles: [...state.cycles, credits] } });
+    const answer = await call(harness, 'waste_report', { days: 7, byWeek: true });
+    expect(answer.data).toMatchObject({ lost: { USD: 6.75 }, lostIsEstimate: false, creditsLost: { USD: 52.37 }, creditsLostIsEstimate: true });
+    expect(answer.text.split('\n')[1]).toBe('Last 7 days: 72% used on average over 3 windows; $6.75, plus about $52 in credits expired unused.');
+    expect(answer.data.weeks.at(-1)).toMatchObject({ creditsLost: { USD: 52.37 }, creditsLostEstimated: { USD: 52.37 } });
+    expect(answer.text).toContain('| about $52 | about $52 |');
+
+    const snapshotted = await call(harness, 'what_to_use');
+    expect(snapshotted.data.summary).toMatchObject({ lost30IsEstimate: true, creditsLost30IsEstimate: true });
+    const plain = await call(await connect(), 'what_to_use');
+    expect(plain.data.summary).toMatchObject({ lost30IsEstimate: true, creditsLost30IsEstimate: false });
+  });
+
+  it('waste_report says in words when no money expired, never "$0.00"', async () => {
+    const state = fixture();
+    const unpriced = state.cycles.map((entry) => ({ ...entry, wastedValue: null, currency: null }));
+    const none = await call(await connect({ state: { ...state, cycles: unpriced } }), 'waste_report');
+    expect(none.text.split('\n')[1]).toBe('Last 30 days: 72% used on average over 3 windows; what was left unused has no price set, so no money is counted.');
+    expect(none.data).toMatchObject({ lost: {}, creditsLost: {}, lostIsEstimate: false, creditsLostIsEstimate: false });
+
+    const used = state.cycles.map((entry) => ({ ...entry, wastedFraction: 0, wastedValue: 0, used: entry.limit }));
+    const full = await call(await connect({ state: { ...state, cycles: used } }), 'waste_report');
+    expect(full.text.split('\n')[1]).toBe('Last 30 days: 100% used on average over 3 windows; nothing expired unused.');
+    for (const answer of [none, full]) expect(answer.text).not.toContain('$0.00');
   });
 
   it('get_costs summarises each spend source and prints the shared costs table', async () => {
