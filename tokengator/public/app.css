@@ -372,8 +372,10 @@ button.link:hover { color: var(--ink); }
 .row.snoozed { opacity: 0.6; }
 .row > .mono { grid-area: mono; }
 .row-name { grid-area: name; min-width: 0; display: block; padding: 0; border: 0; background: none; text-align: left; cursor: pointer; }
-.row-name .a { display: flex; align-items: center; gap: 7px; font-weight: 500; white-space: nowrap; overflow: hidden; }
-.row-name .a span { overflow: hidden; text-overflow: ellipsis; }
+/* A name is never shortened to make room for a tag: when both do not fit, the tag moves to a line of its own. */
+.row-name .a { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 7px; font-weight: 500; }
+.row-name .a > span:first-child { min-width: 0; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row-name .a .tag { flex: none; }
 .row-name .m { display: block; font-size: 12.5px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row-bar { grid-area: bar; min-width: 0; }
 .row-left { grid-area: left; text-align: right; }
