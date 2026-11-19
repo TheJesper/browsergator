@@ -352,11 +352,24 @@ describe('totals', () => {
       ['2026-11-18', 10]
     ]);
     const totals = ledgerTotals(state.cycles, NOW);
-    expect(Object.keys(totals.lost30)).toEqual(['USD']);
-    expect(totals.lost30['USD']).toBeCloseTo(20, 9);
+    // A meter counted in dollars is a credit at face value, so its losses are totalled as credits.
+    expect(Object.keys(totals.creditsLost30)).toEqual(['USD']);
+    expect(totals.creditsLost30['USD']).toBeCloseTo(20, 9);
+    expect(totals.lost30).toEqual({});
     expect(totals.cycles30).toBe(3);
     expect(totals.lostIsEstimate).toBe(false);
-    expect(summarise(state, NOW).lost30['USD']).toBeCloseTo(20, 9);
+    expect(summarise(state, NOW).creditsLost30['USD']).toBeCloseTo(20, 9);
+  });
+
+  it('totals plan money and dollar credits separately', () => {
+    let state = dollars();
+    state = add(state, 'Claude Max', [{ label: 'Weekly', reset: WEEKLY, resetsAt: '2026-11-17T00:00:00Z' }], { price: USD_100 }, utc(2026, 11, 11));
+    state = read(state, 'claude-max:weekly', { usedPercent: 50 }, utc(2026, 11, 16, 23, 0));
+    state = rollState(state, NOW);
+    const totals = ledgerTotals(state.cycles, NOW);
+    expect(totals.lost30['USD']).toBeCloseTo(11.5, 1);
+    expect(totals.creditsLost30['USD']).toBeCloseTo(20, 9);
+    expect(briefMarkdown(state, NOW, 'UTC')).toContain('Expired unused in the last 30 days: $11.50, plus $20.00 in credits.');
   });
 
   it('averages utilisation over the same 30 days', () => {
@@ -367,14 +380,14 @@ describe('totals', () => {
   it('moves the window with the clock', () => {
     const state = dollars();
     // Sixteen days later the cycles of 10 and 14 November are still inside, 31 days later none is.
-    expect(ledgerTotals(state.cycles, NOW + 16 * DAY).lost30['USD']).toBeCloseTo(20, 9);
-    expect(ledgerTotals(state.cycles, utc(2026, 12, 12)).lost30['USD']).toBeCloseTo(16, 9);
-    expect(ledgerTotals(state.cycles, utc(2026, 12, 16)).lost30['USD']).toBeCloseTo(10, 9);
-    expect(ledgerTotals(state.cycles, utc(2026, 12, 19))).toEqual({ lost30: {}, utilisation30: null, cycles30: 0, lostIsEstimate: false });
+    expect(ledgerTotals(state.cycles, NOW + 16 * DAY).creditsLost30['USD']).toBeCloseTo(20, 9);
+    expect(ledgerTotals(state.cycles, utc(2026, 12, 12)).creditsLost30['USD']).toBeCloseTo(16, 9);
+    expect(ledgerTotals(state.cycles, utc(2026, 12, 16)).creditsLost30['USD']).toBeCloseTo(10, 9);
+    expect(ledgerTotals(state.cycles, utc(2026, 12, 19))).toEqual({ lost30: {}, creditsLost30: {}, utilisation30: null, cycles30: 0, lostIsEstimate: false });
     // A different span can be asked for.
-    expect(ledgerTotals(state.cycles, NOW, 60).lost30['USD']).toBeCloseTo(40, 9);
-    expect(ledgerTotals(state.cycles, NOW, 7).lost30['USD']).toBeCloseTo(16, 9);
-    expect(ledgerTotals(state.cycles, NOW, 3).lost30['USD']).toBeCloseTo(10, 9);
+    expect(ledgerTotals(state.cycles, NOW, 60).creditsLost30['USD']).toBeCloseTo(40, 9);
+    expect(ledgerTotals(state.cycles, NOW, 7).creditsLost30['USD']).toBeCloseTo(16, 9);
+    expect(ledgerTotals(state.cycles, NOW, 3).creditsLost30['USD']).toBeCloseTo(10, 9);
   });
 
   it('keeps currencies apart', () => {

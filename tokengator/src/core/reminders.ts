@@ -5,11 +5,10 @@
 // again for that window. Anything chattier gets switched off within a week.
 
 import { allowanceQueue, horizonFor, type MeterView } from './forecast.js';
-import { formatMoney } from './format.js';
 import { nextBoundary, nominalWindowMs, windowLengthMs } from './reset.js';
 import { DAY, HOUR, formatDuration, formatMoment, toMs } from './time.js';
 import type { State } from './types.js';
-import { leftText } from './wording.js';
+import { leftText, riskMoney } from './wording.js';
 
 export interface Reminder {
   /** One per meter per window: the window's end identifies it. */
@@ -47,9 +46,8 @@ function reminderFor(view: MeterView, nowMs: number, tz?: string): Reminder | nu
 
   const meterName = view.meter.label.charAt(0).toLowerCase() + view.meter.label.slice(1);
   const parts = [`${leftText(view)} of the ${meterName}, resets in ${formatDuration(view.resetsAtMs - nowMs)} (${formatMoment(view.resetsAtMs, nowMs, tz)}).`];
-  if (view.valueAtRisk !== null && view.currency !== null && view.valueAtRisk >= 0.01) {
-    parts.push(`About ${formatMoney(view.valueAtRisk, view.currency)} expires at this pace.`);
-  }
+  const money = riskMoney(view);
+  if (money) parts.push(`About ${money} expires at this pace.`);
   if (view.blockedUntilMs !== null && view.blockedUntilMs > nowMs) {
     parts.push(`Usable again ${formatMoment(view.blockedUntilMs, nowMs, tz)}${view.blockedBy ? `, when the ${view.blockedBy.toLowerCase()} reopens` : ''}.`);
   }

@@ -225,6 +225,25 @@ Desktop reminders are a setting (`desktopReminders`, off by default) because the
 
 Not built: Web Push (it would add an internet round trip to reach the same screen, and a phone cannot subscribe to a loopback origin), an installer for starting at login (the documentation gives the three per-system recipes instead), and per-account work hours.
 
+### D17. Two kinds of money, never added together
+
+A dollar figure on screen is read as money paid unless something says otherwise, so the figures have to survive that reading. There are two kinds:
+
+- **Plan money**: a meter's share of the plan fee, scaled to its window (D4). It is an estimate for comparing quotas and for making waste visible; it is not a charge and not a refund. By construction a plan's allowances together never show more at risk than the plan costs, because value shares split one fee.
+- **Credits**: a meter counted in dollars (bundled API credits, a prepaid balance) is worth its face value. That is the provider's number, not ours, and it can only be spent where the provider accepts it.
+
+Plans now bundle credits whose face value equals or exceeds the fee (100 dollars of API credits with a 100 dollar plan). Adding the two would report 123 dollars at risk on a 100 dollar plan, which is not a figure anyone can defend, and "credits at face, the allowance gets the rest of the fee" gives zero or less. So the two are kept as two figures everywhere: per meter the basis is carried (`valueBasis: plan | credit`), totals have a plan figure and a credits figure per currency, the sentence at the top reads "13.41 at risk, plus 66.92 in credits", and the ledger totals expired credits apart from expired plan money. A credit figure is always called credits where it is shown or said.
+
+What this does not model, on purpose: API-equivalent value (what the same usage would cost at list prices is one or two orders of magnitude above the plan fee, and is neither paid nor recoverable), and replacement cost.
+
+### D18. Known limits of the forecast
+
+Recorded so they are not mistaken for oversights:
+
+- **Feasibility.** The reset is the deadline the forecast uses. When a session limit caps how fast a weekly allowance can be drained, the honest deadline is earlier and part of what is "at risk" is already out of reach. Working that out needs the share of the week one full session consumes, which no provider publishes; it can be learned from pairs of readings, as CodexBar and claude-pace do. Not built: until that ratio is learned from the user's own readings, a figure would be a guess presented as a fact. The inspector's "pace needed" multiple is the honest stand-in.
+- **Carry-over is yes or no.** Real plans have caps (twice the monthly grant at ElevenLabs), per-lot expiry and annual cliffs. A meter marked as carrying over shows no waste, which understates the loss above a cap. The catalog notes say where a cap exists.
+- **Unclaimed benefits.** Credits that must be claimed before they exist (API credits bundled with a chat plan) are tracked like any other meter once claimed; an unclaimed month is invisible.
+
 ## Provider sources
 
 What each shipped collector reads, and how sure the research pass was of it. `research.md` in this change has the sources and the verification verdicts.

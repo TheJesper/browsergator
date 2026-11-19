@@ -13,6 +13,12 @@ import type { Ctx } from './ctx.js';
 import { h, icon } from './dom.js';
 import { copyText } from './ui.js';
 
+/** Dollar credits that expired, shown beside the plan money and never added to it. */
+function creditNote(credits: Money, currency: string): HTMLElement | null {
+  const text = formatMoneyTotals(credits, currency);
+  return text ? h('small', null, `+ ${text} in credits`) : null;
+}
+
 export function costsView(ctx: Ctx): HTMLElement {
   const { state, now } = ctx.app.model;
   if (state.spend.length === 0) {
@@ -155,8 +161,8 @@ export function historyView(ctx: Ctx): HTMLElement {
       h(
         'dl',
         { class: 'stats' },
-        h('div', { class: 'stat risk' }, h('dt', { class: 'label' }, 'Last 30 days'), h('dd', null, `${approx}${formatMoneyTotals(totals30.lost30, currency, formatMoney(0, currency))}`)),
-        h('div', { class: 'stat' }, h('dt', { class: 'label' }, 'Last 90 days'), h('dd', null, formatMoneyTotals(totals90.lost30, currency, formatMoney(0, currency)))),
+        h('div', { class: 'stat risk' }, h('dt', { class: 'label' }, 'Last 30 days'), h('dd', null, `${approx}${formatMoneyTotals(totals30.lost30, currency, formatMoney(0, currency))}`, creditNote(totals30.creditsLost30, currency))),
+        h('div', { class: 'stat' }, h('dt', { class: 'label' }, 'Last 90 days'), h('dd', null, formatMoneyTotals(totals90.lost30, currency, formatMoney(0, currency)), creditNote(totals90.creditsLost30, currency))),
         h(
           'div',
           { class: 'stat' },

@@ -4,7 +4,7 @@ import { cyclesOf, type MeterView } from '../core/forecast.js';
 import { formatAmount, formatMoney, formatMultiple, formatPercent } from '../core/format.js';
 import { parseQuick } from '../core/quick.js';
 import { DAY, formatDuration, formatMoment } from '../core/time.js';
-import { explain, headline } from '../core/wording.js';
+import { CREDIT_VALUE_NOTE, PLAN_VALUE_NOTE, explain, headline } from '../core/wording.js';
 import { burnUp, cycleColumns } from './charts.js';
 import type { Ctx } from './ctx.js';
 import { h, icon } from './dom.js';
@@ -135,7 +135,8 @@ export function inspector(ctx: Ctx, view: MeterView): HTMLElement {
   if (view.runsOutAtMs !== null) facts.push(...fact('Runs out', formatMoment(view.runsOutAtMs, now), 'at this pace'));
   if (view.windowValue !== null && view.currency !== null) {
     const risk = riskText(view);
-    facts.push(...fact('At risk', risk || formatMoney(0, view.currency), `of ${formatMoney(view.windowValue, view.currency)} this window`, Boolean(risk) && (view.tier === 'use-now' || view.tier === 'behind')));
+    const basis = view.valueBasis === 'credit' ? `of ${formatMoney(view.windowValue, view.currency)} in credits` : `of ${formatMoney(view.windowValue, view.currency)} this window`;
+    facts.push(...fact('At risk', risk || formatMoney(0, view.currency), basis, Boolean(risk) && (view.tier === 'use-now' || view.tier === 'behind')));
   }
   facts.push(...fact('Window', windowText(view), view.meter.rollover === 'carries' ? 'unused quota carries over' : undefined));
   facts.push(...fact('Source', sourceText(view), ageText(view)));
@@ -198,7 +199,13 @@ export function inspector(ctx: Ctx, view: MeterView): HTMLElement {
       )
     ),
     h('div', { class: 'insp-sec' }, h('span', { class: 'label' }, 'This window'), burnUp(view, now)),
-    h('div', { class: 'insp-sec' }, h('span', { class: 'label' }, 'Numbers'), h('dl', { class: 'facts' }, facts)),
+    h(
+      'div',
+      { class: 'insp-sec' },
+      h('span', { class: 'label' }, 'Numbers'),
+      h('dl', { class: 'facts' }, facts),
+      view.valueBasis !== null ? h('p', { class: 'hint', style: { marginTop: '8px' } }, view.valueBasis === 'credit' ? CREDIT_VALUE_NOTE : PLAN_VALUE_NOTE) : null
+    ),
     view.tier !== null
       ? h(
           'div',

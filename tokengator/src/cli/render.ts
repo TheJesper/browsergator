@@ -8,10 +8,10 @@
 import { CATEGORY_LABEL, type ProviderCategory, type ProviderPreset } from '../core/catalog-types.js';
 import { CONNECT_GROUP_LABEL, type ConnectSnippet } from '../core/connect.js';
 import { TIER_ORDER, sortViews, summarise, viewState, type MeterView, type Tier } from '../core/forecast.js';
-import { formatMoney, formatMoneyTotals, formatPercent } from '../core/format.js';
+import { formatMoney, formatPercent } from '../core/format.js';
 import { formatAge, formatDuration } from '../core/time.js';
 import type { Price, State } from '../core/types.js';
-import { TIER_HINT, TIER_LABEL, stateLabel, summaryLine } from '../core/wording.js';
+import { TIER_HINT, TIER_LABEL, moneyPair, riskMoney, stateLabel, summaryLine } from '../core/wording.js';
 
 export type ColorMode = 'none' | '256' | 'truecolor';
 
@@ -220,10 +220,7 @@ function resetCell(view: MeterView): string {
   return view.msLeft <= 0 ? 'now' : formatDuration(view.msLeft);
 }
 
-function riskCell(view: MeterView): string {
-  if (view.valueAtRisk === null || view.currency === null || view.valueAtRisk < 0.005) return '';
-  return formatMoney(view.valueAtRisk, view.currency);
-}
+const riskCell = riskMoney;
 
 /** What a person needs to know before trusting or acting on the row. */
 function notes(view: MeterView, nowMs: number): string[] {
@@ -421,7 +418,7 @@ export function renderStatus(state: State, nowMs: number, options: StatusOptions
   const summary = summarise(state, nowMs);
   const currency = state.settings.currency;
   if (lines.length > 0) lines.push('');
-  const lost = formatMoneyTotals(summary.lost30, currency);
+  const lost = moneyPair(summary.lost30, summary.creditsLost30, currency);
   if (lost) lines.push(paint(`Expired unused in the last 30 days: ${summary.lostIsEstimate ? 'about ' : ''}${lost}.`, 'muted', mode));
   lines.push(paint(summaryLine(summary, currency), summary.useNow > 0 ? 'expiring' : null, mode, true));
   if (summary.stale > 0) {

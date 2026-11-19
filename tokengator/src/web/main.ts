@@ -3,11 +3,11 @@
 
 import { briefMarkdown } from '../core/brief.js';
 import { CATEGORY_LABEL, type ProviderCategory } from '../core/catalog-types.js';
-import { SORT_ORDERS, type MeterView, type SortOrder } from '../core/forecast.js';
+import { SORT_ORDERS, type MeterView, type Money, type SortOrder } from '../core/forecast.js';
 import { formatMoney, formatMoneyTotals, formatPercent } from '../core/format.js';
 import { dueReminders, rememberReminders } from '../core/reminders.js';
 import { formatAge, formatDuration } from '../core/time.js';
-import { leftText, summaryLine } from '../core/wording.js';
+import { CREDIT_VALUE_NOTE, PLAN_VALUE_NOTE, leftText, summaryLine } from '../core/wording.js';
 import { App, VIEWS, type ViewId } from './app.js';
 import { HttpBackend, MemoryBackend, type Backend } from './backend.js';
 import type { Actions, Ctx } from './ctx.js';
@@ -308,9 +308,15 @@ function start(app: App, fellBack: boolean): void {
     summary.hidden = false;
     const next = s.nextReset;
     const line = summaryLine(s, currency);
-    const money = formatMoneyTotals(s.useNow > 0 ? s.atRiskNow : s.atRisk, currency);
-    // Emphasise the money inside the sentence without restating it.
+    // Emphasise the money inside the sentence without restating it: the plan figure, or the credits when
+    // credits are all that is at risk.
+    const plan = formatMoneyTotals(s.useNow > 0 ? s.atRiskNow : s.atRisk, currency);
+    const money = plan || formatMoneyTotals(s.useNow > 0 ? s.creditsAtRiskNow : s.creditsAtRisk, currency);
     const sentence = money && line.includes(money) ? [line.slice(0, line.indexOf(money)), h('span', { class: 'at-risk num' }, money), line.slice(line.indexOf(money) + money.length)] : [line];
+    const credits = (amounts: Money): HTMLElement | null => {
+      const text = formatMoneyTotals(amounts, currency);
+      return text ? h('small', { title: CREDIT_VALUE_NOTE }, `+ ${text} in credits`) : null;
+    };
     const liveClass = demo ? 'live sample' : online ? 'live' : 'live off';
     const liveText = demo ? 'Sample data' : online ? `Live${lastSync ? `, synced ${formatAge(now - lastSync)}` : ''}` : 'Offline';
     mount(
@@ -332,13 +338,29 @@ function start(app: App, fellBack: boolean): void {
       h(
         'dl',
         { class: 'stats' },
-        h('div', { class: 'stat risk' }, h('dt', { class: 'label' }, 'At risk now'), h('dd', null, formatMoneyTotals(s.atRiskNow, currency, formatMoney(0, currency)))),
-        h('div', { class: 'stat' }, h('dt', { class: 'label' }, 'At risk, all windows'), h('dd', null, formatMoneyTotals(s.atRisk, currency, formatMoney(0, currency)))),
+        h(
+          'div',
+          { class: 'stat risk' },
+          h('dt', { class: 'label' }, 'At risk now'),
+          h('dd', { title: PLAN_VALUE_NOTE }, formatMoneyTotals(s.atRiskNow, currency, formatMoney(0, currency)), credits(s.creditsAtRiskNow))
+        ),
+        h(
+          'div',
+          { class: 'stat' },
+          h('dt', { class: 'label' }, 'At risk, all windows'),
+          h('dd', { title: PLAN_VALUE_NOTE }, formatMoneyTotals(s.atRisk, currency, formatMoney(0, currency)), credits(s.creditsAtRisk))
+        ),
         h(
           'div',
           { class: 'stat' },
           h('dt', { class: 'label' }, 'Expired, last 30 days'),
-          h('dd', null, `${s.lostIsEstimate ? '~' : ''}${formatMoneyTotals(s.lost30, currency, formatMoney(0, currency))}`, s.utilisation30 !== null ? h('small', null, `${formatPercent(s.utilisation30)} used`) : null)
+          h(
+            'dd',
+            { title: PLAN_VALUE_NOTE },
+            `${s.lostIsEstimate ? '~' : ''}${formatMoneyTotals(s.lost30, currency, formatMoney(0, currency))}`,
+            credits(s.creditsLost30),
+            s.utilisation30 !== null ? h('small', null, `${formatPercent(s.utilisation30)} used`) : null
+          )
         )
       )
     );

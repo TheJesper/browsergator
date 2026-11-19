@@ -29,7 +29,7 @@ import { formatAmount, formatMoney, formatMoneyTotals, formatPercent } from '../
 import { addSpendSource, recordSpend, summariseSpend } from '../core/spend.js';
 import { DAY, HOUR, MINUTE, dateKey, iso, toMs } from '../core/time.js';
 import type { Account, ClosedCycle, Meter, MeterSource, Price, Reading, ResetRule, SpendSource, State, Unit } from '../core/types.js';
-import { explain, headline, statusLine } from '../core/wording.js';
+import { explain, headline, moneyPair, statusLine } from '../core/wording.js';
 import { CollectorError, type CollectorHost, type CollectorStatus } from './collectors/types.js';
 import { MAX_BODY_BYTES, VERSION } from './config.js';
 import { log, redact } from './logger.js';
@@ -301,6 +301,7 @@ const meterRecordShape = {
   projectedUnusedPercent: maybeNumber,
   valueAtRisk: maybeNumber,
   currency: maybeText,
+  valueBasis: z.enum(['plan', 'credit']).nullable(),
   requiredPaceMultiple: maybeNumber,
   blockedBy: maybeText,
   blockedUntil: maybeText,
@@ -343,7 +344,9 @@ const whatToUseOutput = z.looseObject({
     hot: z.number(),
     stale: z.number(),
     atRisk: moneyOut,
+    creditsAtRisk: moneyOut,
     lost30: moneyOut,
+    creditsLost30: moneyOut,
     utilisation30Percent: maybeNumber,
     nextReset: z.looseObject({ meter: text, account: text, resetsAt: text }).nullable()
   }),
@@ -415,6 +418,7 @@ const wasteReportOutput = z.looseObject({
   windows: z.number(),
   utilisationPercent: maybeNumber,
   lost: moneyOut,
+  creditsLost: moneyOut,
   lostIsEstimate: z.boolean(),
   meters: z.array(
     z.looseObject({
@@ -423,7 +427,8 @@ const wasteReportOutput = z.looseObject({
       meter: text,
       windows: z.number(),
       averageUnusedPercent: z.number(),
-      lost: moneyOut
+      lost: moneyOut,
+      valueBasis: z.enum(['plan', 'credit']).nullable()
     })
   )
 });
@@ -1032,6 +1037,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
               windows: own.length,
               averageUnusedPercent: round((own.reduce((sum, cycle) => sum + cycle.wastedFraction, 0) / own.length) * 100),
               lost,
+              valueBasis: Object.keys(lost).length === 0 ? null : latest.unit === 'usd' ? ('credit' as const) : ('plan' as const),
               estimated: own.some((cycle) => cycle.confidence === 'estimated'),
               recent: cyclesOf(windowed, meterId, 6).map(cycleSummary)
             };
@@ -1046,14 +1052,14 @@ export function createMcpServer(deps: McpDeps): McpServer {
         if (inWindow.length === 0) {
           lines.push(`No window finished in the last ${days} days, so there is nothing to report yet. The ledger fills as tracked windows reset.`);
         } else {
-          const lostText = formatMoneyTotals(totals.lost30, state.settings.currency);
+          const lostText = moneyPair(totals.lost30, totals.creditsLost30, state.settings.currency);
           const used = totals.utilisation30 === null ? '' : `, ${formatPercent(totals.utilisation30)} of the quota used on average`;
           const money = lostText ? `, ${totals.lostIsEstimate ? 'about ' : ''}${lostText} expired unused` : '';
           lines.push(`Last ${days} days: ${inWindow.length === 1 ? '1 finished window' : `${inWindow.length} finished windows`}${used}${money}.`, '');
           lines.push('| Subscription | Meter | Windows | Unused on average | Expired value |', '| --- | --- | --- | --- | --- |');
           for (const row of meters.slice(0, 20)) {
             lines.push(
-              `| ${escapeCell(row.account)} | ${escapeCell(row.meter)} | ${row.windows} | ${Math.round(row.averageUnusedPercent)}% | ${formatMoneyTotals(row.lost, state.settings.currency)} |`
+              `| ${escapeCell(row.account)} | ${escapeCell(row.meter)} | ${row.windows} | ${Math.round(row.averageUnusedPercent)}% | ${formatMoneyTotals(row.lost, state.settings.currency)}${row.valueBasis === 'credit' ? ' in credits' : ''} |`
             );
           }
           if (meters.length > 20) lines.push('', `(${meters.length - 20} more meters in the structured result)`);
@@ -1065,6 +1071,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           windows: inWindow.length,
           utilisationPercent: totals.utilisation30 === null ? null : round(totals.utilisation30 * 100),
           lost: roundMoney(totals.lost30),
+          creditsLost: roundMoney(totals.creditsLost30),
           lostIsEstimate: totals.lostIsEstimate,
           meters
         });

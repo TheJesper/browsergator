@@ -30,6 +30,8 @@ export const TIER_ORDER: readonly Tier[] = [
   'expired'
 ];
 
+export type ValueBasis = 'plan' | 'credit';
+
 export interface MeterView {
   account: Account;
   meter: Meter;
@@ -64,6 +66,11 @@ export interface MeterView {
   remainingValue: number | null;
   valueAtRisk: number | null;
   currency: string | null;
+  /**
+   * What the money figures are made of. `plan`: a share of the plan fee, an estimate for comparing meters.
+   * `credit`: the face value of a credit counted in dollars. The two are never added together.
+   */
+  valueBasis: ValueBasis | null;
 
   /** Allowance meters only. */
   tier: Tier | null;
@@ -185,6 +192,7 @@ export function viewMeter(account: Account, meter: Meter, nowMs: number): MeterV
       remainingValue: null,
       valueAtRisk: null,
       currency: null,
+      valueBasis: null,
       tier: null,
       throttle
     };
@@ -230,6 +238,7 @@ export function viewMeter(account: Account, meter: Meter, nowMs: number): MeterV
     remainingValue,
     valueAtRisk,
     currency: value === null ? null : valueCurrency(account, meter),
+    valueBasis: value === null ? null : meter.unit === 'usd' ? 'credit' : 'plan',
     tier,
     throttle: null
   };
@@ -341,14 +350,22 @@ export interface Summary {
   behind: number;
   hot: number;
   stale: number;
-  /** Money expected to expire across all active windows. */
+  /** Plan money expected to expire across all active windows: each meter's share of its plan fee. */
   atRisk: Money;
   /** Subset of `atRisk` inside "use now" meters. */
   atRiskNow: Money;
+  /**
+   * Credits counted in dollars that are expected to expire, at face value. Kept apart from `atRisk`:
+   * a plan that bundles 100 dollars of credits with a 100 dollar fee has not put 200 dollars at risk.
+   */
+  creditsAtRisk: Money;
+  creditsAtRiskNow: Money;
   /** The next reset among allowance meters that still have quota left. */
   nextReset: MeterView | null;
-  /** Ledger: money that expired in the trailing 30 days. */
+  /** Ledger: plan money that expired in the trailing 30 days. */
   lost30: Money;
+  /** Ledger: dollar credits that expired in the trailing 30 days, at face value. */
+  creditsLost30: Money;
   /** Ledger: mean utilisation (0..1) over cycles closed in the trailing 30 days, or null without cycles. */
   utilisation30: number | null;
   cycles30: number;
@@ -360,9 +377,10 @@ export function ledgerTotals(
   cycles: readonly ClosedCycle[],
   nowMs: number,
   days = 30
-): Pick<Summary, 'lost30' | 'utilisation30' | 'cycles30' | 'lostIsEstimate'> {
+): Pick<Summary, 'lost30' | 'creditsLost30' | 'utilisation30' | 'cycles30' | 'lostIsEstimate'> {
   const since = nowMs - days * DAY;
   const lost30: Money = {};
+  const creditsLost30: Money = {};
   let count = 0;
   let utilisation = 0;
   let lostIsEstimate = false;
@@ -371,16 +389,18 @@ export function ledgerTotals(
     if (ended === null || ended < since || ended > nowMs) continue;
     count += 1;
     utilisation += 1 - cycle.wastedFraction;
-    addMoney(lost30, cycle.currency, cycle.wastedValue);
+    addMoney(cycle.unit === 'usd' ? creditsLost30 : lost30, cycle.currency, cycle.wastedValue);
     if (cycle.confidence === 'estimated' && (cycle.wastedValue ?? 0) > 0) lostIsEstimate = true;
   }
-  return { lost30, utilisation30: count ? utilisation / count : null, cycles30: count, lostIsEstimate };
+  return { lost30, creditsLost30, utilisation30: count ? utilisation / count : null, cycles30: count, lostIsEstimate };
 }
 
 export function summarise(state: State, nowMs: number): Summary {
   const views = viewState(state, nowMs).filter((view) => view.tier !== null && !view.snoozed);
   const atRisk: Money = {};
   const atRiskNow: Money = {};
+  const creditsAtRisk: Money = {};
+  const creditsAtRiskNow: Money = {};
   let useNow = 0;
   let behind = 0;
   let hot = 0;
@@ -391,13 +411,14 @@ export function summarise(state: State, nowMs: number): Summary {
     if (view.tier === 'behind') behind += 1;
     if (view.tier === 'hot') hot += 1;
     if (view.stale && view.tier !== 'idle' && view.tier !== 'expired') stale += 1;
-    addMoney(atRisk, view.currency, view.valueAtRisk);
-    if (view.tier === 'use-now') addMoney(atRiskNow, view.currency, view.valueAtRisk);
+    const credit = view.valueBasis === 'credit';
+    addMoney(credit ? creditsAtRisk : atRisk, view.currency, view.valueAtRisk);
+    if (view.tier === 'use-now') addMoney(credit ? creditsAtRiskNow : atRiskNow, view.currency, view.valueAtRisk);
     if (view.msLeft !== null && view.msLeft > 0 && view.tier !== 'spent' && view.tier !== 'expired') {
       if (nextReset === null || view.msLeft < (nextReset.msLeft ?? Number.POSITIVE_INFINITY)) nextReset = view;
     }
   }
-  return { useNow, behind, hot, stale, atRisk, atRiskNow, nextReset, ...ledgerTotals(state.cycles, nowMs) };
+  return { useNow, behind, hot, stale, atRisk, atRiskNow, creditsAtRisk, creditsAtRiskNow, nextReset, ...ledgerTotals(state.cycles, nowMs) };
 }
 
 /** Recent finished cycles of one meter, oldest first. */

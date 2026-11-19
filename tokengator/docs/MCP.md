@@ -94,6 +94,7 @@ uses the account's main allowance.
 | `resetsAt`, `resetsInMinutes`, `windowHours` | The current window. `null` when no window is running or the reset time is unknown. |
 | `projectedUnusedPercent` | Share of the allowance expected to expire at the current pace. `null` without a forecast. |
 | `valueAtRisk`, `currency` | Money that share stands for. `null` when the account has no price. |
+| `valueBasis` | `plan`: a share of the plan fee, an estimate. `credit`: the face value of a credit counted in dollars. Say "in credits" for the second; never add the two. |
 | `requiredPaceMultiple` | How many times the pace so far is needed to finish the quota. |
 | `blockedBy`, `blockedUntil` | A rate limit of the same account that is exhausted right now. |
 | `stale`, `updatedAt`, `source`, `estimated` | Age of the reading, who reported it (`manual`, `agent:<name>`, `collector:<id>`, `statusline:<id>`), and whether the numbers are assumed after an unobserved reset. |
@@ -507,8 +508,10 @@ Last 30 days: 3 finished windows, 72% of the quota used on average, about $18.25
 }
 ```
 
-`days` is 1 to 365, default 30. Money is totalled per currency and never converted. Each meter also has
-`recent`, its last finished windows inside the period.
+`days` is 1 to 365, default 30. Money is totalled per currency and never converted. `lost` is plan money
+(shares of plan fees); credits counted in dollars that expired are in `creditsLost`, at face value, and
+are never part of `lost`. Each meter says which it is in `valueBasis`, and also has `recent`, its last
+finished windows inside the period.
 
 ### `record_spend`
 

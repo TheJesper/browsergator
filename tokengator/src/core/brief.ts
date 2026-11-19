@@ -3,8 +3,8 @@
 
 import type { MeterView, Summary } from './forecast.js';
 import { TIER_ORDER, allowanceQueue, summarise, viewState } from './forecast.js';
-import { formatMoney, formatMoneyTotals, formatPercent } from './format.js';
-import { TIER_LABEL, explain, headline, leftText, recommend, stateLabel, statusLine, summaryLine, usedText } from './wording.js';
+import { formatMoney, formatPercent } from './format.js';
+import { TIER_LABEL, explain, headline, leftText, moneyPair, recommend, riskMoney, stateLabel, statusLine, summaryLine, usedText } from './wording.js';
 import type { State } from './types.js';
 import { summariseSpend } from './spend.js';
 import { formatAge, formatDuration, formatMoment, iso, localZone } from './time.js';
@@ -20,10 +20,7 @@ function resetCell(view: MeterView, nowMs: number, tz?: string): string {
   return `${formatDuration(view.msLeft)} (${formatMoment(view.resetsAtMs, nowMs, tz)})`;
 }
 
-function riskCell(view: MeterView): string {
-  if (view.valueAtRisk === null || view.currency === null || view.valueAtRisk < 0.005) return '';
-  return formatMoney(view.valueAtRisk, view.currency);
-}
+const riskCell = riskMoney;
 
 /** The whole picture as Markdown, most urgent first. */
 export function briefMarkdown(state: State, nowMs: number, tz: string = localZone()): string {
@@ -36,7 +33,7 @@ export function briefMarkdown(state: State, nowMs: number, tz: string = localZon
   lines.push(`_As of ${stamp(nowMs, tz)}_`);
   lines.push('');
   lines.push(`**${summaryLine(summary, currency)}**`);
-  const lost = formatMoneyTotals(summary.lost30, currency);
+  const lost = moneyPair(summary.lost30, summary.creditsLost30, currency);
   if (lost) {
     lines.push('');
     lines.push(`Expired unused in the last 30 days: ${summary.lostIsEstimate ? 'about ' : ''}${lost}.`);
@@ -148,6 +145,8 @@ export interface MeterRecord {
   projectedUnusedPercent: number | null;
   valueAtRisk: number | null;
   currency: string | null;
+  /** `plan`: a share of the plan fee. `credit`: the face value of a dollar credit. Null without a price. */
+  valueBasis: MeterView['valueBasis'];
   requiredPaceMultiple: number | null;
   blockedBy: string | null;
   blockedUntil: string | null;
@@ -189,6 +188,7 @@ export function meterRecord(view: MeterView, nowMs: number, tz?: string): MeterR
     projectedUnusedPercent: view.projectedFraction === null ? null : round(view.projectedUnused * 100),
     valueAtRisk: view.valueAtRisk === null ? null : round(view.valueAtRisk, 2),
     currency: view.currency,
+    valueBasis: view.valueBasis,
     requiredPaceMultiple: view.requiredMultiple === null ? null : round(view.requiredMultiple),
     blockedBy: view.blockedBy,
     blockedUntil: view.blockedUntilMs === null ? null : iso(view.blockedUntilMs),
@@ -211,8 +211,12 @@ export interface Snapshot {
     behind: number;
     hot: number;
     stale: number;
+    /** Plan money expected to expire, per currency: each meter's share of its plan fee. */
     atRisk: Summary['atRisk'];
+    /** Dollar credits expected to expire, at face value. Never part of `atRisk`. */
+    creditsAtRisk: Summary['creditsAtRisk'];
     lost30: Summary['lost30'];
+    creditsLost30: Summary['creditsLost30'];
     /** True when part of `lost30` comes from windows with no reading near their end. */
     lost30IsEstimate: boolean;
     utilisation30Percent: number | null;
@@ -244,7 +248,9 @@ export function snapshot(state: State, nowMs: number, tz: string = localZone()):
       hot: summary.hot,
       stale: summary.stale,
       atRisk: cents(summary.atRisk),
+      creditsAtRisk: cents(summary.creditsAtRisk),
       lost30: cents(summary.lost30),
+      creditsLost30: cents(summary.creditsLost30),
       lost30IsEstimate: summary.lostIsEstimate,
       utilisation30Percent: summary.utilisation30 === null ? null : round(summary.utilisation30 * 100),
       nextReset:

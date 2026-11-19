@@ -40,6 +40,21 @@ The system SHALL express the projected unused share of an allowance meter as mon
 - **WHEN** one account is priced in USD and another in SEK
 - **THEN** totals are reported separately for USD and SEK
 
+### Requirement: Credits counted in dollars are valued at face and kept apart
+The system SHALL value an allowance meter whose unit is dollars at its own amount, in USD, whatever the account's price or currency, and SHALL mark its money figures as credits. Totals of money at risk and of money that expired SHALL keep plan money (shares of plan fees) and dollar credits as two figures and SHALL NOT add one to the other. Wherever a credit figure is shown or said, it SHALL be called credits.
+
+#### Scenario: Bundled API credits
+- **WHEN** a plan that costs 100 USD per month has a weekly allowance and 100 USD of bundled credits, both at risk
+- **THEN** the plan money at risk is at most the weekly share of 100 USD, and the credits at risk are reported as a separate figure "in credits"
+
+#### Scenario: Only credits at risk
+- **WHEN** the only quota at risk is a prepaid balance that is about to expire
+- **THEN** the summary sentence states the amount "in credits at risk"
+
+#### Scenario: Account priced in another currency
+- **WHEN** an account priced in SEK has a meter counted in dollars
+- **THEN** that meter's figures are in USD and are totalled as credits
+
 ### Requirement: Urgency tiers
 The system SHALL assign every allowance meter exactly one tier: `use-now` (at least 10% left, the reset within the action horizon and a projected unused share of at least 5%), `behind` (projected unused share of at least 15%), `hot` (pace would exhaust the limit well before the reset), `on-pace`, `spent` (at least 98% used), `fresh` (less than 5% of the window elapsed), `idle` (no active window or reset time unknown), `balance` (no clock) or `expired`.
 

@@ -20,7 +20,7 @@ import { formatMoneyTotals } from '../../src/core/format.js';
 import { applyReadingToState, rollState } from '../../src/core/reset.js';
 import { DAY, HOUR, MINUTE, MONTH, iso } from '../../src/core/time.js';
 import { emptyState, type Account, type Price, type State } from '../../src/core/types.js';
-import { explain, recommend, statusLine } from '../../src/core/wording.js';
+import { explain, recommend, statusLine, summaryLine } from '../../src/core/wording.js';
 
 const utc = (y: number, mo: number, d: number, h = 0, mi = 0): number => Date.UTC(y, mo - 1, d, h, mi, 0);
 /** Thursday 19 November 2026, 10:00 UTC. */
@@ -728,11 +728,52 @@ describe('value at risk', () => {
     expect(v.windowValue).toBe(20);
     expect(v.currency).toBe('USD');
     expect(v.valueAtRisk).toBeCloseTo(20 * (1 - d4Projected(0.2, 0.5)), 6);
-    expect(summarise(state, NOW).atRisk).toEqual({ USD: v.valueAtRisk });
+    // Face value is its own figure: it is counted as credits and never as part of the plan money.
+    expect(v.valueBasis).toBe('credit');
+    expect(summarise(state, NOW).creditsAtRisk).toEqual({ USD: v.valueAtRisk });
+    expect(summarise(state, NOW).atRisk).toEqual({});
 
     const unpriced = view({ label: 'Monthly credit', unit: 'usd', limit: 20, used: 4, resetsAt: iso(NOW + 15 * DAY), reset: { kind: 'interval', hours: 720 } });
     expect(unpriced.currency).toBe('USD');
     expect(unpriced.valueAtRisk).toBeCloseTo(v.valueAtRisk as number, 9);
+  });
+
+  it('keeps plan money and bundled dollar credits apart, so a plan never shows more at risk than it costs', () => {
+    // A 100-dollar plan with a weekly allowance and 100 dollars of bundled API credits, both barely used.
+    const state = add(
+      emptyState(),
+      'Claude Max',
+      [
+        weeklyResettingIn(14, 62),
+        { label: 'API credits', unit: 'usd', limit: 100, used: 10, resetsAt: iso(NOW + 2 * DAY), windowStartedAt: iso(NOW - 28 * DAY), reset: { kind: 'interval', hours: 720 } }
+      ],
+      { price: USD_100 }
+    );
+    const [weeklyView, credits] = viewState(state, NOW) as [MeterView, MeterView];
+    expect(weeklyView.valueBasis).toBe('plan');
+    expect(credits.valueBasis).toBe('credit');
+    expect(weeklyView.tier).toBe('use-now');
+    expect(credits.tier).toBe('use-now');
+
+    const summary = summarise(state, NOW);
+    expect(summary.atRiskNow['USD']).toBeCloseTo(weeklyView.valueAtRisk as number, 9);
+    expect(summary.atRiskNow['USD']).toBeLessThan(WEEK_OF_100);
+    expect(summary.creditsAtRiskNow['USD']).toBeCloseTo(credits.valueAtRisk as number, 9);
+    expect(summary.creditsAtRiskNow['USD']).toBeGreaterThan(80);
+
+    // The sentence names both, each as what it is.
+    const line = summaryLine(summary, 'USD');
+    expect(line).toMatch(/^2 quotas need using now, \$\d+\.\d\d at risk, plus \$\d+\.\d\d in credits\.$/);
+    expect(statusLine(credits, NOW, 'UTC')).toMatch(/\(\$\d+\.\d\d in credits at risk\)$/);
+    expect(explain(credits, NOW, 'UTC')).toMatch(/worth \$\d+\.\d\d in credits\./);
+
+    // With only credits at risk the sentence still reads as a sentence.
+    const onlyCredits = add(emptyState(), 'OpenAI API', [
+      { label: 'Prepaid', unit: 'usd', limit: 50, used: 10, resetsAt: iso(NOW + 2 * DAY), windowStartedAt: iso(NOW - 300 * DAY), reset: { kind: 'once' } }
+    ]);
+    expect(summaryLine(summarise(onlyCredits, NOW), 'USD')).toMatch(/^1 quota needs using now, \$\d+\.\d\d in credits at risk\.$/);
+    // A throttle has no money at all, so it has no basis.
+    expect(view({ label: 'Session', role: 'throttle', reset: { kind: 'rolling', hours: 5 } }).valueBasis).toBeNull();
   });
 
   it('counts only the first allowance of an account unless value shares say otherwise', () => {
@@ -981,8 +1022,11 @@ describe('summarise', () => {
       stale: 0,
       atRisk: {},
       atRiskNow: {},
+      creditsAtRisk: {},
+      creditsAtRiskNow: {},
       nextReset: null,
       lost30: {},
+      creditsLost30: {},
       utilisation30: null,
       cycles30: 0,
       lostIsEstimate: false

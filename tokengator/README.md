@@ -207,7 +207,10 @@ unused    = 1 - projected
 
 The 0.05 is a small prior of "on pace" that keeps the first minutes of a window from predicting a
 disaster. Money at risk is the plan price, scaled to the window's length and multiplied by the
-unused share. The forecast is deliberately linear and whole-window: usage is bursty, and a model
+unused share: your plan fee spread over the window, an estimate for comparing quotas, not a charge
+or a refund. Credits that are counted in dollars (bundled API credits, a prepaid balance) are shown
+at face value and always called credits; the two are never added together, so a plan cannot show
+more at risk than it costs. The forecast is deliberately linear and whole-window: usage is bursty, and a model
 that reacts to the last hour changes its mind every time you go to lunch. The inspector shows the
 real readings so you can see what the average hides.
 

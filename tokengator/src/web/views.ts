@@ -1,11 +1,11 @@
 // The four meter views. Each is a projection of the same ordered, filtered list, so sorting and filtering
 // behave identically everywhere.
 
-import { TIER_ORDER, type MeterView, type SortOrder, type Tier } from '../core/forecast.js';
+import { TIER_ORDER, type MeterView, type Money, type SortOrder, type Tier } from '../core/forecast.js';
 import { formatAmount, formatMoney, formatPercent } from '../core/format.js';
 import { nextBoundary } from '../core/reset.js';
 import { DAY, HOUR, formatDuration, formatMoment, zonedParts, localZone, weekdayNames, monthNames } from '../core/time.js';
-import { TIER_HINT, TIER_LABEL, leftText } from '../core/wording.js';
+import { CREDIT_VALUE_NOTE, PLAN_VALUE_NOTE, TIER_HINT, TIER_LABEL, leftText, moneyPair } from '../core/wording.js';
 import { SORT_ORDERS } from '../core/forecast.js';
 import type { Ctx } from './ctx.js';
 import { h, icon, isolated, type Child } from './dom.js';
@@ -124,9 +124,9 @@ function queueRow(ctx: Ctx, view: MeterView): HTMLElement {
     ),
     h(
       'div',
-      { class: 'row-value' },
+      { class: 'row-value', title: view.valueBasis === 'credit' ? CREDIT_VALUE_NOTE : view.valueBasis === 'plan' ? PLAN_VALUE_NOTE : null },
       h('div', { class: risk && (view.tier === 'use-now' || view.tier === 'behind') ? 'v risk' : 'v' }, risk || '—'),
-      h('div', { class: 'u' }, risk ? 'at risk' : view.windowValue !== null ? '' : view.account.price ? 'not valued' : 'no price')
+      h('div', { class: 'u' }, risk ? (view.valueBasis === 'credit' ? 'credits at risk' : 'at risk') : view.windowValue !== null ? '' : view.account.price ? 'not valued' : 'no price')
     ),
     h('div', { class: 'row-act' }, copyMenuButton(copyFormats(view, now), `Copy ${view.account.label}`), moreButton(ctx, view))
   );
@@ -185,7 +185,15 @@ export function boardView(ctx: Ctx, queue: MeterView[], all: MeterView[]): HTMLE
     const lead = queue.find((view) => view.account.id === accountId) ?? meters[0];
     if (!lead) return null;
     const account = lead.account;
-    const risk = meters.reduce((sum, view) => sum + (view.valueAtRisk ?? 0), 0);
+    // Plan money and dollar credits are different things and are never added together.
+    const planRisk: Money = {};
+    const creditRisk: Money = {};
+    for (const view of meters) {
+      if (view.valueAtRisk === null || view.currency === null || view.valueAtRisk < 0.005) continue;
+      const target = view.valueBasis === 'credit' ? creditRisk : planRisk;
+      target[view.currency] = (target[view.currency] ?? 0) + view.valueAtRisk;
+    }
+    const risk = moneyPair(planRisk, creditRisk, ctx.app.model.state.settings.currency, 'at risk');
     const price = account.price ? `${formatMoney(account.price.amount, account.price.currency)}/${account.price.period === 'year' ? 'yr' : 'mo'}` : null;
     return h(
       'article',
@@ -223,7 +231,7 @@ export function boardView(ctx: Ctx, queue: MeterView[], all: MeterView[]): HTMLE
       h(
         'div',
         { class: 'card-foot' },
-        h('span', { class: 'sp' }, risk >= 0.005 && lead.currency ? `${formatMoney(risk, lead.currency)} at risk, ` : '', ageText(lead)),
+        h('span', { class: 'sp' }, risk ? `${risk}, ` : '', ageText(lead)),
         h('button', { class: 'icon-btn', type: 'button', title: 'Update usage', 'aria-label': `Update ${account.label}`, onclick: () => ctx.actions.quick(`${lead.meter.id} `) }, icon('edit')),
         copyMenuButton(copyFormats(lead, now), `Copy ${account.label}`),
         moreButton(ctx, lead)

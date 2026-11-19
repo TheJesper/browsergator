@@ -1,7 +1,7 @@
 // One place that puts a meter's state into words. The dashboard, the CLI and the MCP server all call these,
 // which is what keeps a person and an agent reading the same sentence about the same quota.
 
-import type { MeterView, Summary, Tier, ThrottleState } from './forecast.js';
+import type { MeterView, Money, Summary, Tier, ThrottleState } from './forecast.js';
 import { formatAmount, formatMoney, formatMoneyTotals, formatMultiple, formatNumber, formatPercent } from './format.js';
 import { formatAge, formatDuration, formatMoment } from './time.js';
 
@@ -60,10 +60,33 @@ export function resetText(view: MeterView): string {
   return `resets in ${formatDuration(view.msLeft)}`;
 }
 
-function riskMoney(view: MeterView): string {
+/**
+ * The money a meter is expected to lose, as text: "$7.39" for a share of the plan fee, "$66.92 in credits"
+ * for a credit counted in dollars. Empty when there is no price or nothing at risk.
+ */
+export function riskMoney(view: MeterView): string {
   if (view.valueAtRisk === null || view.currency === null || view.valueAtRisk < 0.005) return '';
-  return formatMoney(view.valueAtRisk, view.currency);
+  const amount = formatMoney(view.valueAtRisk, view.currency);
+  return view.valueBasis === 'credit' ? `${amount} in credits` : amount;
 }
+
+/**
+ * Plan money and dollar credits side by side, never summed: "$13.41", "$13.41, plus $66.92 in credits",
+ * "$66.92 in credits". `tail` follows the plan figure, or the credits when there is no plan figure.
+ */
+export function moneyPair(plan: Money, credits: Money, preferredCurrency?: string, tail = ''): string {
+  const planText = formatMoneyTotals(plan, preferredCurrency);
+  const creditText = formatMoneyTotals(credits, preferredCurrency);
+  const suffix = tail ? ` ${tail}` : '';
+  if (planText && creditText) return `${planText}${suffix}, plus ${creditText} in credits`;
+  if (planText) return `${planText}${suffix}`;
+  if (creditText) return `${creditText} in credits${suffix}`;
+  return '';
+}
+
+/** What a plan-share figure is, for tooltips: people read a dollar sign as a charge unless told otherwise. */
+export const PLAN_VALUE_NOTE = 'Your plan fee spread over this window. An estimate for comparing quotas, not a charge or a refund.';
+export const CREDIT_VALUE_NOTE = 'The face value of this credit. It can only be spent where the provider accepts it.';
 
 /** One short line: the state and the two numbers that matter for it. */
 export function headline(view: MeterView, nowMs: number, tz?: string): string {
@@ -230,15 +253,15 @@ export function recommend(view: MeterView, nowMs: number, _tz?: string): string 
 
 /** The sentence at the top of the dashboard and of every brief. */
 export function summaryLine(summary: Summary, preferredCurrency?: string): string {
-  const money = formatMoneyTotals(summary.atRisk, preferredCurrency);
   if (summary.useNow > 0) {
     const noun = summary.useNow === 1 ? 'quota needs' : 'quotas need';
-    const now = formatMoneyTotals(summary.atRiskNow, preferredCurrency);
-    return `${summary.useNow} ${noun} using now${now ? `, ${now} at risk` : ''}.`;
+    const now = moneyPair(summary.atRiskNow, summary.creditsAtRiskNow, preferredCurrency, 'at risk');
+    return `${summary.useNow} ${noun} using now${now ? `, ${now}` : ''}.`;
   }
   if (summary.behind > 0) {
     const noun = summary.behind === 1 ? 'quota is' : 'quotas are';
-    return `Nothing expires in the next hours, but ${summary.behind} ${noun} behind pace${money ? ` (${money} at risk)` : ''}.`;
+    const money = moneyPair(summary.atRisk, summary.creditsAtRisk, preferredCurrency, 'at risk');
+    return `Nothing expires in the next hours, but ${summary.behind} ${noun} behind pace${money ? ` (${money})` : ''}.`;
   }
   if (summary.hot > 0) return 'Nothing is going to waste. Some quotas are running hot.';
   return 'Nothing is going to waste right now.';
