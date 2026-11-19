@@ -22,7 +22,7 @@ import type { CollectorStatus } from '../server/collectors/types.js';
 import { VERSION, ConfigError, loadConfig, tokengatorHome, type ServiceConfig } from '../server/config.js';
 import { envFilePath, liveEnv, loadEnvFile, mergedEnv } from '../server/env.js';
 import { redact } from '../server/logger.js';
-import { ReminderRunner, type Delivery } from '../server/notify.js';
+import { NOTIFY_URL_VARIABLE, ReminderRunner, TEST_MESSAGE, desktopCommand, webhookTarget, type Delivery } from '../server/notify.js';
 import { isWildcardHost } from '../server/security.js';
 import { AmbiguousTargetError, ReadingError, TokengatorService, ValidationError } from '../server/service.js';
 import { NOTE_NOT_INSTALLED, NOTE_NOT_SET_UP, SKILL_CLIENT_IDS, installSkill, type SkillAction } from '../server/skill-install.js';
@@ -603,7 +603,7 @@ function isFile(path: string): boolean {
 }
 
 /** Looks at the state file without going through the store, which would set a damaged file aside. */
-function inspectState(path: string): { note: string; enabledCollectors: string[] } {
+function inspectState(path: string): { note: string; enabledCollectors: string[]; desktopReminders?: boolean } {
   let raw: string;
   try {
     raw = readFileSync(path, 'utf8');
@@ -617,7 +617,11 @@ function inspectState(path: string): { note: string; enabledCollectors: string[]
       return { note: 'exists, but is not a Tokengator state document', enabledCollectors: [] };
     }
     const enabled = Array.isArray(document.settings?.enabledCollectors) ? document.settings.enabledCollectors.filter((id) => typeof id === 'string') : [];
-    return { note: `exists, ${document.accounts.length === 1 ? '1 account' : `${document.accounts.length} accounts`}`, enabledCollectors: enabled };
+    return {
+      note: `exists, ${document.accounts.length === 1 ? '1 account' : `${document.accounts.length} accounts`}`,
+      enabledCollectors: enabled,
+      desktopReminders: document.settings?.desktopReminders === true
+    };
   } catch {
     return { note: 'exists, but is not valid JSON; the service will set it aside and start empty', enabledCollectors: [] };
   }
@@ -679,6 +683,24 @@ export async function doctor(args: readonly string[], io: Io): Promise<number> {
     ).join('\n')
   );
   say(io, `  ${PUSH_SOURCES_NOTE}`);
+
+  // Where a reminder could go. The address is a credential: its host is shown, never the rest of it.
+  const command = desktopCommand(process.platform, TEST_MESSAGE);
+  const target = webhookTarget(env);
+  say(io, '');
+  say(io, 'Reminders');
+  say(
+    io,
+    columns(
+      [
+        ['this computer', inspected.desktopReminders ? 'on' : 'off', command ? `through ${command.command}` : 'this system has no standard notification command'],
+        ['your address', target === null ? 'off' : 'error' in target ? 'not usable' : 'on', target === null ? `set ${NOTIFY_URL_VARIABLE} to post reminders to a phone or a chat` : 'error' in target ? target.error : `posting to ${target.host}`]
+      ],
+      2,
+      2
+    ).join('\n')
+  );
+  say(io, `  Check that one arrives: ${PROGRAM} notify --test`);
   return configProblem === null ? 0 : 1;
 }
 

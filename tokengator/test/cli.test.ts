@@ -809,6 +809,25 @@ describe('export and import', () => {
 });
 
 describe('doctor', () => {
+
+  it('says where reminders can go, and shows the host of the address but never the address', async () => {
+    await seed();
+    await withService((service) => service.updateSettings({ desktopReminders: true }));
+    const io = makeIo({ TOKENGATOR_NOTIFY_URL: 'https://ntfy.example/secret-topic-9f3a7c' });
+    expect(await doctor([], io)).toBe(0);
+    expect(io.out()).toMatch(/Reminders\n\s+this computer\s+on\s+/);
+    expect(io.out()).toMatch(/your address\s+on\s+posting to ntfy\.example/);
+    expect(io.out() + io.err()).not.toContain('secret-topic');
+
+    const unusable = makeIo({ TOKENGATOR_NOTIFY_URL: 'http://ntfy.example/secret-topic-9f3a7c' });
+    expect(await doctor([], unusable)).toBe(0);
+    expect(unusable.out()).toMatch(/your address\s+not usable\s+TOKENGATOR_NOTIFY_URL must start with https/);
+    expect(unusable.out() + unusable.err()).not.toContain('secret-topic');
+
+    const none = makeIo();
+    expect(await doctor([], none)).toBe(0);
+    expect(none.out()).toMatch(/your address\s+off\s+set TOKENGATOR_NOTIFY_URL/);
+  });
   it('reports version, paths and configuration, and never prints the token', async () => {
     await seed();
     writeFileSync(join(home, '.env'), 'ELEVENLABS_API_KEY=el-secret-value-9876543210\n');
