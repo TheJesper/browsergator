@@ -7,9 +7,10 @@ import { CATEGORY_LABEL, planNeedsBillingDay, type PresetPlan, type ProviderCate
 import { CONNECT_GROUP_LABEL, connectSnippets } from '../core/connect.js';
 import { UNITS, formatMoney, formatNumber } from '../core/format.js';
 import { parseQuick } from '../core/quick.js';
+import { calendarFeed } from '../core/reminders.js';
 import { dateKey, formatAge, localZone, toMs } from '../core/time.js';
 import type { Account, Meter, Price, ResetRule, SpendSource, Unit } from '../core/types.js';
-import { BackendError } from './backend.js';
+import { BackendError, type ReminderDelivery } from './backend.js';
 import type { Ctx } from './ctx.js';
 import { h, icon, type Child } from './dom.js';
 import { confirmDialog, copyText, openDialog } from './ui.js';
@@ -795,6 +796,140 @@ export function sourcesDialog(ctx: Ctx): void {
     h('span', { class: 'sp' }),
     h('button', { class: 'btn primary', type: 'button', onclick: dialog.close }, 'Done')
   );
+}
+
+// ---------------------------------------------------------------------------
+// Reminders
+// ---------------------------------------------------------------------------
+
+export interface TabNotifications {
+  /** Whether notifications in this browser tab are on. */
+  on(): boolean;
+  /** Asks for permission if needed and flips the setting. */
+  toggle(): Promise<void>;
+}
+
+const CHANNEL_NAME: Record<ReminderDelivery['channel'], string> = { desktop: 'This computer', webhook: 'Your address' };
+
+export function remindersDialog(ctx: Ctx, tab: TabNotifications): void {
+  const dialog = openDialog({ title: 'Reminders', class: 'wide' });
+  let testResult: string | null = null;
+
+  const row = (title: string, description: string, action: Child, status: Child[]): HTMLElement =>
+    h('div', { class: 'collector' }, h('div', null, h('b', null, title), h('p', null, description)), action, h('div', { class: 'st' }, status));
+  const switchButton = (on: boolean, disabled: boolean, onclick: () => void): HTMLElement =>
+    h('button', { class: on ? 'btn small' : 'btn small primary', type: 'button', disabled, 'aria-pressed': String(on), onclick }, on ? 'Switch off' : 'Switch on');
+  const tag = (text: string, warn = false): HTMLElement => h('span', { class: warn ? 'tag warn' : text === 'on' ? 'tag on' : 'tag' }, text);
+
+  const draw = (): void => {
+    const { reminders, demo, meta, state, backend } = ctx.app.model;
+    const live = !demo && backend.kind === 'http';
+    const desktopOn = live && reminders.desktop.enabled;
+
+    const sendTest = async (): Promise<void> => {
+      try {
+        const deliveries = await backend.testReminders();
+        testResult =
+          deliveries.length === 0
+            ? 'Nothing is switched on to test.'
+            : deliveries.map((delivery) => `${CHANNEL_NAME[delivery.channel]}: ${delivery.ok ? 'test sent' : (delivery.error ?? 'it did not work')}`).join(' ');
+      } catch (error) {
+        testResult = (error as Error).message;
+      }
+      draw();
+    };
+    const toggleDesktop = async (): Promise<void> => {
+      const turnOn = !desktopOn;
+      const ok = await ctx.actions.run(backend.updateSettings({ desktopReminders: turnOn }), turnOn ? 'Reminders on this computer are on' : 'Reminders on this computer are off');
+      // Switching on is the moment to find out whether a notification can be shown at all.
+      if (ok && turnOn) await sendTest();
+      else draw();
+    };
+
+    const feedUrl = `${meta.origin || 'http://127.0.0.1:4777'}/api/calendar.ics`;
+    const calendarAction = live
+      ? h(
+          'div',
+          { style: { display: 'flex', gap: '6px' } },
+          h('button', { class: 'btn small', type: 'button', onclick: () => void copyText(feedUrl, 'Calendar address copied') }, icon('copy'), 'Copy address'),
+          h('a', { class: 'btn small', href: '/api/calendar.ics', target: '_blank', rel: 'noopener noreferrer' }, icon('external'), 'Open')
+        )
+      : h('button', { class: 'btn small', type: 'button', onclick: () => void copyText(calendarFeed(state, Date.now()), 'Calendar copied as iCalendar text') }, icon('copy'), 'Copy as .ics');
+
+    dialog.body.replaceChildren(
+      h(
+        'p',
+        { class: 'hint', style: { marginBottom: '14px' } },
+        'Quota expires when nobody is looking. Each quota is raised once per window, at the moment it becomes “use now”, and snoozed subscriptions stay quiet.'
+      ),
+      h(
+        'div',
+        null,
+        row(
+          'In this browser tab',
+          'A browser notification while a Tokengator tab is open.',
+          switchButton(tab.on(), false, () => void tab.toggle().then(draw)),
+          [tag(tab.on() ? 'on' : 'off')]
+        ),
+        row(
+          'On this computer',
+          'A notification from the local service, also when the browser is closed.',
+          h(
+            'div',
+            { style: { display: 'flex', gap: '6px' } },
+            live && (desktopOn || reminders.webhook.configured) ? h('button', { class: 'btn small', type: 'button', onclick: () => void sendTest() }, 'Send a test') : null,
+            switchButton(desktopOn, !live || (!desktopOn && !reminders.desktop.supported), () => void toggleDesktop())
+          ),
+          !live
+            ? [h('span', null, 'Needs the local service. Not available while this page shows sample data.')]
+            : [
+                tag(desktopOn ? 'on' : 'off'),
+                !reminders.desktop.supported ? h('span', null, 'This system has no standard notification command.') : null,
+                testResult ? h('span', { role: 'status' }, testResult) : null
+              ]
+        ),
+        row(
+          'On your phone or in a chat',
+          'The same line, posted to an address of your own: an ntfy topic, a Slack or a Discord webhook.',
+          null,
+          !live
+            ? [h('span', null, 'Needs the local service.')]
+            : reminders.webhook.configured
+              ? [tag('on'), h('span', null, `Posting to ${reminders.webhook.host ?? 'your address'}. The address itself is never shown.`)]
+              : [
+                  tag(reminders.webhook.error ? 'not usable' : 'off', reminders.webhook.error !== null),
+                  h('span', null, reminders.webhook.error ?? 'Add a line such as TOKENGATOR_NOTIFY_URL=https://ntfy.sh/a-name-only-you-know to ~/.tokengator/.env.')
+                ]
+        ),
+        row(
+          'In your calendar',
+          'Every coming reset as an entry that covers the last stretch before it, with an alert when that stretch begins.',
+          calendarAction,
+          live
+            ? [
+                h(
+                  'span',
+                  null,
+                  meta.tokenRequired
+                    ? 'Calendar apps cannot send the access token, so open the file here and import it.'
+                    : 'Subscribe to the address in a calendar app on this computer, or open the file and import it anywhere.'
+                )
+              ]
+            : [h('span', null, 'Built from the sample data on this page.')]
+        )
+      ),
+      h(
+        'p',
+        { class: 'hint', style: { marginTop: '14px' } },
+        'Agents see the same thing where the quota gets spent: the status line names the most urgent quota. ',
+        h('button', { class: 'link', type: 'button', onclick: () => { dialog.close(); ctx.actions.connect(); } }, 'Connect agents…')
+      )
+    );
+  };
+  draw();
+  const unsubscribe = ctx.app.onChange(draw);
+  dialog.el.addEventListener('close', unsubscribe);
+  dialog.foot.append(h('span', { class: 'sp' }), h('button', { class: 'btn primary', type: 'button', onclick: dialog.close }, 'Done'));
 }
 
 // ---------------------------------------------------------------------------

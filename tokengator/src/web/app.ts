@@ -6,7 +6,7 @@ import { categoryFor, type ProviderCategory } from '../core/catalog-types.js';
 import { compareViews, summarise, viewState, type MeterView, type SortOrder, type Summary } from '../core/forecast.js';
 import { rollState } from '../core/reset.js';
 import { emptyState, type State } from '../core/types.js';
-import type { Backend, CollectorInfo, Loaded } from './backend.js';
+import { REMINDERS_OFF, type Backend, type CollectorInfo, type Loaded, type ReminderInfo } from './backend.js';
 
 export type ViewId = 'queue' | 'board' | 'timeline' | 'table' | 'costs' | 'history';
 
@@ -85,6 +85,7 @@ export interface AppModel {
   error: string | null;
   state: State;
   collectors: CollectorInfo[];
+  reminders: ReminderInfo;
   warnings: string[];
   demo: boolean;
   meta: Pick<Loaded, 'cli' | 'origin' | 'tokenRequired' | 'version'>;
@@ -112,6 +113,7 @@ export class App {
       error: null,
       state: emptyState(),
       collectors: [],
+      reminders: REMINDERS_OFF,
       warnings: [],
       demo: backend.kind === 'memory',
       meta: { cli: 'tokengator', origin: '', tokenRequired: false, version: '' },
@@ -170,6 +172,7 @@ export class App {
       const loaded = await this.model.backend.load();
       this.model.state = loaded.state;
       this.model.collectors = loaded.collectors;
+      this.model.reminders = loaded.reminders;
       this.model.warnings = loaded.warnings;
       this.model.demo = loaded.demo || this.model.backend.kind === 'memory';
       this.model.meta = { cli: loaded.cli, origin: loaded.origin, tokenRequired: loaded.tokenRequired, version: loaded.version };

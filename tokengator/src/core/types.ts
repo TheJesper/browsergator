@@ -160,6 +160,8 @@ export interface Settings {
   currency: string;
   /** Collectors the user switched on, by id. */
   enabledCollectors: string[];
+  /** The service raises a notification on this computer when a quota becomes "use now". Off unless set. */
+  desktopReminders?: boolean;
 }
 
 export interface State {

@@ -28,6 +28,7 @@ Tokengator turns the problem around: every quota is a deadline, and the product'
 - Put a copy affordance on every item (status line, Markdown, JSON, agent prompt), a "copy brief" for the whole picture, and copyable connection snippets for MCP clients.
 - Make updating a number take seconds: a quick-entry line that understands `claude weekly 62%` or `suno 1200 left resets in 9d`, available in the dashboard, the CLI and over MCP.
 - Collect readings automatically where a trustworthy source exists (Claude Code status line data, Codex session logs, ElevenLabs and OpenRouter APIs, OpenAI and Anthropic cost APIs, GitHub Copilot), and let any agent with a browser act as the universal adapter for the rest through the MCP `report_usage` tool.
+- Reach the person when the dashboard is closed, since that is when quota expires: one reminder per quota per window, as a notification on the computer, a message to an address of their own (an ntfy topic, a Slack or Discord webhook), and a calendar of upcoming resets.
 - Optionally track pay-as-you-go API spend per provider against a monthly budget.
 - Ship a skill that teaches agents to check Tokengator before starting heavy work, to prefer the subscription with the most quota at risk, and to refresh stale numbers from the providers' usage pages.
 
@@ -44,6 +45,7 @@ Tokengator turns the problem around: every quota is a deadline, and the product'
 - `api-cost-tracking`: optional pay-as-you-go spend sources, daily entries and monthly budgets.
 - `local-service`: the local HTTP API, persistence, network exposure and request validation, and the command-line interface.
 - `agent-skill`: the skill that tells agents when and how to use Tokengator.
+- `reminders`: which quotas earn a reminder and when, the desktop and webhook channels, the record of what was raised, and the calendar of resets.
 
 ### Modified Capabilities
 
@@ -54,5 +56,6 @@ None. This is the first OpenSpec change in the package; the Browsergator gateway
 - **New code**: `tokengator/` (TypeScript, Node 22+). Runtime dependencies are `@modelcontextprotocol/sdk` and `zod` only; the browser bundle has none.
 - **Repository**: the root ESLint config ignores `tokengator/` (the package lints itself), CI gains a job that lints, type-checks, tests, builds and audits the package, and the root README links to it.
 - **Local machine**: a state file under `~/.tokengator/` (override with `TOKENGATOR_HOME`), and a loopback HTTP listener on port 4777 while the dashboard is running.
+- **Outbound**: nothing leaves the machine unless the user switches on a collector or sets a reminder address; desktop reminders run the operating system's notification command.
 - **Security**: loopback by default, Host and Origin validation, an optional bearer token that becomes mandatory off loopback. Provider credentials are read from the environment at call time and are never stored, logged or returned by any interface.
 - **Browsergator**: no coupling. The skill mentions that an agent with a browser can read a provider's usage page and report the numbers; it does not require Browsergator and does not touch its gateway, CDP target or profile.

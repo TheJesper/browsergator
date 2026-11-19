@@ -8,6 +8,7 @@
 // `npm test`: the unit and integration suites cover the same behaviour without a browser.
 
 const { spawn } = require('node:child_process');
+const { createServer, request } = require('node:http');
 const { mkdtempSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
@@ -38,8 +39,42 @@ async function main() {
   const home = mkdtempSync(join(tmpdir(), 'tokengator-e2e-'));
   const port = 4900 + Math.floor(Math.random() * 400);
   const origin = `http://127.0.0.1:${port}`;
+  // A stand-in for the user's own reminder address (an ntfy server on this computer).
+  const posts = [];
+  const receiver = createServer((req, res) => {
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', () => {
+      posts.push({ title: req.headers.title, body });
+      res.writeHead(200).end('ok');
+    });
+  });
+  await new Promise((done) => receiver.listen(0, '127.0.0.1', done));
+  const notifyUrl = `http://127.0.0.1:${receiver.address().port}/e2e-secret-topic`;
+  const env = { ...process.env, TOKENGATOR_HOME: home, TOKENGATOR_LOG: 'warn', TOKENGATOR_NOTIFY_URL: notifyUrl };
+  // Asynchronous on purpose: the receiver above lives in this process and has to answer while a command runs.
+  const cli = (...args) =>
+    new Promise((done) => {
+      const child = spawn(process.execPath, [join(root, 'dist/cli/main.js'), ...args], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => (stdout += chunk));
+      child.stderr.on('data', (chunk) => (stderr += chunk));
+      child.on('close', (status) => done({ status, stdout, stderr }));
+    });
+  // fetch does not let a caller choose the Host header, which is the whole point of this check.
+  const statusWithHost = (path, host) =>
+    new Promise((done) => {
+      const req = request({ host: '127.0.0.1', port, path, headers: { Host: host }, agent: false }, (res) => {
+        res.resume();
+        done(res.statusCode);
+      });
+      req.on('error', () => done(0));
+      req.end();
+    });
   const server = spawn(process.execPath, [join(root, 'dist/cli/main.js'), 'serve', '--port', String(port), '--no-collectors'], {
-    env: { ...process.env, TOKENGATOR_HOME: home, TOKENGATOR_LOG: 'warn' },
+    env,
     stdio: ['ignore', 'ignore', 'pipe']
   });
   let stderr = '';
@@ -61,10 +96,28 @@ async function main() {
     check('add a billing-cycle account with its billing day', suno.status === 201 && suno.body.account.meters[0].reset.kind === 'monthly');
     const quick = await api('POST', '/api/quick', { text: 'claude weekly 62% resets in 14h' });
     check('quick update over HTTP', quick.status === 200 && quick.body.saved === true, quick.body && quick.body.preview);
-    const rebinding = await fetch(`${origin}/api/state`, { headers: { Host: 'evil.example' } }).then((r) => r.status).catch(() => 0);
+    const rebinding = await statusWithHost('/api/state', 'evil.example');
     check('a foreign Host header is refused', rebinding === 403, `status ${rebinding}`);
     const crossSite = await fetch(`${origin}/api/quick`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' }, body: '{"text":"claude 1%"}' }).then((r) => r.status);
     check('a cross-site write is refused', crossSite === 403, `status ${crossSite}`);
+
+    // -- reminders and the command line, on the same state file ---------------------
+    const calendar = await fetch(`${origin}/api/calendar.ics`);
+    const ics = (await calendar.text()).replace(/\r\n /g, '');
+    check('the calendar lists the coming reset', calendar.headers.get('content-type').startsWith('text/calendar') && ics.includes('SUMMARY:Use up Claude Max: weekly limit resets'));
+    const status = (await api('GET', '/api/reminders')).body.reminders;
+    check('the reminder status names the host of the address and not the address', status.webhook.configured && status.webhook.host === '127.0.0.1' && !JSON.stringify(status).includes('e2e-secret-topic'));
+    const dry = await cli('notify', '--dry-run');
+    check('notify --dry-run prints what is due', dry.status === 0 && dry.stdout.startsWith('Use Claude Max now'), dry.stdout.split('\n')[1]);
+    const sent = await cli('notify', '--no-desktop');
+    check('notify delivers the reminder to the address', sent.status === 0 && posts.length === 1 && posts[0].title === 'Use Claude Max now' && posts[0].body.includes('38% left of the weekly limit'));
+    const again = await cli('notify', '--no-desktop');
+    check('a second run has nothing to raise', again.status === 0 && again.stdout.trim() === 'Nothing is due.' && posts.length === 1);
+    check('nothing the command printed repeats the address', !(dry.stdout + dry.stderr + sent.stdout + sent.stderr).includes('e2e-secret-topic'));
+    const gate = await cli('status', '--check');
+    check('status --check exits 2 while something needs using', gate.status === 2 && gate.stdout.includes('Claude Max'));
+    const feed = await cli('calendar', '--days', '3');
+    check('calendar prints an iCalendar document', feed.status === 0 && feed.stdout.startsWith('BEGIN:VCALENDAR\r\n') && feed.stdout.includes('BEGIN:VEVENT'));
 
     // -- dashboard ----------------------------------------------------------------
     browser = await chromium.launch();
@@ -119,6 +172,20 @@ async function main() {
     const brief = await fetch(`${origin}/api/brief`).then((r) => r.text());
     check('the copied brief matches the service brief in substance', Boolean(clipboard) && brief.includes('Claude Max') && clipboard.includes('Claude Max'));
 
+    // -- the reminders panel against the real service -------------------------------
+    await page.locator('[aria-label="Menu"]').click();
+    await page.locator('.menu .menu-item', { hasText: 'Reminders' }).click();
+    await page.waitForSelector('dialog[open]');
+    const panel = await page.locator('dialog[open]').innerText();
+    check('the reminders panel shows the address by host only', panel.includes('Posting to 127.0.0.1') && !panel.includes('e2e-secret-topic'));
+    const before = posts.length;
+    await page.locator('dialog[open] button', { hasText: 'Send a test' }).click();
+    const tested = await waitFor(() => posts.length > before && posts[posts.length - 1].title === 'Tokengator reminders work', 5000);
+    check('"Send a test" reaches the address', Boolean(tested));
+    const outcome = await waitFor(async () => (await page.locator('dialog[open] [role="status"]').innerText()).includes('Your address: test sent'), 5000);
+    check('the panel reports the outcome of the test per route', Boolean(outcome), await page.locator('dialog[open] [role="status"]').innerText().catch(() => ''));
+    await page.keyboard.press('Escape');
+
     // -- narrow screen ----------------------------------------------------------------
     await page.setViewportSize({ width: 400, height: 820 });
     await page.waitForTimeout(200);
@@ -128,6 +195,7 @@ async function main() {
   } finally {
     if (browser) await browser.close();
     server.kill('SIGTERM');
+    receiver.close();
     await new Promise((r) => setTimeout(r, 300));
     rmSync(home, { recursive: true, force: true });
   }

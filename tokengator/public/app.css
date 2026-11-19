@@ -297,6 +297,9 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 .state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; white-space: nowrap; }
 .tag { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: var(--r-1); font-size: 11px; color: var(--ink-3); white-space: nowrap; }
 .tag.warn { color: var(--hot-ink); border-color: currentColor; }
+.tag.on { color: var(--ok-ink); border-color: currentColor; }
+button.link { padding: 0; border: 0; background: none; color: var(--used-ink); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+button.link:hover { color: var(--ink); }
 .tag.stop { color: var(--stop-ink); border-color: currentColor; }
 
 /* ---- monogram ------------------------------------------------------------- */

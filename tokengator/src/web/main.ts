@@ -5,12 +5,13 @@ import { briefMarkdown } from '../core/brief.js';
 import { CATEGORY_LABEL, type ProviderCategory } from '../core/catalog-types.js';
 import { SORT_ORDERS, type MeterView, type SortOrder } from '../core/forecast.js';
 import { formatMoney, formatMoneyTotals, formatPercent } from '../core/format.js';
+import { dueReminders, rememberReminders } from '../core/reminders.js';
 import { formatAge, formatDuration } from '../core/time.js';
 import { leftText, summaryLine } from '../core/wording.js';
 import { App, VIEWS, type ViewId } from './app.js';
 import { HttpBackend, MemoryBackend, type Backend } from './backend.js';
 import type { Actions, Ctx } from './ctx.js';
-import { addDialog, connectDialog, editDialog, logSpendDialog, quickDialog, shortcutsDialog, sourcesDialog, spendDialog } from './dialogs.js';
+import { addDialog, connectDialog, editDialog, logSpendDialog, quickDialog, remindersDialog, shortcutsDialog, sourcesDialog, spendDialog } from './dialogs.js';
 import { brandMark, h, icon, mount } from './dom.js';
 import { inspector } from './inspector.js';
 import { costsView, historyView } from './ledger-views.js';
@@ -105,6 +106,7 @@ function start(app: App, fellBack: boolean): void {
     },
     connect: () => connectDialog(ctx),
     sources: () => sourcesDialog(ctx),
+    reminders: () => remindersDialog(ctx, { on: () => app.model.prefs.notify, toggle: toggleNotifications }),
     shortcuts: () => shortcutsDialog(),
     addSpend: () => spendDialog(ctx, null),
     editSpend: (id) => {
@@ -165,6 +167,7 @@ function start(app: App, fellBack: boolean): void {
     return [
       { label: 'Connect agents…', icon: 'plug', onSelect: actions.connect },
       { label: 'Automatic sources…', icon: 'bolt', onSelect: actions.sources },
+      { label: 'Reminders…', icon: 'bell', onSelect: actions.reminders },
       { kind: 'sep' },
       { kind: 'title', label: 'Theme' },
       { label: 'Match system', icon: 'sun', checked: prefs.theme === 'system', onSelect: () => app.setPrefs({ theme: 'system' }) },
@@ -173,7 +176,6 @@ function start(app: App, fellBack: boolean): void {
       { kind: 'sep' },
       { label: 'Compact rows', icon: 'rows', checked: prefs.density === 'compact', onSelect: () => app.setPrefs({ density: prefs.density === 'compact' ? 'comfortable' : 'compact' }) },
       { label: 'Hide names (screen sharing)', icon: 'eye', checked: prefs.privacy, onSelect: () => app.setPrefs({ privacy: !prefs.privacy }) },
-      { label: 'Notify when something needs using', icon: 'bell', checked: prefs.notify, onSelect: () => void toggleNotifications() },
       { kind: 'sep' },
       { label: 'Copy everything as JSON', icon: 'copy', onSelect: () => void copyText(JSON.stringify(app.model.state, null, 2), 'State copied as JSON') },
       { label: 'Import from JSON…', icon: 'upload', onSelect: importState },
@@ -500,28 +502,20 @@ function start(app: App, fellBack: boolean): void {
 
   // -- notifications -----------------------------------------------------------
   function notify(): void {
-    const { prefs, now } = app.model;
+    const { prefs, now, state, reminders } = app.model;
     if (!prefs.notify || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
-    const fresh: string[] = [];
-    for (const view of app.allViews()) {
-      if (view.tier !== 'use-now' || view.snoozed || view.resetsAtMs === null) continue;
-      // One notification per meter per window: the window's end identifies it.
-      const key = `${view.id}@${view.resetsAtMs}`;
-      if (prefs.notified.includes(key)) continue;
-      fresh.push(key);
+    // The service raises the same reminders on this computer when that is switched on. One is enough.
+    if (reminders.desktop.enabled) return;
+    const due = dueReminders(state, now, prefs.notified);
+    if (due.length === 0) return;
+    for (const reminder of due) {
       try {
-        new Notification(`Use ${view.account.label} now`, {
-          body: `${leftText(view)} of ${view.meter.label.toLowerCase()}, resets in ${formatDuration(view.resetsAtMs - now)}.`,
-          tag: key
-        });
+        new Notification(reminder.title, { body: reminder.body, tag: reminder.key });
       } catch {
         // some platforms only allow notifications from a service worker; the title badge still shows
       }
     }
-    if (fresh.length > 0) {
-      app.model.prefs.notified = [...prefs.notified, ...fresh].slice(-200);
-      app.setPrefs({ notified: app.model.prefs.notified });
-    }
+    app.setPrefs({ notified: rememberReminders(prefs.notified, due.map((reminder) => reminder.key), now) });
   }
 
   // -- ticker ------------------------------------------------------------------

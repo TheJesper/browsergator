@@ -436,6 +436,10 @@ export function updateSettings(state: State, patch: Partial<Settings>): State {
     }
     settings.enabledCollectors = [...new Set(patch.enabledCollectors.map((id) => id.trim()).filter(Boolean))].slice(0, 50);
   }
+  if (patch.desktopReminders !== undefined) {
+    if (typeof patch.desktopReminders !== 'boolean') throw new ValidationError('desktopReminders', 'desktopReminders must be true or false.');
+    settings.desktopReminders = patch.desktopReminders;
+  }
   return { ...state, settings };
 }
 
@@ -618,7 +622,8 @@ export function parseState(document: unknown, nowMs: number): State {
       currency: typeof raw['currency'] === 'string' ? raw['currency'] : 'USD',
       enabledCollectors: Array.isArray(raw['enabledCollectors'])
         ? raw['enabledCollectors'].filter((id): id is string => typeof id === 'string')
-        : []
+        : [],
+      ...(typeof raw['desktopReminders'] === 'boolean' ? { desktopReminders: raw['desktopReminders'] } : {})
     });
   }
   return rollState(state, nowMs);

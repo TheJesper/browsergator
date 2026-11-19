@@ -78,12 +78,23 @@
 - [ ] 11.1 Write the skill, including the rule that agents never spend quota on their own initiative; verify the installer test finds that rule in the installed text
 - [ ] 11.2 Add the skill and MCP setup to the README and verify the snippets match what `tokengator connect` prints
 
-## 12. Integration
+## 12. Reminders (reminders)
 
-- [ ] 12.1 Add a CI job that lints, type-checks, tests, builds and audits `tokengator/` on the existing OS and Node matrix
-- [ ] 12.2 Run an end-to-end pass: start the service on a temporary home, add accounts over HTTP, report over MCP, confirm the dashboard updates live
-- [ ] 12.3 Run an independent review of correctness, security and the interface, and resolve what it finds
-- [ ] 12.4 Run `npm run lint`, `npm run typecheck`, `npm test` and `npm run build` in both the root and `tokengator/`, and `openspec validate --all --strict`
+- [ ] 12.1 Implement the reminder rule in the core (due, wording, digest, remembered keys with tolerance); verify every scenario under "One reminder per quota per window" and "Reminder wording" with unit tests
+- [ ] 12.2 Implement the calendar feed in the core; verify the weekly, monthly, exclusion, first-use and escaping scenarios, and the 75-octet line limit
+- [ ] 12.3 Implement the desktop channel per platform and the webhook channel; verify that hostile text stays data, that the address is validated and never echoed, and the Slack and Discord shapes
+- [ ] 12.4 Implement the runner (setting, record file, any-channel rule, backoff, sample-data guard); verify with fake channels and a temporary home, including a restart and a damaged record
+- [ ] 12.5 Add the status, test and calendar routes to the HTTP API and the `desktopReminders` setting; verify with integration tests, including the token and sample-data cases
+- [ ] 12.6 Add `tokengator notify` (with `--dry-run` and `--test`) and `tokengator calendar`; verify with CLI tests against a temporary home
+- [ ] 12.7 Build the Reminders panel in the dashboard and route browser notifications through the shared rule; verify in the browser check
+- [ ] 12.8 Document reminders in `tokengator/docs/REMINDERS.md` (channels, rules, starting at login, privacy) and link it from the README
+
+## 13. Integration
+
+- [ ] 13.1 Add a CI job that lints, type-checks, tests, builds and audits `tokengator/` on the existing OS and Node matrix
+- [ ] 13.2 Run an end-to-end pass: start the service on a temporary home, add accounts over HTTP, report over MCP, confirm the dashboard updates live
+- [ ] 13.3 Run an independent review of correctness, security and the interface, and resolve what it finds
+- [ ] 13.4 Run `npm run lint`, `npm run typecheck`, `npm test` and `npm run build` in both the root and `tokengator/`, and `openspec validate --all --strict`
 
 ## Workflow follow-up
 

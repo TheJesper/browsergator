@@ -12,6 +12,7 @@ import { emptyState, type Account, type Meter, type SpendSource, type State } fr
 import type { CollectorHost, CollectorStatus } from '../src/server/collectors/types.js';
 import { ConfigError, MAX_BODY_BYTES, VERSION, loadConfig, type ServiceConfig } from '../src/server/config.js';
 import { TokengatorHttpServer, type HttpServerOptions, type McpHttpHandler } from '../src/server/http.js';
+import { NOTIFY_URL_VARIABLE, ReminderRunner, type DesktopCommand } from '../src/server/notify.js';
 import { TokengatorService } from '../src/server/service.js';
 import { FileStateStore, LockTimeoutError, MemoryStateStore, type StateStore } from '../src/server/store.js';
 
@@ -85,6 +86,8 @@ interface StartOptions {
   cliCommand?: string;
   publicDir?: string;
   demo?: boolean;
+  /** Builds the reminder runner for the service the harness creates. */
+  reminders?: (service: TokengatorService) => ReminderRunner;
 }
 
 const running: TokengatorHttpServer[] = [];
@@ -103,6 +106,7 @@ async function start(options: StartOptions = {}): Promise<Harness> {
   if (options.collectors) serverOptions.collectors = options.collectors;
   if (options.mcpHandler) serverOptions.mcpHandler = options.mcpHandler;
   if (options.cliCommand) serverOptions.cliCommand = options.cliCommand;
+  if (options.reminders) serverOptions.reminders = options.reminders(service);
   const server = new TokengatorHttpServer(serverOptions);
   running.push(server);
   const address = await server.listen();
@@ -1301,5 +1305,91 @@ describe('/mcp mount', () => {
     stderr.mockRestore();
     expect(response.status).toBe(500);
     expect((await errorOf(response)).message).not.toContain('exploded');
+  });
+});
+
+describe('reminders and the calendar', () => {
+  const weeklyAccount = (): State =>
+    addAccount(
+      emptyState(),
+      { label: 'Claude Max', usageUrl: 'https://claude.ai/settings/usage', meters: [{ label: 'Weekly limit', reset: { kind: 'interval', hours: 168 }, used: 62, resetsAt: iso(NOW + 14 * HOUR) }] },
+      NOW
+    ).state;
+
+  function reminders(env: NodeJS.ProcessEnv = {}): { commands: DesktopCommand[]; build: (service: TokengatorService) => ReminderRunner } {
+    const commands: DesktopCommand[] = [];
+    return {
+      commands,
+      build: (service) =>
+        new ReminderRunner(service, {
+          home: null,
+          env,
+          platform: 'linux',
+          run: (command) => {
+            commands.push(command);
+            return Promise.resolve();
+          },
+          fetchImpl: (() => Promise.resolve(new Response('ok'))) as typeof fetch
+        })
+    };
+  }
+
+  it('serves the coming resets as a calendar that links back to the address it was asked on', async () => {
+    const harness = await start({ state: weeklyAccount() });
+    const response = await send(harness, 'GET', '/api/calendar.ics');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/calendar; charset=utf-8');
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    const text = (await response.text()).replace(/\r\n /g, '');
+    expect(text.startsWith('BEGIN:VCALENDAR\r\n')).toBe(true);
+    expect(text).toContain('SUMMARY:Use up Claude Max: weekly limit resets');
+    expect(text).toContain('DTEND:20261120T020000Z');
+    expect(text).toContain(`What is left right now: http://127.0.0.1:${harness.port}/`);
+  });
+
+  it('keeps the calendar behind the token', async () => {
+    const harness = await start({ state: weeklyAccount(), token: TOKEN });
+    expect((await send(harness, 'GET', '/api/calendar.ics')).status).toBe(401);
+    expect((await send(harness, 'GET', `/api/calendar.ics?token=${TOKEN}`)).status).toBe(401);
+    expect((await send(harness, 'GET', '/api/calendar.ics', undefined, { Authorization: `Bearer ${TOKEN}` })).status).toBe(200);
+  });
+
+  it('reports reminders as off when the service runs without them', async () => {
+    const harness = await start();
+    const off = { desktop: { enabled: false, supported: false }, webhook: { configured: false, host: null, error: null } };
+    expect(await (await send(harness, 'GET', '/api/reminders')).json()).toEqual({ reminders: off });
+    expect(((await (await send(harness, 'GET', '/api/state')).json()) as { reminders: unknown }).reminders).toEqual(off);
+    const test = await send(harness, 'POST', '/api/reminders/test', {});
+    expect(test.status).toBe(400);
+  });
+
+  it('switches desktop reminders on through the settings and shows the webhook host, never its address', async () => {
+    const { build } = reminders({ [NOTIFY_URL_VARIABLE]: 'https://ntfy.example/secret-topic-9f3a7c' });
+    const harness = await start({ reminders: build });
+    const refused = await send(harness, 'PATCH', '/api/settings', { desktopReminders: 'yes' });
+    expect(await errorOf(refused)).toMatchObject({ code: 'validation', field: 'desktopReminders' });
+    const patched = await send(harness, 'PATCH', '/api/settings', { desktopReminders: true });
+    expect(((await patched.json()) as { settings: { desktopReminders: boolean } }).settings.desktopReminders).toBe(true);
+
+    const body = await (await send(harness, 'GET', '/api/state')).text();
+    expect(body).not.toContain('secret-topic');
+    expect((JSON.parse(body) as { reminders: unknown }).reminders).toEqual({
+      desktop: { enabled: true, supported: true },
+      webhook: { configured: true, host: 'ntfy.example', error: null }
+    });
+  });
+
+  it('sends a test reminder on request, and never from sample data', async () => {
+    const live = reminders();
+    const harness = await start({ reminders: live.build });
+    const response = await send(harness, 'POST', '/api/reminders/test', {});
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ deliveries: [{ channel: 'desktop', ok: true }] });
+    expect(live.commands).toHaveLength(1);
+
+    const sample = reminders();
+    const demo = await start({ reminders: sample.build, demo: true });
+    expect((await send(demo, 'POST', '/api/reminders/test', {})).status).toBe(400);
+    expect(sample.commands).toEqual([]);
   });
 });

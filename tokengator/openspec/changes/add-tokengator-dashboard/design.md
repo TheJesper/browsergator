@@ -200,6 +200,31 @@ All bodies are JSON. Errors are `{ "error": { "code", "message", "field"?, "cand
 
 The token is never accepted in a query string, where it would end up in history and logs. The dashboard reads it from the address fragment (`/#token=…`), which browsers do not send to servers, exchanges it at `/api/session` for the cookie and removes the fragment.
 
+### D16. Reminders reach the person outside the tab
+
+Quota expires when nobody is looking at the dashboard, so a browser notification from an open tab is the weakest possible reminder. The research pass ranked the routes a loopback-only service has (see `research.md`), and four are built:
+
+- **A notification on this computer**, raised by the service through the operating system's own command: `notify-send` on Linux and the BSDs, `osascript` on macOS, Windows PowerShell 5.1 and WinRT on Windows. No native module and no extra dependency. The text travels as arguments (Linux, macOS) or environment variables (Windows) to a fixed command; nothing a user typed is ever part of a command line or a script. On Windows the toast borrows PowerShell's application identity, which Windows already knows, so it is shown and kept in the notification centre at the price of being attributed to PowerShell; registering an identity of our own needs a Start-menu shortcut, which is an installer's job.
+- **A message to an address of the user's own** (`TOKENGATOR_NOTIFY_URL`): plain text with a `Title` header, which is ntfy's format and reaches a phone, or the JSON Slack and Discord webhooks take. The address is a credential and is handled like one (environment only, HTTPS, host-only errors, no redirects). Remote messages carry no link: a loopback address means nothing on a phone, and the useful action is at the provider anyway.
+- **A calendar of resets** as iCalendar, from the API and the CLI. It is the only route that still fires when the computer is off. Entries say what resets and not how much is left, because a calendar copy is always older than the dashboard. Subscribing to a loopback address works only in calendar programs on the same computer, so the panel offers both the address and the file.
+- **The agent's status line**, which already exists (D11): it names the most urgent quota in the place where quota gets spent.
+
+The rule is the same on every route and lives in the core: one reminder per meter per window, at the moment the meter becomes `use-now`. That moment is 15% of the window before its reset (D5), which is about a day for a weekly limit and three days for a monthly one, the lead times the research found workable. Decisions that follow from "a chatty reminder gets switched off":
+
+- No reminders for windows shorter than two days. A session or daily limit would ring several times a day; the dashboard and the status line cover those.
+- No second or third stage, no escalation, no "urgent" flags. Several quotas due at once are folded into one message.
+- A window is identified by its reset time with thirty minutes of tolerance, because sources that derive it from "seconds remaining" report it slightly differently each time.
+- A reminder counts as raised once any channel took it. When none did it stays due and the service backs off for fifteen minutes.
+- Evaluation is from state on a one-minute tick, never from timers, so a laptop that slept catches up on the next tick and a window that ended in the meantime raises nothing.
+- The first check waits 45 seconds after a start, so collectors can bring fresh numbers first.
+- A stale reading still earns a reminder, worded as a prompt to check the real number: an unattended manual meter is exactly the one that expires unnoticed.
+- No quiet hours. The operating system and the phone already have Do Not Disturb, and a second schedule would only make it unclear why a reminder did not arrive.
+- Sample data never reaches a real notification centre or somebody's phone.
+
+Desktop reminders are a setting (`desktopReminders`, off by default) because they are a property of the installation that the dashboard should be able to switch; the webhook is switched on by the presence of its address. `tokengator notify` runs one check and exits, for people who would rather let cron or Task Scheduler do it than keep the service running. What was raised is kept in `reminders.json` next to the state file: keys only, pruned as windows end.
+
+Not built: Web Push (it would add an internet round trip to reach the same screen, and a phone cannot subscribe to a loopback origin), an installer for starting at login (the documentation gives the three per-system recipes instead), and per-account work hours.
+
 ## Provider sources
 
 What each shipped collector reads, and how sure the research pass was of it. `research.md` in this change has the sources and the verification verdicts.
@@ -225,6 +250,8 @@ Everything else in the catalog has no source that could be verified and that a t
 - [Two processes writing one file] → Lock directory plus read-modify-write inside the lock; covered by a concurrency test.
 - [Local web servers are a classic rebinding target] → Host and Origin checks on every route, JSON-only writes, optional token; the MCP endpoint sits behind the same checks.
 - [Catalog prices and limits drift] → Presets are a starting point and every field is editable; the catalog records the date it was checked.
+- [Reminders become noise and get switched off] → One per quota per window, none for windows under two days, several folded into one.
+- [A notification command could be made to run something] → Text is passed as arguments or environment variables to a fixed command, never through a shell; covered by a test with hostile names.
 - [The skill could push agents to burn quota for its own sake] → The skill forbids it in so many words and the spec has a requirement for it.
 
 ## Migration Plan
@@ -234,4 +261,4 @@ New package; nothing to migrate. Rollback is deleting `tokengator/`, the CI job 
 ## Open Questions
 
 - Whether to offer a system-tray companion. It would not change any spec here and can be added on top of the HTTP API.
-- Whether calendar export (`.ics` of upcoming resets) is worth a requirement. Deferred until someone asks; the Timeline view covers the need on screen.
+- Whether to add an installer for starting at login. The recipes are documented; an installer has to be tested on each system it writes to.

@@ -120,15 +120,30 @@ The dashboard SHALL reflect changes made through the API, the MCP server, the CL
 - **THEN** the dashboard says it is offline, keeps the last data visible and reconnects automatically
 
 ### Requirement: Alerts
-The dashboard SHALL show the number of `use-now` meters in the page title, and SHALL, only after the user opts in, raise a browser notification when a meter enters `use-now`, at most once per meter per window.
+The dashboard SHALL show the number of `use-now` meters in the page title, and SHALL, only after the user opts in, raise a browser notification when a reminder becomes due (see the `reminders` capability), at most once per meter per window. It SHALL NOT raise a browser notification while desktop reminders are on, since the service raises the same reminder.
 
 #### Scenario: Meter enters the action horizon
-- **WHEN** notifications are enabled and a meter becomes `use-now`
+- **WHEN** notifications are enabled and a weekly meter becomes `use-now`
 - **THEN** one notification names the account, the share left and the time to reset
 
 #### Scenario: Notifications not enabled
 - **WHEN** the user has not opted in
 - **THEN** no permission prompt and no notification appears
+
+#### Scenario: Desktop reminders on
+- **WHEN** browser notifications and desktop reminders are both on and a meter becomes `use-now`
+- **THEN** the dashboard raises no browser notification
+
+### Requirement: Reminder settings in one place
+The dashboard SHALL offer one panel that shows every way a reminder can reach the user: in the browser tab, on this computer, at an address of their own, and in their calendar. It SHALL let the user switch the first two on and off, send a test, and copy the calendar address or open the calendar file, and SHALL show the host of a configured webhook address and never the address. On sample data the panel SHALL say which of these need the local service.
+
+#### Scenario: Switching on desktop reminders
+- **WHEN** the user switches on reminders on this computer
+- **THEN** the setting is saved, a test notification is sent and its outcome is shown in the panel
+
+#### Scenario: Sample data
+- **WHEN** the panel is opened on sample data
+- **THEN** the desktop and webhook rows say they need the local service and the calendar can be copied as text
 
 ### Requirement: Themes
 The dashboard SHALL provide a light and a dark theme built on one greyed Solarized palette, SHALL follow the system setting by default, SHALL remember an explicit choice, and SHALL keep body text at a contrast of at least 4.5:1 and meaningful graphical marks at least 3:1 against their background in both themes.

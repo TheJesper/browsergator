@@ -36,6 +36,7 @@ which reads the same state:
 | Report in one line | `quick_update` | same |
 | Find a provider's usage page | `list_catalog` | `tokengator add --list` |
 | Refresh automatic sources | `refresh_usage` | `tokengator collectors run` |
+| Put the resets in a calendar | none | `tokengator calendar > resets.ics` |
 
 If neither is available, say so once and carry on; do not guess numbers.
 
@@ -64,6 +65,9 @@ When the user asks for something substantial and more than one subscription coul
 4. If the choice is not yours to make (you cannot switch model or tool), still mention it once.
 
 Mention quota once per session, and again only when something changes state. Do not nag.
+
+If the user wants to be reminded and you have a calendar tool, offer to add the next reset as an
+event that starts a day before it (three days for a monthly quota). Offer; do not add it unasked.
 
 ## Keeping the numbers fresh
 

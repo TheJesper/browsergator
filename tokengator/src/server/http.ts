@@ -12,7 +12,9 @@ import type { SpendSourceInput } from '../core/spend.js';
 import type { MeterSource, Price, Reading, Settings } from '../core/types.js';
 import type { CollectorHost, CollectorStatus } from './collectors/types.js';
 import { MAX_BODY_BYTES, VERSION, type ServiceConfig } from './config.js';
+import { calendarFeed } from '../core/reminders.js';
 import { log } from './logger.js';
+import type { ReminderRunner, ReminderStatus } from './notify.js';
 import {
   SessionStore,
   apiHeaders,
@@ -42,6 +44,8 @@ export interface HttpServerOptions {
   /** Directory with index.html and the built assets. */
   publicDir: string;
   collectors?: CollectorHost;
+  /** Raises reminders outside the dashboard. Without it the reminder routes report everything as off. */
+  reminders?: ReminderRunner;
   /** Mounted at /mcp for POST, GET and DELETE, behind the same Host/Origin/token checks. */
   mcpHandler?: McpHttpHandler;
   /** How this machine invokes the CLI; returned in /api/state for the Connect panel. */
@@ -715,6 +719,16 @@ export class TokengatorHttpServer {
     }
   }
 
+  private async reminderStatus(): Promise<ReminderStatus> {
+    const off: ReminderStatus = { desktop: { enabled: false, supported: false }, webhook: { configured: false, host: null, error: null } };
+    try {
+      return (await this.options.reminders?.status()) ?? off;
+    } catch (error) {
+      log('warn', 'Could not read the reminder status', { error: error instanceof Error ? error.message : String(error) });
+      return off;
+    }
+  }
+
   private buildRoutes(): Route[] {
     const { service, config } = this.options;
     const route = (method: Method, path: string, handle: Route['handle']): Route => ({
@@ -734,6 +748,7 @@ export class TokengatorHttpServer {
           version: VERSION,
           demo: config.demo,
           collectors: await this.collectorList(),
+          reminders: await this.reminderStatus(),
           warnings: service.store.warnings,
           cli: this.options.cliCommand ?? 'tokengator',
           tokenRequired: config.token !== null
@@ -748,6 +763,25 @@ export class TokengatorHttpServer {
           'Content-Length': Buffer.byteLength(body)
         });
         res.end(body);
+      }),
+      route('GET', 'calendar.ics', async ({ req, res }) => {
+        // The address the request came to is the one that works for whoever asked, so the entries link back to it.
+        const host = req.headers.host;
+        const body = calendarFeed(await service.state(), service.nowMs(), host ? { dashboardUrl: `http://${host}/` } : {});
+        res.writeHead(200, {
+          ...apiHeaders(),
+          'Content-Type': 'text/calendar; charset=utf-8',
+          'Content-Disposition': 'inline; filename="tokengator.ics"',
+          'Content-Length': Buffer.byteLength(body)
+        });
+        res.end(body);
+      }),
+      route('GET', 'reminders', async ({ res }) => sendJson(res, 200, { reminders: await this.reminderStatus() })),
+      route('POST', 'reminders/test', async ({ res }) => {
+        const runner = this.options.reminders;
+        // Sample data must never reach a real notification centre or somebody's phone.
+        if (!runner || config.demo) throw new ValidationError('reminders', 'Reminders are not available here.');
+        sendJson(res, 200, { deliveries: await runner.test() });
       }),
       route('GET', 'catalog', ({ res }) => sendJson(res, 200, { checked: CATALOG_CHECKED, providers: CATALOG })),
       route('GET', 'events', ({ res }) => this.openEvents(res)),
@@ -865,6 +899,7 @@ export class TokengatorHttpServer {
         const patch: Partial<Settings> = {};
         if (input['currency'] !== undefined) patch.currency = input['currency'] as string;
         if (input['enabledCollectors'] !== undefined) patch.enabledCollectors = input['enabledCollectors'] as string[];
+        if (input['desktopReminders'] !== undefined) patch.desktopReminders = input['desktopReminders'] as boolean;
         sendJson(res, 200, { settings: await service.updateSettings(patch) });
       }),
 

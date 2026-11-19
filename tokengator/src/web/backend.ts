@@ -41,9 +41,24 @@ export interface CollectorInfo {
   nextRunAt: string | null;
 }
 
+/** Mirrors the server's ReminderStatus. The webhook address itself never leaves the service. */
+export interface ReminderInfo {
+  desktop: { enabled: boolean; supported: boolean };
+  webhook: { configured: boolean; host: string | null; error: string | null };
+}
+
+export interface ReminderDelivery {
+  channel: 'desktop' | 'webhook';
+  ok: boolean;
+  error?: string;
+}
+
+export const REMINDERS_OFF: ReminderInfo = { desktop: { enabled: false, supported: false }, webhook: { configured: false, host: null, error: null } };
+
 export interface Loaded {
   state: State;
   collectors: CollectorInfo[];
+  reminders: ReminderInfo;
   warnings: string[];
   demo: boolean;
   version: string;
@@ -96,6 +111,8 @@ export interface Backend {
   importState(document: unknown): Promise<void>;
   setCollector(id: string, enabled: boolean): Promise<void>;
   refresh(): Promise<void>;
+  /** Sends a test reminder through every channel that is on, and through the desktop one regardless. */
+  testReminders(): Promise<ReminderDelivery[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +159,7 @@ export class HttpBackend implements Backend {
     const data = await this.call<{
       state: State;
       collectors?: CollectorInfo[];
+      reminders?: ReminderInfo;
       warnings?: string[];
       demo?: boolean;
       version?: string;
@@ -151,6 +169,7 @@ export class HttpBackend implements Backend {
     return {
       state: data.state,
       collectors: data.collectors ?? [],
+      reminders: data.reminders ?? REMINDERS_OFF,
       warnings: data.warnings ?? [],
       demo: data.demo === true,
       version: data.version ?? '',
@@ -238,6 +257,9 @@ export class HttpBackend implements Backend {
   async refresh(): Promise<void> {
     await this.call('POST', '/api/refresh', {});
   }
+  async testReminders(): Promise<ReminderDelivery[]> {
+    return (await this.call<{ deliveries: ReminderDelivery[] }>('POST', '/api/reminders/test', {})).deliveries;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +294,7 @@ export class MemoryBackend implements Backend {
     return Promise.resolve({
       state: this.state,
       collectors: [],
+      reminders: REMINDERS_OFF,
       warnings: [],
       demo: true,
       version: '',
@@ -354,5 +377,8 @@ export class MemoryBackend implements Backend {
   }
   refresh(): Promise<void> {
     return Promise.resolve();
+  }
+  testReminders(): Promise<ReminderDelivery[]> {
+    return Promise.reject(new BackendError('Reminders outside this tab need the local service. They are not available on sample data.', 'unavailable'));
   }
 }

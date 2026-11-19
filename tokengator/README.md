@@ -7,6 +7,8 @@ Tokengator keeps every one of those clocks on one screen and answers a single qu
 **what should I use first so nothing goes to waste?**
 
 - A local dashboard, sorted by what is about to expire, with the money that is at risk.
+- Reminders that reach you when the dashboard is closed: on this computer, on your phone, in your
+  calendar, and in your agent's status line.
 - An MCP server, so agents can ask which subscription to spend and report fresh numbers.
 - A command line and a status line integration.
 - A skill that teaches agents when to check and when to report.
@@ -78,6 +80,28 @@ an agent. **C** copies a brief of the whole picture.
 Keyboard: `1`–`6` views, `U` update, `A` add, `C` copy brief, `/` filter, `J`/`K` rows, `S` sort,
 `T` theme, `?` all shortcuts.
 
+## Reminders
+
+Quota expires when nobody is looking, so the dashboard is not the only place Tokengator speaks.
+Each quota earns one reminder per window, at the moment it becomes **Use now**:
+
+```
+Use Claude Max now
+38% left of the weekly limit, resets in 14h (tomorrow 09:00). About $7.39 expires at this pace.
+```
+
+| Route | How |
+| --- | --- |
+| This computer | menu > Reminders > On this computer. Uses your system's own notification command. |
+| Phone or chat | `TOKENGATOR_NOTIFY_URL=https://ntfy.sh/a-name-only-you-know` (ntfy, Slack and Discord webhooks) |
+| Calendar | `tokengator calendar > resets.ics`, or subscribe to `/api/calendar.ics` |
+| Agents | the status line names the most urgent quota |
+| No service running | `tokengator notify` from cron or Task Scheduler |
+
+Session and daily limits are never raised, several quotas due together arrive as one message, and
+nothing repeats. Details, privacy and how to start the service at sign-in:
+[docs/REMINDERS.md](docs/REMINDERS.md).
+
 ## Keeping numbers fresh
 
 | Source | How | Credentials |
@@ -127,17 +151,20 @@ an agent must never start work just to burn quota.
 ## Command line
 
 ```
-tokengator [serve]                 start the dashboard            --port --host --demo
-tokengator status                  the queue in the terminal      --json --all --check
+tokengator [serve]                 start the dashboard            --port --host --demo --no-collectors
+tokengator status                  the queue in the terminal      --json --all --check --no-color
 tokengator set <quick entry>       update a meter
-tokengator add <provider>          add from the catalog           --plan --label --list
+tokengator add <provider>          add from the catalog           --plan --label --billing-day --list
+tokengator notify                  raise due reminders once       --dry-run --test --no-desktop
+tokengator calendar                coming resets as iCalendar     --days
 tokengator mcp                     MCP server on stdio
 tokengator statusline              Claude Code status line command
 tokengator collectors              list | enable <id> | disable <id> | run
-tokengator connect                 connection snippets for this machine
+tokengator connect                 connection snippets for this machine   --client --stdio
 tokengator skill install           install the agent skill        --dry-run, uninstall
-tokengator export | import <file>  the whole state as JSON
+tokengator export | import <file>  the whole state as JSON        import - reads standard input
 tokengator doctor                  paths, sources and configuration
+tokengator help [command]          every option of a command
 ```
 
 `tokengator status --check` exits with 2 when something needs using now, for scripts and prompts.
@@ -150,7 +177,11 @@ tokengator doctor                  paths, sources and configuration
 | `TOKENGATOR_PORT` | `4777` | listening port |
 | `TOKENGATOR_HOST` | `127.0.0.1` | listening address |
 | `TOKENGATOR_TOKEN` | none | access token; required when the host is not loopback |
+| `TOKENGATOR_NOTIFY_URL` | none | where reminders are also posted; treated as a credential |
 | `TOKENGATOR_LOG` | `info` | `debug`, `info`, `warn` or `error` |
+
+The port, host, token and reminder address may also be set in `~/.tokengator/.env`, next to the
+keys of the automatic sources.
 
 ## Security
 
@@ -160,6 +191,8 @@ tokengator doctor                  paths, sources and configuration
 - With a token: bearer header, or a session cookie obtained by opening
   `http://127.0.0.1:4777/#token=…` once. The token is never accepted in a query string.
 - Collectors may contact only their own provider over HTTPS and do not follow redirects.
+- Reminder text reaches the notification command as arguments or environment variables, never
+  through a shell. The reminder address must be HTTPS and is never stored, logged or shown.
 - Logs go to standard error and pass through redaction.
 
 ## How the forecast works
@@ -183,6 +216,8 @@ real readings so you can see what the average hides.
 ```bash
 npm run lint && npm run typecheck && npm test && npm run build
 npm run build:demo        # dist/demo/index.html, one self-contained sample page
+npm run test:ui           # drives the dashboard in a browser (needs Playwright; skips without it)
+npm run test:e2e          # the built service end to end: HTTP, MCP, CLI, reminders, dashboard
 npm run spec:validate     # OpenSpec
 ```
 

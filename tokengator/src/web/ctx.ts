@@ -12,6 +12,7 @@ export interface Actions {
   snooze(accountId: string, untilMs: number | null): void;
   connect(): void;
   sources(): void;
+  reminders(): void;
   shortcuts(): void;
   addSpend(): void;
   editSpend(sourceId: string): void;
