@@ -63,6 +63,9 @@ function clients(home: string): Client[] {
   });
   return [
     skills('claude', '.claude'),
+    // The shared Agent Skills directory, read by Codex, Copilot CLI, Cursor, Zed, opencode and Goose.
+    skills('agents', '.agents'),
+    skills('antigravity', '.gemini', 'config'),
     skills('kiro', '.kiro'),
     instructions('codex', ['.codex'], ['AGENTS.md']),
     instructions('gemini', ['.gemini'], ['GEMINI.md']),

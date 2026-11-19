@@ -27,6 +27,20 @@ describe('provider catalog', () => {
     }
   });
 
+  it('links every documented way to use quota to an https page and says what it is in one sentence', () => {
+    const withUses = CATALOG.filter((provider) => (provider.uses ?? []).length > 0);
+    expect(withUses.map((provider) => provider.id)).toEqual(expect.arrayContaining(['claude', 'codex', 'copilot']));
+    for (const provider of withUses) {
+      for (const use of provider.uses ?? []) {
+        expect(use.title.length, provider.id).toBeGreaterThan(3);
+        expect(use.note, provider.id).toMatch(/^[A-Z].{30,200}\.$/);
+        expect(use.url, provider.id).toMatch(/^https:\/\/[a-z0-9.-]+\//);
+        // Nothing here may read as an instruction to keep a window warm or to run something for its own sake.
+        expect(use.note.toLowerCase()).not.toMatch(/warm|ping|keep.?alive|burn/);
+      }
+    }
+  });
+
   it('builds a valid account from every plan of every provider', () => {
     for (const provider of CATALOG) {
       for (const plan of provider.plans) {

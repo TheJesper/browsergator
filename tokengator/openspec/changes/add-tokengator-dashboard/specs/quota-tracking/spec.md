@@ -126,6 +126,17 @@ The system SHALL ship a catalog of provider presets with their common plans, eac
 - **WHEN** a plan with a billing-cycle meter is added with billing day 12
 - **THEN** that meter resets monthly on the 12th in the user's time zone
 
+### Requirement: Documented ways to use quota
+A provider preset MAY list ways the provider itself documents for putting plan quota to work unattended. Each entry SHALL have a title, one sentence saying what it is and whether it draws on the same allowance, and an HTTPS link to the provider's own documentation. The catalog SHALL NOT list anything whose purpose is to keep a rate window open or to consume quota for its own sake.
+
+#### Scenario: Claude
+- **WHEN** the catalog entry for Claude is read
+- **THEN** it lists cloud sessions with a link to the provider's documentation
+
+#### Scenario: A provider without documented ways
+- **WHEN** a provider has none
+- **THEN** its entry lists none and nothing is shown for it
+
 ### Requirement: Snooze
 The system SHALL let a user snooze an account until a chosen time. A snoozed account SHALL remain visible but SHALL be excluded from the use-first ordering, from alerts and from the totals of value at risk until the time passes.
 

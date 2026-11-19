@@ -298,6 +298,11 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 .tag { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: var(--r-1); font-size: 11px; color: var(--ink-3); white-space: nowrap; }
 .tag.warn { color: var(--hot-ink); border-color: currentColor; }
 .tag.on { color: var(--ok-ink); border-color: currentColor; }
+.uses { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.uses li { display: grid; gap: 1px; font-size: 12.5px; color: var(--ink-3); }
+.uses a { display: inline-flex; align-items: center; gap: 5px; width: fit-content; font-size: 13px; font-weight: 500; color: var(--used-ink); text-decoration: none; }
+.uses a:hover { text-decoration: underline; text-underline-offset: 2px; }
+.uses a .ico { width: 12px; height: 12px; }
 button.link { padding: 0; border: 0; background: none; color: var(--used-ink); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 button.link:hover { color: var(--ink); }
 .tag.stop { color: var(--stop-ink); border-color: currentColor; }

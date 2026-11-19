@@ -86,16 +86,33 @@ export function connectSnippets(options: ConnectOptions): ConnectSnippet[] {
     {
       id: 'vscode',
       group: 'mcp-http',
-      title: 'VS Code',
-      description: 'For .vscode/mcp.json or the user-level MCP configuration.',
+      title: 'VS Code (workspace)',
+      description: 'For .vscode/mcp.json in a workspace.',
       language: 'json',
       code: json({ servers: { [NAME]: auth ? { type: 'http', url, headers: header } : { type: 'http', url } } })
     },
     {
+      id: 'copilot-json',
+      group: 'mcp-http',
+      title: 'GitHub Copilot (VS Code and CLI)',
+      description: 'For ~/.copilot/mcp-config.json, which Copilot in VS Code and the Copilot CLI share.',
+      language: 'json',
+      code: json({ mcpServers: { [NAME]: auth ? { type: 'http', url, headers: header, tools: ['*'] } : { type: 'http', url, tools: ['*'] } } })
+    },
+    {
       id: 'stdio-json',
       group: 'mcp-stdio',
-      title: 'Any stdio client',
-      description: 'Works without the dashboard running: the stdio server reads the same state file.',
+      title: 'Claude Desktop and any stdio client',
+      description:
+        'For claude_desktop_config.json, ~/.cursor/mcp.json and anything else that starts a command. The Claude apps connect from Anthropic, not from your machine, so they cannot reach the address above and need this form. It works without the dashboard running.',
+      language: 'json',
+      code: json({ mcpServers: { [NAME]: { command, args: stdioArgs } } })
+    },
+    {
+      id: 'antigravity',
+      group: 'mcp-stdio',
+      title: 'Antigravity',
+      description: 'For ~/.gemini/config/mcp_config.json.',
       language: 'json',
       code: json({ mcpServers: { [NAME]: { command, args: stdioArgs } } })
     },

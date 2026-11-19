@@ -104,6 +104,18 @@ export const CATALOG: readonly ProviderPreset[] = [
     howToRead:
       'Settings > Usage shows "Current session" and each weekly limit as a percentage used with its reset time. Monthly API credits are under Promotional credits on the Console billing page.',
     collectors: ['claude-statusline'],
+    uses: [
+      {
+        title: 'Cloud sessions',
+        note: 'Tasks handed to Claude Code on the web keep running with the computer off and count toward the same plan limits.',
+        url: 'https://code.claude.com/docs/en/claude-code-on-the-web'
+      },
+      {
+        title: 'Scheduled tasks',
+        note: 'Recurring cloud tasks draw on subscription usage the same way interactive sessions do.',
+        url: 'https://code.claude.com/docs/en/routines'
+      }
+    ],
     plans: [
       plan('pro', 'Pro', usd(20), [session(), weeklyFixed('Weekly limit')]),
       plan(
@@ -138,6 +150,13 @@ export const CATALOG: readonly ProviderPreset[] = [
     howToRead:
       'Codex and ChatGPT draw on one allowance. The usage page shows the 5-hour and weekly windows as a percentage remaining, each with a reset time. Note that it shows what is LEFT, not what is used.',
     collectors: ['codex-sessions'],
+    uses: [
+      {
+        title: 'Cloud tasks',
+        note: 'Codex cloud tasks keep working while the computer is asleep. Local messages and cloud tasks share the plan allowance.',
+        url: 'https://learn.chatgpt.com/docs/pricing'
+      }
+    ],
     plans: [
       plan('plus', 'Plus', usd(20), [session(), weeklyFromFirstUse('Weekly limit')]),
       plan('pro-100', 'Pro 100', usd(100), [weeklyFromFirstUse('Weekly limit'), billingMonth('api-credits', 'Monthly API credits', 'usd', 100)], 'API credits must be claimed in Settings > Billing'),
@@ -157,6 +176,13 @@ export const CATALOG: readonly ProviderPreset[] = [
     howToRead:
       'Billing > Metered usage > Copilot shows AI credits used this month. Allowances reset at 00:00 UTC on the 1st, whatever your billing date.',
     collectors: ['copilot'],
+    uses: [
+      {
+        title: 'Cloud agent',
+        note: 'An issue assigned to the Copilot cloud agent is worked on in the background and billed in the same AI credits.',
+        url: 'https://docs.github.com/en/copilot/concepts/billing-and-usage/individuals/billing'
+      }
+    ],
     plans: [
       plan('pro', 'Pro', usd(10), [calendarMonth('ai-credits', 'Monthly AI credits', 'credits', 1500)]),
       plan('pro-plus', 'Pro+', usd(39), [calendarMonth('ai-credits', 'Monthly AI credits', 'credits', 7000)]),
@@ -232,6 +258,13 @@ export const CATALOG: readonly ProviderPreset[] = [
     usageUrl: 'https://cursor.com/dashboard',
     howToRead: 'The dashboard Usage tab shows included usage for the current cycle and when it resets.',
     collectors: [],
+    uses: [
+      {
+        title: 'Cloud agents',
+        note: 'Cloud agents run in parallel without the editor open and use the plan like other agent work.',
+        url: 'https://cursor.com/docs/cloud-agent'
+      }
+    ],
     plans: [
       plan('weekly-pool', 'Weekly usage pool', usd(30), [weeklyFixed('Weekly usage pool')], 'for plans that refresh weekly'),
       plan('monthly', 'Monthly included usage', usd(20), [billingMonth('included', 'Monthly included usage', 'percent', undefined, { valueShare: 1 })], 'for plans billed with a monthly pool')

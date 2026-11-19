@@ -119,6 +119,17 @@ The dashboard SHALL reflect changes made through the API, the MCP server, the CL
 - **WHEN** the connection to the local service drops
 - **THEN** the dashboard says it is offline, keeps the last data visible and reconnects automatically
 
+### Requirement: A warning comes with something to do
+The inspector SHALL, for a meter that is `use-now` or `behind` and whose provider has documented ways to use quota unattended, list those ways with their links and say when the catalog was checked. It SHALL also show the account's own notes.
+
+#### Scenario: Weekly limit about to reset
+- **WHEN** the inspector shows a Claude weekly limit that is `use-now`
+- **THEN** it lists the provider's documented ways to use the quota, each linking to the provider's page
+
+#### Scenario: Nothing at risk
+- **WHEN** the inspector shows a meter that is on pace
+- **THEN** no such list is shown
+
 ### Requirement: Alerts
 The dashboard SHALL show the number of `use-now` meters in the page title, and SHALL, only after the user opts in, raise a browser notification when a reminder becomes due (see the `reminders` capability), at most once per meter per window. It SHALL NOT raise a browser notification while desktop reminders are on, since the service raises the same reminder.
 

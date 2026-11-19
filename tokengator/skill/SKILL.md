@@ -66,6 +66,10 @@ When the user asks for something substantial and more than one subscription coul
 
 Mention quota once per session, and again only when something changes state. Do not nag.
 
+When quota is about to expire and the user asks what to do with it, `list_catalog` for that provider
+lists the ways the provider itself documents for using a plan unattended (cloud sessions, scheduled
+tasks), with links. Suggest them. Starting one is the user's call.
+
 If the user wants to be reminded and you have a calendar tool, offer to add the next reset as an
 event that starts a day before it (three days for a monthly quota). Offer; do not add it unasked.
 

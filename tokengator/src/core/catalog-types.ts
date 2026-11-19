@@ -63,6 +63,19 @@ export interface ProviderPreset {
   plans: PresetPlan[];
   /** Ids of collectors that can fill this provider automatically. */
   collectors: string[];
+  /**
+   * Ways the provider itself documents for putting plan quota to work without sitting at the keyboard.
+   * Each one links to the provider's own page, so nobody has to take the note on trust.
+   */
+  uses?: PresetUse[];
+}
+
+export interface PresetUse {
+  title: string;
+  /** One sentence: what it is, and whether it draws on the same allowance. */
+  note: string;
+  /** The provider's documentation for it. */
+  url: string;
 }
 
 export function findProvider(catalog: readonly ProviderPreset[], providerId: string): ProviderPreset | null {

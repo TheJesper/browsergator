@@ -562,6 +562,7 @@ function presetDetail(provider: ProviderPreset): Record<string, unknown> {
   return {
     ...presetCompact(provider),
     howToRead: provider.howToRead,
+    uses: provider.uses ?? [],
     plans: provider.plans.map((plan) => ({
       id: plan.id,
       name: plan.name,
@@ -981,6 +982,10 @@ export function createMcpServer(deps: McpDeps): McpServer {
             }
           }
           if (preset.collectors.length > 0) lines.push(`Collectors that can fill it automatically: ${preset.collectors.join(', ')}.`);
+          if (preset.uses && preset.uses.length > 0) {
+            lines.push("Ways the provider documents for using the quota unattended (suggest them; do not start one unasked):");
+            for (const use of preset.uses) lines.push(`- ${use.title}: ${use.note} ${use.url}`);
+          }
           lines.push(`Track it with add_account (provider "${preset.id}" and a plan id), then record the numbers with report_usage.`);
           return done(lines, { checked: CATALOG_CHECKED, known, providers: [presetDetail(preset)] });
         }

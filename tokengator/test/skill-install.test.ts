@@ -108,7 +108,7 @@ describe('install', () => {
   it('copies the skill for skill-directory clients and writes a block for instruction-file clients', () => {
     setUpClients();
     const actions = run();
-    expect(byClient(actions)).toEqual({ claude: 'write', kiro: 'skip', codex: 'update', gemini: 'skip', copilot: 'skip', cursor: 'write', windsurf: 'skip', opencode: 'skip' });
+    expect(byClient(actions)).toEqual({ claude: 'write', agents: 'skip', antigravity: 'skip', kiro: 'skip', codex: 'update', gemini: 'skip', copilot: 'skip', cursor: 'write', windsurf: 'skip', opencode: 'skip' });
 
     // The skill directory gets the file exactly as shipped, front matter included.
     expect(text('.claude', 'skills', 'tokengator', 'SKILL.md')).toBe(SKILL);
@@ -226,13 +226,28 @@ describe('install', () => {
   });
 });
 
+describe('shared skill directories', () => {
+  it('copies the skill into ~/.agents/skills and the Antigravity skills directory when those clients are set up', () => {
+    mkdirSync(join(home, '.agents'), { recursive: true });
+    mkdirSync(join(home, '.gemini', 'config'), { recursive: true });
+    const actions = run();
+    expect(byClient(actions)).toMatchObject({ agents: 'write', antigravity: 'write' });
+    const shipped = readFileSync(join(pkg, 'skill', 'SKILL.md'), 'utf8');
+    expect(readFileSync(join(home, '.agents', 'skills', 'tokengator', 'SKILL.md'), 'utf8')).toBe(shipped);
+    expect(readFileSync(join(home, '.gemini', 'config', 'skills', 'tokengator', 'SKILL.md'), 'utf8')).toBe(shipped);
+    expect(byClient(run())).toMatchObject({ agents: 'unchanged', antigravity: 'unchanged' });
+    expect(byClient(run({ uninstall: true }))).toMatchObject({ agents: 'remove', antigravity: 'remove' });
+    expect(existsSync(join(home, '.agents', 'skills', 'tokengator'))).toBe(false);
+  });
+});
+
 describe('uninstall', () => {
   it('removes only what was installed and gives the instruction file back as it was (scenario: Uninstall)', () => {
     setUpClients();
     const before = snapshot();
     run();
     const actions = run({ uninstall: true });
-    expect(byClient(actions)).toEqual({ claude: 'remove', kiro: 'skip', codex: 'remove', gemini: 'skip', copilot: 'skip', cursor: 'remove', windsurf: 'skip', opencode: 'skip' });
+    expect(byClient(actions)).toEqual({ claude: 'remove', agents: 'skip', antigravity: 'skip', kiro: 'skip', codex: 'remove', gemini: 'skip', copilot: 'skip', cursor: 'remove', windsurf: 'skip', opencode: 'skip' });
     expect(actions.filter((entry) => entry.action === 'skip').every((entry) => entry.note === NOTE_NOT_INSTALLED)).toBe(true);
 
     expect(text('.codex', 'AGENTS.md')).toBe(USER_TEXT);

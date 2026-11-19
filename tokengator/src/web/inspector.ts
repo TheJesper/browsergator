@@ -1,5 +1,7 @@
 // The inspector: everything about one meter, and the fastest way to update it.
 
+import { CATALOG, CATALOG_CHECKED } from '../core/catalog.js';
+import { findProvider } from '../core/catalog-types.js';
 import { cyclesOf, type MeterView } from '../core/forecast.js';
 import { formatAmount, formatMoney, formatMultiple, formatPercent } from '../core/format.js';
 import { parseQuick } from '../core/quick.js';
@@ -45,6 +47,7 @@ export function inspector(ctx: Ctx, view: MeterView): HTMLElement {
   const account = view.account;
   const siblings = ctx.app.allViews().filter((other) => other.account.id === account.id);
   const cycles = cyclesOf(state, view.meter.id, 12);
+  const uses = findProvider(CATALOG, account.providerId)?.uses ?? [];
   const price = account.price ? `${formatMoney(account.price.amount, account.price.currency)} per ${account.price.period}` : null;
 
   // -- update form: the quick-entry grammar, scoped to this meter ---------------
@@ -226,6 +229,20 @@ export function inspector(ctx: Ctx, view: MeterView): HTMLElement {
         )
       : null,
     account.notes ? h('div', { class: 'insp-sec' }, h('span', { class: 'label' }, 'Notes'), h('p', { class: 'notes' }, account.notes)) : null,
+    // A warning is only useful with something to do about it. These come from the provider's own pages.
+    uses.length > 0 && (view.tier === 'use-now' || view.tier === 'behind')
+      ? h(
+          'div',
+          { class: 'insp-sec' },
+          h('span', { class: 'label' }, 'Ways to use it while you are away'),
+          h(
+            'ul',
+            { class: 'uses' },
+            uses.map((use) => h('li', null, h('a', { href: use.url, target: '_blank', rel: 'noopener noreferrer' }, use.title, icon('external')), h('span', null, use.note)))
+          ),
+          h('p', { class: 'hint', style: { marginTop: '6px' } }, `From the provider's documentation, checked ${CATALOG_CHECKED}.`)
+        )
+      : null,
     h(
       'div',
       { class: 'insp-sec' },

@@ -916,7 +916,7 @@ describe('skill (spec: Installation)', () => {
     expect(await skill(['install'], first)).toBe(0);
     expect(first.out()).toMatch(/^claude\s+installed\s/m);
     expect(first.out()).toMatch(/^codex\s+updated\s/m);
-    expect(first.out()).toContain('Not set up on this machine, so left alone: kiro, gemini, copilot, cursor, windsurf, opencode.');
+    expect(first.out()).toContain('Not set up on this machine, so left alone: agents, antigravity, kiro, gemini, copilot, cursor, windsurf, opencode.');
     const skillFile = join(agentHome(), '.claude', 'skills', 'tokengator', 'SKILL.md');
     expect(readFileSync(skillFile, 'utf8')).toBe(readFileSync(join(packageRoot(), 'skill', 'SKILL.md'), 'utf8'));
     const instructions = readFileSync(join(agentHome(), '.codex', 'AGENTS.md'), 'utf8');
@@ -976,7 +976,7 @@ describe('skill (spec: Installation)', () => {
 
     const unknown = io();
     expect(await run(['skill', 'install', '--only=bogus'], unknown)).toBe(1);
-    expect(unknown.err()).toContain('Unknown client "bogus". Known: claude, kiro, codex');
+    expect(unknown.err()).toContain('Unknown client "bogus". Known: claude, agents, antigravity, kiro, codex');
     const bare = io();
     expect(await run(['skill'], bare)).toBe(1);
     expect(bare.err()).toContain('skill install');
