@@ -169,10 +169,29 @@ The numbers and names below were read from live pages on that day. Plans and lim
 | Pass | Confirmed | Partly correct | Refuted | Could not verify |
 | --- | ---: | ---: | ---: | ---: |
 | anthropic-api, claude | 19 | 9 | 0 | 0 |
+| codex, openai-api | 14 | 18 | 0 | 2 |
+| amp, copilot, cursor, factory-droid, jetbrains-ai, kimi, kiro,… | 33 | 16 | 0 | 1 |
+| antigravity, gemini-api, gemini-app, gemini-cli, gemini-notebook,… | 22 | 7 | 1 | 1 |
+| bolt, descript, elevenlabs, gamma, heygen, higgsfield, ideogram,… | 34 | 19 | 1 | 5 |
+| anthropic-api, cerebras, deepseek, elevenlabs, fal, fireworks,… | 40 | 13 | 0 | 6 |
 
 Corrections that changed something in this change:
 
-CORRECTIONS_PLACEHOLDER
+- **Google AI Plus** is 4.99 USD a month. The first pass had 7.99, the launch price; the plans page shows 4.99 and the cut is dated to June 2026. The preset was corrected.
+- **Runway**: the organization endpoint of its API describes an API project, not the subscription's credits, and carries no reset time, so no collector was written. The Unlimited plan is no longer sold and is not among the presets. The Standard and Max presets carry no price because none was confirmed; the dashboard says "no price" rather than valuing them.
+- **Kiro**: the first pass left carry-over open. Kiro's billing FAQ says unused credits do not roll over, and the presets treat them so.
+- **Codex rate-limit windows** are not reliably "primary is five hours, secondary is weekly". Plans differ in which window comes first and some have only one, so the collector classifies each window by its length instead of by position.
+- **HeyGen**: the v2 quota endpoint the first pass named reached end of support on 2026-10-31 and is being removed. No collector was written against it.
+- **Antigravity**: its command-line `/usage` report can be asked for as JSON, but the shape of that payload is not documented. The collector uses the documented status line input instead.
+- **ElevenLabs**: `next_character_count_reset_unix` is optional. The collector leaves the schedule as it was when the field is missing.
+- **OpenAI costs**: `group_by` is an array parameter and unsupported combinations are refused. The collector does not group, so it is unaffected; recorded so nobody adds a comma-joined value later.
+- **Claude promotional limit resets** that the first pass listed for Pro had already expired on the day of the research. They are one-off grants with their own expiry, and no preset includes one.
+- **Unverifiable claims were left out of the product.** Where the second pass could not open the page that would settle a claim (OpenAI's help centre and terms, several creative tools' pricing pages), the preset keeps only what could be read.
+
+Claims that were refuted:
+
+- **google-ai-plan**: Prices: Google AI Plus $7.99/mo, Google AI Pro $19.99/mo, Google AI Ultra 5x $99.99/mo, Ultra 20x $199.99/mo (used on every Plus/Pro/Ultra meter across antigravity,… Correction: Google AI Plus is $4.99/month in the US, not $7.99: gemini.google/subscriptions shows '$4.99/ month', and press reports date the cut from the $7.99 launch price to 2026-06-08, with storage raised to 400 GB. Pro $19.99 (annual $199.99), Ultra $99.99 (5x) and $199.99 (20x) are confirmed. Prices are…
+- **heygen**: dataSource (older): GET https://api.heygen.com/v2/user/remaining_quota -> {data:{remaining_quota, details{api}}}, credits = remaining_quota / 60 Correction: Do not build against this. HeyGen's version-comparison page says v1/v2 reached end of support with a sunset date of 2026-10-31 ("v1/v2 endpoints are being removed. Calls may fail intermittently until removal is complete"), and maps GET /v2/user/remaining_quota to GET /v3/users/me. The v2 reference…
 
 ## Visual design
 
@@ -201,3 +220,65 @@ Tells of generated interfaces that the design avoids:
 - A donut, ring or gauge per provider. Few designed the bullet graph to replace them. One ring at most, and only for time.
 - Traffic-light green for 'plenty left'. Here plenty left near a reset is the problem. CodexBar colours behind-pace green ('reserve'); we do the reverse.
 
+## What the sweep had missed
+
+A final pass read the whole digest and the specification and asked what was absent. It named four gaps; each was researched on its own. These four passes were not re-checked by a second pass, and the web-search budget was spent by then, so they rest on pages fetched directly and on source code that was cloned and read. Where something could not be opened it is said so.
+
+### 1. Reaching the person when the dashboard is closed
+
+The only alert in the first draft was a browser notification from an open tab. Quota expires when nobody is looking, so this was the largest gap.
+
+- Nothing that starts on the computer fires when the computer is off or asleep. A calendar entry is the only route that does.
+- A loopback address means nothing on a phone, so messages sent off the machine should not link back to it.
+- On Windows a toast needs Windows PowerShell 5.1 (PowerShell 7 does not load the WinRT types) and an application identity Windows knows; services and elevated processes cannot show one. On macOS `osascript` works everywhere and is attributed to the script host. On Linux `notify-send` needs a desktop session.
+- Competitors all remind at a fixed 24 hours and ignore window length: OpenUsage (within 24 hours, over 50% left, off by default), GenAIUsageWidget (within 24 hours, 30% left, on by default), CodexBar (24 hours and 1 hour before a weekly reset). One hour is too late to do real work, and a month of quota cannot be used in a day.
+- Both OpenUsage and GenAIUsageWidget exclude five-hour windows from reminders, because they would fire several times a day. CodexBar had to fix a bug that replayed missed reminders after sleep.
+- Subscribing a web calendar to a loopback address cannot work: Google and Outlook.com fetch from their own servers.
+
+What it changed: the `reminders` capability, design D16, `tokengator notify`, `tokengator calendar`, the Reminders panel and `docs/REMINDERS.md`. Reminder lead time follows the window (15% of it), windows under two days are never raised, a reset time that moves by minutes is the same window, and evaluation is from state on a tick so a sleeping laptop catches up without replaying anything.
+
+### 2. What "value at risk" really means
+
+Eight tools that compute pace or value were cloned and read. None splits one fee across several meters, none models capped carry-over, and only `aiuse` puts money on unused quota at all (it spreads the price over "refills per waking month", which makes four weekly refills add up to 150% of the fee).
+
+- Plans now bundle dollar credits whose face value equals or exceeds the fee (100 USD of API credits with a 100 USD plan). Adding face value to a share of the fee reports more at risk than the plan costs.
+- The reset is not the real deadline when a session limit caps how fast a weekly allowance drains. No provider publishes that ratio; CodexBar and claude-pace learn it from pairs of readings.
+- Carry-over is not yes or no: there are caps (ElevenLabs keeps up to twice the monthly grant), per-lot expiry (Lovable, Bolt, Replit) and annual cliffs (HeyGen).
+- API-equivalent value is a different quantity, one or two orders of magnitude above the plan fee, and is neither paid nor recoverable.
+
+What it changed: plan money and dollar credits are two figures everywhere and are never added (design D17, a new requirement in `waste-forecast`). Feasibility, capped carry-over and unclaimed benefits are recorded as known limits (D18) rather than guessed at.
+
+### 3. How quota is actually lost
+
+Issue trackers, one long discussion thread and review pages were read for first-hand accounts. The evidence over-represents developers who file issues, so the ranking is ordinal.
+
+| # | How it is lost | Signal |
+| --- | --- | --- |
+| 1 | A short session limit strands the weekly allowance | the most-upvoted complaints read ([Codex #34035](https://github.com/openai/codex/issues/34035), [Claude Code #13354](https://github.com/anthropics/claude-code/issues/13354)) |
+| 2 | Leftover at a fixed weekly reset that does not fit the work week | [Claude Code #76272](https://github.com/anthropics/claude-code/issues/76272): "let the remaining quota evaporate Wednesday night, or stay up and spend it" |
+| 3 | A monthly credit pool forfeited at cycle end or on a plan change | dominant in reviews of creative tools |
+| 4 | A reset that moved or fired early without notice | [Claude Code #49599](https://github.com/anthropics/claude-code/issues/49599) |
+| 5 | One-off grants with their own expiry | [Codex #28161](https://github.com/openai/codex/issues/28161): "A single 'use your resets by <date>' line would fix most of the problem for me" |
+| 6 | Confusion about which clock a reset is on | scattered; Copilot resets at 00:00 UTC on the 1st whatever the billing date |
+
+- No one in the trackers that were read complained about a reminder for unused quota being early, late or noisy, because almost no tool sends one.
+- Providers document ways to use plan quota without sitting at the keyboard (cloud sessions and scheduled tasks for Claude Code, cloud tasks for Codex, the cloud agent for Copilot, cloud agents for Cursor), and their documentation says these draw on the same allowance.
+- Provider terms rule out the obvious shortcuts: a ping whose only purpose is to keep a window open is described nowhere as permitted, and holding or proxying subscription logins is prohibited outright by Anthropic and Google.
+
+What it changed: the catalog lists a provider's documented ways to use quota unattended, with links, and the inspector shows them when a quota is at risk (a warning should come with something to do). The dashboard states every reset in local time. Tokengator never sends a message on the user's behalf, never stores a provider login and has no "warm-up" feature; the skill forbids agents from spending quota on their own initiative.
+
+### 4. The agent integration surface
+
+- The current MCP revision is 2026-07-28, a stateless redesign. The v1 TypeScript SDK (`@modelcontextprotocol/sdk` 1.32.2, still the `latest` tag of that package) speaks 2025-11-25 and older; a v2 SDK exists as split packages (`@modelcontextprotocol/server` 2.4.0, confirmed on the registry). Clients that speak the new revision fall back to the older handshake, so nothing is broken; v1 is in maintenance.
+- The Claude apps connect to URL connectors from Anthropic's infrastructure, so a loopback address is unreachable for them; they need the stdio form. Loopback HTTP is documented for Claude Code, Codex, Copilot and Cursor.
+- Many clients read Agent Skills from a shared `~/.agents/skills` directory; Antigravity reads `~/.gemini/config/skills`.
+- Claude Code and the Antigravity CLI hand their own quota to a status line command. Codex has no scriptable status line. None of the agents' hooks carry rate limits.
+- MCP Apps let a tool attach an inline view that several hosts render. It needs a host to test against.
+
+What it changed: `tokengator skill install` also writes to the two shared skill directories; the Connect panel gained Copilot's shared configuration, Antigravity, and an explanation of why the Claude apps need stdio; `tokengator statusline -- <command>` keeps a status line the user already had. An inline MCP App view was not built because it could not be tested against a host here.
+
+## What was not verified
+
+- OpenAI's help centre and terms, and several creative tools' pricing pages, refused automated reading. Presets for those providers are starting points to be checked against the usage page.
+- Desktop notification commands for Windows and macOS were written from documentation; only Linux could be exercised.
+- The four follow-up passes above were single passes.
