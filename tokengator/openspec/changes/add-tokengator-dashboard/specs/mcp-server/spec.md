@@ -17,6 +17,25 @@ The system SHALL expose its MCP server over Streamable HTTP at `/mcp` on the loc
 - **WHEN** the stdio server is started while the local service is not running
 - **THEN** its tools still work against the stored state
 
+### Requirement: Both generations of the protocol
+The MCP server SHALL serve the 2026-07-28 revision of the protocol and SHALL keep serving clients that open with the earlier `initialize` handshake, from the same tool, resource and prompt definitions, over both transports. Over HTTP neither generation SHALL use a session id. A reading reported by a client of the 2026-07-28 revision SHALL be attributed to the client name carried in that request.
+
+#### Scenario: A client of the current revision
+- **WHEN** a client pinned to 2026-07-28 connects over HTTP and reports usage
+- **THEN** the call succeeds without a handshake and the reading's source names that client
+
+#### Scenario: A client that only knows the handshake
+- **WHEN** a client opens with `initialize` at revision 2025-11-25
+- **THEN** it is served, lists the same tools, and receives plain JSON answers without a session id
+
+#### Scenario: A client that can speak either
+- **WHEN** a client that probes for the newer revision connects
+- **THEN** it negotiates 2026-07-28
+
+#### Scenario: Headers that contradict the body
+- **WHEN** a request of the current revision names one tool in its routing header and another in its body
+- **THEN** the request is refused
+
 ### Requirement: Use-first guidance for agents
 The MCP server SHALL provide a `what_to_use` tool that returns allowance meters in "use first" order with each meter's tier, share left, time to reset, value at risk, required pace, staleness, any blocking throttle and a one-sentence recommendation, as readable text and as structured data.
 

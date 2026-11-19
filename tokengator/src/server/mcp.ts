@@ -6,10 +6,17 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import { NodeStreamableHTTPServerTransport, toNodeHandler, toWebRequest } from '@modelcontextprotocol/node';
+import {
+  CLIENT_INFO_META_KEY,
+  McpServer,
+  createMcpHandler,
+  isLegacyRequest,
+  type CallToolResult,
+  type ServerContext,
+  type ToolAnnotations
+} from '@modelcontextprotocol/server';
+import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { z } from 'zod';
 
 import {
@@ -689,9 +696,15 @@ export function createMcpServer(deps: McpDeps): McpServer {
     return { state, now: service.nowMs() };
   };
 
-  /** Who is reporting: the client's own name from the handshake when this connection saw one. */
-  const agentSource = (note?: string): MeterSource => {
-    const source: MeterSource = { kind: 'agent', id: cleanName(server.server.getClientVersion()?.name) ?? 'mcp' };
+  /**
+   * Who is reporting. A client of the 2026-07-28 revision names itself in every request; an older one
+   * does so once, in the handshake, which a stateless HTTP exchange never sees again.
+   */
+  const agentSource = (ctx: ServerContext, note?: string): MeterSource => {
+    // The SDK publishes the envelope as an open record, so the key is read as one.
+    const envelope = ctx.mcpReq.envelope as Record<string, unknown> | undefined;
+    const sent = envelope?.[CLIENT_INFO_META_KEY] as { name?: unknown } | undefined;
+    const source: MeterSource = { kind: 'agent', id: cleanName(sent?.name) ?? cleanName(server.server.getClientVersion()?.name) ?? 'mcp' };
     const cleaned = note?.trim();
     if (cleaned) source.note = cleaned.slice(0, 200);
     return source;
@@ -1117,7 +1130,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       outputSchema: meterResultOutput,
       annotations: RECORDS
     },
-    (args) =>
+    (args, ctx) =>
       writing(async () => {
         const amounts = (['used', 'remaining', 'usedPercent', 'remainingPercent'] as const).filter((field) => args[field] !== undefined);
         if (amounts.length > 1) {
@@ -1142,7 +1155,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         const state = await service.state();
         const found = service.resolve(state, { account: args.account });
         const meter = args.meter === undefined ? found.meter : resolveMeter(found.account, args.meter);
-        const source = agentSource(args.note);
+        const source = agentSource(ctx, args.note);
         const outcome = await service.report({ meterId: meter.id }, observed, source);
         return meterResult(`Recorded, reported by agent "${source.id}".`, outcome);
       })
@@ -1158,9 +1171,9 @@ export function createMcpServer(deps: McpDeps): McpServer {
       outputSchema: meterResultOutput.extend({ preview: text }),
       annotations: RECORDS
     },
-    ({ text: line }) =>
+    ({ text: line }, ctx) =>
       writing(async () => {
-        const saved = await service.quick(line, agentSource());
+        const saved = await service.quick(line, agentSource(ctx));
         return meterResult(`Saved: ${saved.preview}`, saved, { preview: saved.preview });
       })
   );
@@ -1175,14 +1188,14 @@ export function createMcpServer(deps: McpDeps): McpServer {
       outputSchema: recordSpendOutput,
       annotations: RECORDS
     },
-    (args) =>
+    (args, ctx) =>
       writing(async (saved) => {
         const { state, now } = await read();
         const wanted = args.source.trim().toLowerCase();
         const mode = args.mode ?? 'set';
         const entry: { date?: string; amount: number; mode: 'set' | 'add' } = { amount: args.amount, mode };
         if (args.date !== undefined) entry.date = args.date;
-        const source = agentSource();
+        const source = agentSource(ctx);
 
         // Whether anything could match at all, by the same loose rule the service applies. Only a clean
         // miss may create: an ambiguous name must not add a third source next to the two it matched.
@@ -1240,12 +1253,12 @@ export function createMcpServer(deps: McpDeps): McpServer {
       outputSchema: accountResultOutput,
       annotations: RECORDS
     },
-    (args) =>
+    (args, ctx) =>
       writing(async () => {
         if (args.provider !== undefined && args.custom !== undefined) {
           throw new ValidationError('custom', 'Give provider (a catalog preset) or custom (your own definition), not both.');
         }
-        const source = agentSource();
+        const source = agentSource(ctx);
         if (args.provider !== undefined) {
           const overrides: { label?: string; price?: Price | null; billingDay?: number } = {};
           if (args.label !== undefined) overrides.label = args.label;
@@ -1567,11 +1580,31 @@ function sendRpcError(res: ServerResponse, status: number, code: number, message
 }
 
 /**
- * Stateless Streamable HTTP: a fresh server + transport per POST. GET and DELETE answer 405 with a JSON-RPC error.
+ * Streamable HTTP, stateless: a fresh server for every request, built from the same tool definitions for
+ * both generations of the protocol. Requests of the 2026-07-28 revision carry everything they need and
+ * are answered by the SDK's handler. Requests from clients that still open with a handshake are answered
+ * the way they always were: plain JSON, no session id. GET and DELETE answer 405 with a JSON-RPC error.
  *
  * Mount it behind Host, Origin and token validation: the handler itself trusts whoever reaches it.
  */
 export function createMcpHttpHandler(deps: McpDeps): (req: IncomingMessage, res: ServerResponse, parsedBody: unknown) => Promise<void> {
+  const report = (error: Error): void => log('debug', 'MCP transport error', { error: error.message });
+  const modern = createMcpHandler(() => createMcpServer(deps), { legacy: 'reject', maxRequestBodySize: MAX_BODY_BYTES, onerror: report });
+  const serveModern = toNodeHandler(modern, { onerror: report });
+
+  /** No session id means a restart of the service never strands a client holding a dead one. */
+  const serveLegacy = async (req: IncomingMessage, res: ServerResponse, parsedBody: unknown): Promise<void> => {
+    const server = createMcpServer(deps);
+    const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    transport.onerror = report;
+    res.on('close', () => {
+      void transport.close().catch(() => undefined);
+      void server.close().catch(() => undefined);
+    });
+    await server.connect(transport);
+    await transport.handleRequest(req, res, parsedBody);
+  };
+
   return async (req, res, parsedBody) => {
     if (req.method !== 'POST') {
       // Without sessions there is no stream to open with GET and nothing to end with DELETE. 405 is the
@@ -1579,21 +1612,11 @@ export function createMcpHttpHandler(deps: McpDeps): (req: IncomingMessage, res:
       sendRpcError(res, 405, -32000, 'Method not allowed. This endpoint is stateless: send each JSON-RPC message with POST.', { Allow: 'POST' });
       return;
     }
-    // No session id means a restart of the service never strands a client holding a dead one.
-    const server = createMcpServer(deps);
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-      maxRequestBodySize: MAX_BODY_BYTES
-    });
-    transport.onerror = (error) => log('debug', 'MCP transport error', { error: error.message });
-    res.on('close', () => {
-      void transport.close().catch(() => undefined);
-      void server.close().catch(() => undefined);
-    });
     try {
-      await server.connect(transport);
-      await transport.handleRequest(req, res, parsedBody);
+      // The SDK decides which generation a request belongs to, by the same rule its own entry uses.
+      const legacy = await isLegacyRequest(await toWebRequest(req, parsedBody), undefined, { maxRequestBodySize: MAX_BODY_BYTES });
+      if (legacy) await serveLegacy(req, res, parsedBody);
+      else await serveModern(req, res, parsedBody);
     } catch (error) {
       log('error', 'MCP request failed', { error: error instanceof Error ? error.message : String(error) });
       if (res.headersSent) res.destroy();
@@ -1604,32 +1627,29 @@ export function createMcpHttpHandler(deps: McpDeps): (req: IncomingMessage, res:
 
 /** Serves MCP on stdin/stdout until the streams close. Writes nothing but protocol messages to stdout. */
 export function runMcpStdio(deps: McpDeps): Promise<void> {
-  const server = createMcpServer(deps);
-  const transport = new StdioServerTransport();
   return new Promise<void>((resolve, reject) => {
     let finished = false;
+    let handle: { close(): Promise<void> } | null = null;
     const finish = (): void => {
       if (finished) return;
       finished = true;
       process.stdin.off('end', finish);
       process.stdin.off('close', finish);
       process.stdout.off('error', finish);
-      void server
-        .close()
-        .catch(() => undefined)
-        .then(resolve);
+      void (handle?.close() ?? Promise.resolve()).catch(() => undefined).then(resolve);
     };
-    // The SDK transport never notices the end of its input. A client that exits closes our stdin; without
-    // these the promise would never settle and the command could not shut down in order.
+    // A client that exits closes our stdin. Without these the promise would never settle and the command
+    // could not shut down in order.
     process.stdin.once('end', finish);
     process.stdin.once('close', finish);
     // The client went away while an answer was being written.
     process.stdout.once('error', finish);
-    server.server.onclose = finish;
-    server.server.onerror = (error) => log('warn', 'MCP stdio error', { error: error.message });
-    server.connect(transport).catch((error: unknown) => {
+    try {
+      // One server for the life of the connection; the opening exchange decides which revision it speaks.
+      handle = serveStdio(() => createMcpServer(deps), { onerror: (error) => log('warn', 'MCP stdio error', { error: error.message }) });
+    } catch (error) {
       finished = true;
       reject(error instanceof Error ? error : new Error(String(error)));
-    });
+    }
   });
 }

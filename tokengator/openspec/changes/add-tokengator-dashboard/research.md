@@ -275,8 +275,7 @@ What it changed: the catalog lists a provider's documented ways to use quota una
 - Claude Code and the Antigravity CLI hand their own quota to a status line command. Codex has no scriptable status line. None of the agents' hooks carry rate limits.
 - MCP Apps let a tool attach an inline view that several hosts render. It needs a host to test against.
 
-What it changed: `tokengator skill install` also writes to the two shared skill directories; the Connect panel gained Copilot's shared configuration, Antigravity, and an explanation of why the Claude apps need stdio; `tokengator statusline -- <command>` keeps a status line the user already had. An inline MCP App view was not built because it could not be tested against a host here.
-
+What it changed: the MCP server moved to the v2 SDK and serves both generations of the protocol, with tests for each over HTTP and over a pipe. `tokengator skill install` also writes to the two shared skill directories; the Connect panel gained Copilot's shared configuration, Antigravity, and an explanation of why the Claude apps need stdio; `tokengator statusline -- <command>` keeps a status line the user already had. An inline MCP App view was not built because it could not be tested against a host here.\n
 ## What was not verified
 
 - OpenAI's help centre and terms, and several creative tools' pricing pages, refused automated reading. Presets for those providers are starting points to be checked against the usage page.

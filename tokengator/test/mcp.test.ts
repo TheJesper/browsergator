@@ -6,11 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { LATEST_PROTOCOL_VERSION, type CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { Client, InMemoryTransport, StreamableHTTPClientTransport, type CallToolResult } from '@modelcontextprotocol/client';
+import { StdioServerTransport, serveStdio } from '@modelcontextprotocol/server/stdio';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { addAccount, type AccountInput } from '../src/core/accounts.js';
@@ -86,6 +83,8 @@ vi.mock('../src/core/catalog.js', async (importOriginal) => ({
 }));
 
 /** Thursday 19 November 2026, 12:00 UTC. */
+/** The last revision of the protocol that opens with an `initialize` handshake. */
+const LEGACY_PROTOCOL_VERSION = '2025-11-25';
 const NOW = Date.parse('2026-11-19T12:00:00.000Z');
 const TZ = 'UTC';
 // Sentences that belong to the core are computed with the core here, never spelled out: these tests are
@@ -1507,8 +1506,86 @@ describe('Streamable HTTP', () => {
       body: JSON.stringify({ tool: 'remove_account', account: 'claude', confirm: true })
     });
     expect(response.status).toBe(400);
-    expect(((await response.json()) as { error: { code: number } }).error.code).toBe(-32700);
+    // JSON, but not a request: "Invalid Request" in JSON-RPC's own terms.
+    expect(((await response.json()) as { error: { code: number } }).error.code).toBe(-32600);
     expect(JSON.stringify(await service.state())).toBe(before);
+  });
+});
+
+describe('both generations of the protocol', () => {
+  const MODERN = '2026-07-28';
+
+  it('serves a client of the 2026-07-28 revision without a handshake, and knows who it is on every request', async () => {
+    const service = serviceOn(new MemoryStateStore(fixture()));
+    const { url } = await listen({ service, version: '9.9.9' });
+    const client = new Client({ name: 'modern-agent', version: '1.0.0' }, { versionNegotiation: { mode: { pin: MODERN } } });
+    await client.connect(new StreamableHTTPClientTransport(url));
+    cleanups.push(() => client.close());
+    expect(client.getNegotiatedProtocolVersion()).toBe(MODERN);
+    expect(client.getServerVersion()).toMatchObject({ name: 'tokengator', version: '9.9.9' });
+
+    const tools = await client.listTools();
+    expect(tools.tools.map((tool) => tool.name).sort()).toEqual([...TOOL_NAMES].sort());
+    const reported = await call(client, 'report_usage', { account: 'suno', remaining: 1200 });
+    expect(reported.isError).toBe(false);
+    // Stateless as it is, the reading still carries the name of the agent that sent it.
+    expect(reported.data.meter.source).toBe('agent:modern-agent');
+    const brief = await client.readResource({ uri: 'tokengator://brief' });
+    expect((brief.contents[0] as { text: string }).text).toContain('# AI quota brief');
+  });
+
+  it('lets a client that can speak either find the newer one, and still serves one that only knows the handshake', async () => {
+    const service = serviceOn(new MemoryStateStore(fixture()));
+    const { url } = await listen({ service });
+    const either = new Client({ name: 'either-agent', version: '1.0.0' }, { versionNegotiation: { mode: 'auto' } });
+    await either.connect(new StreamableHTTPClientTransport(url));
+    cleanups.push(() => either.close());
+    expect(either.getNegotiatedProtocolVersion()).toBe(MODERN);
+
+    const older = await httpClient(url, 'older-agent');
+    expect(older.getNegotiatedProtocolVersion()).toBe(LEGACY_PROTOCOL_VERSION);
+    const answer = await call(older, 'what_to_use');
+    expect(answer.isError).toBe(false);
+    expect(answer.data.queue.length).toBeGreaterThan(0);
+  });
+
+  it('answers a request of the newer revision as plain JSON with the headers it mirrors', async () => {
+    const { url } = await listen({ service: serviceOn(new MemoryStateStore(fixture())) });
+    const meta = {
+      'io.modelcontextprotocol/protocolVersion': MODERN,
+      'io.modelcontextprotocol/clientInfo': { name: 'raw-agent', version: '1.0.0' },
+      'io.modelcontextprotocol/clientCapabilities': {}
+    };
+    const post = (headers: Record<string, string>): Promise<Response> =>
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': MODERN, ...headers },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'get_costs', arguments: {}, _meta: meta } })
+      });
+    const response = await post({ 'Mcp-Method': 'tools/call', 'Mcp-Name': 'get_costs' });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('application/json');
+    expect(response.headers.get('mcp-session-id')).toBeNull();
+    const body = (await response.json()) as { id: number; result: CallToolResult };
+    expect(body.id).toBe(3);
+    expect(body.result.structuredContent).toMatchObject({ monthToDate: { USD: 16.5 } });
+
+    // The headers must say what the body says, so that nothing in between can be told one thing and the server another.
+    const mismatched = await post({ 'Mcp-Method': 'tools/call', 'Mcp-Name': 'remove_account' });
+    expect(mismatched.status).toBe(400);
+  });
+
+  it('speaks the newer revision over a pipe as well', async () => {
+    const service = serviceOn(new MemoryStateStore(fixture()));
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    const handle = serveStdio(() => createMcpServer({ service }), { transport: serverSide });
+    cleanups.push(() => handle.close());
+    const client = new Client({ name: 'pipe-agent', version: '1.0.0' }, { versionNegotiation: { mode: 'auto' } });
+    await client.connect(clientSide);
+    cleanups.push(() => client.close());
+    expect(client.getNegotiatedProtocolVersion()).toBe(MODERN);
+    const reported = await call(client, 'report_usage', { account: 'suno', remaining: 1100 });
+    expect(reported.data.meter.source).toBe('agent:pipe-agent');
   });
 });
 
@@ -1586,11 +1663,12 @@ class Wire {
   }
 
   async attach(deps: McpDeps, clientName: string): Promise<void> {
-    const server = createMcpServer(deps);
-    await server.connect(new StdioServerTransport(this.input, this.output));
-    cleanups.push(() => server.close());
+    // The same entry `tokengator mcp` uses, over a pair of streams instead of the process's own.
+    const handle = serveStdio(() => createMcpServer(deps), { transport: new StdioServerTransport(this.input, this.output) });
+    cleanups.push(() => handle.close());
+    // A client from before the 2026-07-28 revision opens with the handshake, and is served as it expects.
     const hello = await this.request('initialize', {
-      protocolVersion: LATEST_PROTOCOL_VERSION,
+      protocolVersion: LEGACY_PROTOCOL_VERSION,
       capabilities: {},
       clientInfo: { name: clientName, version: '1.0.0' }
     });

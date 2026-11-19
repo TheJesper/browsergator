@@ -53,7 +53,7 @@ None. This is the first OpenSpec change in the package; the Browsergator gateway
 
 ## Impact
 
-- **New code**: `tokengator/` (TypeScript, Node 22+). Runtime dependencies are `@modelcontextprotocol/sdk` and `zod` only; the browser bundle has none.
+- **New code**: `tokengator/` (TypeScript, Node 22+). Runtime dependencies are the MCP server SDK (`@modelcontextprotocol/server`, `@modelcontextprotocol/node`) and `zod` only; the browser bundle has none.
 - **Repository**: the root ESLint config ignores `tokengator/` (the package lints itself), CI gains a job that lints, type-checks, tests, builds and audits the package, and the root README links to it.
 - **Local machine**: a state file under `~/.tokengator/` (override with `TOKENGATOR_HOME`), and a loopback HTTP listener on port 4777 while the dashboard is running.
 - **Outbound**: nothing leaves the machine unless the user switches on a collector or sets a reminder address; desktop reminders run the operating system's notification command.

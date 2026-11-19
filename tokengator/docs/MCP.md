@@ -63,6 +63,15 @@ Annotations: the read-only tools declare `readOnlyHint: true`. `update_account` 
 `destructiveHint: true`. `refresh_usage` declares `openWorldHint: true`; every other tool works on local
 state only.
 
+## Protocol revisions
+
+The server speaks the current revision of MCP, 2026-07-28, and the earlier ones that open with an
+`initialize` handshake (2025-11-25 and older), from the same definitions. A client does not have to
+choose: one that probes for the newer revision gets it, one that sends `initialize` is answered as
+it expects. Over HTTP the endpoint is stateless on both: no session id, a plain JSON answer per
+POST, and 405 for GET and DELETE. Clients of the current revision name themselves in every request,
+so their readings are attributed by name (`agent:<name>`) over HTTP as well.
+
 ## Conventions
 
 **Two forms of every result.** Each tool returns a short text block written to be quoted and a

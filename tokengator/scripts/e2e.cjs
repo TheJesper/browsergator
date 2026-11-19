@@ -135,10 +135,16 @@ async function main() {
     check('the row shows the reading', (await page.textContent('.row')).includes('38%'));
 
     // -- MCP over HTTP, and the dashboard following along --------------------------
-    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
-    const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
-    const client = new Client({ name: 'tokengator-e2e', version: '0.0.0' });
+    const { Client, StreamableHTTPClientTransport } = await import('@modelcontextprotocol/client');
+    // A client from before the 2026-07-28 revision first: it opens with a handshake and must still be served.
+    const older = new Client({ name: 'tokengator-e2e-older', version: '0.0.0' });
+    await older.connect(new StreamableHTTPClientTransport(new URL(`${origin}/mcp`)));
+    const olderTools = await older.listTools();
+    check('MCP serves a client that opens with the older handshake', older.getNegotiatedProtocolVersion() === '2025-11-25' && olderTools.tools.length > 10, older.getNegotiatedProtocolVersion());
+    await older.close();
+    const client = new Client({ name: 'tokengator-e2e', version: '0.0.0' }, { versionNegotiation: { mode: 'auto' } });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${origin}/mcp`)));
+    check('MCP serves the 2026-07-28 revision to a client that asks for it', client.getNegotiatedProtocolVersion() === '2026-07-28', client.getNegotiatedProtocolVersion());
     const tools = await client.listTools();
     check('MCP lists its tools', tools.tools.some((tool) => tool.name === 'what_to_use') && tools.tools.some((tool) => tool.name === 'report_usage'), `${tools.tools.length} tools`);
     const first = await client.callTool({ name: 'what_to_use', arguments: {} });
@@ -149,7 +155,15 @@ async function main() {
     check('the dashboard shows the agent reading within five seconds', Boolean(live));
     const state = (await api('GET', '/api/state')).body.state;
     const sunoMeter = state.accounts.find((account) => account.providerId === 'suno').meters[0];
-    check('the reading is marked as reported by an agent', sunoMeter.source.kind === 'agent', JSON.stringify(sunoMeter.source));
+    check('the reading is marked as reported by that agent, by name', sunoMeter.source.kind === 'agent' && sunoMeter.source.id === 'tokengator-e2e', JSON.stringify(sunoMeter.source));
+
+    // -- MCP over stdio, from the built command ---------------------------------------
+    const { StdioClientTransport } = await import('@modelcontextprotocol/client/stdio');
+    const pipe = new Client({ name: 'tokengator-e2e-stdio', version: '0.0.0' }, { versionNegotiation: { mode: 'auto' } });
+    await pipe.connect(new StdioClientTransport({ command: process.execPath, args: [join(root, 'dist/cli/main.js'), 'mcp'], env }));
+    const overPipe = await pipe.callTool({ name: 'what_to_use', arguments: {} });
+    check('the stdio server answers from the same state file', !overPipe.isError && JSON.stringify(overPipe.structuredContent).includes('Suno'), pipe.getNegotiatedProtocolVersion());
+    await pipe.close();
     await client.close();
 
     // -- keyboard, quick entry, copy ------------------------------------------------
