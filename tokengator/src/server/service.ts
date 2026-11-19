@@ -361,6 +361,10 @@ export class TokengatorService {
                   label: collected.providerId,
                   meters: collected.meters.map(fallbackMeter)
                 };
+          // The preset lists everything the plan can have. What the source says this account lacks is left out.
+          const absent = new Set(collected.absent ?? []);
+          const kept = input.meters.filter((meter) => meter.key === undefined || !absent.has(meter.key));
+          if (kept.length > 0) input.meters = kept;
           const added = addAccount(state, input, nowMs, source);
           state = added.state;
           account = added.account;

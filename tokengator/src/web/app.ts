@@ -4,6 +4,7 @@
 import { CATALOG } from '../core/catalog.js';
 import { categoryFor, type ProviderCategory } from '../core/catalog-types.js';
 import { compareViews, summarise, viewState, type MeterView, type SortOrder, type Summary } from '../core/forecast.js';
+import { digestReminders, dueReminders } from '../core/reminders.js';
 import { rollState } from '../core/reset.js';
 import { emptyState, type State } from '../core/types.js';
 import { REMINDERS_OFF, type Backend, type CollectorInfo, type Loaded, type ReminderInfo } from './backend.js';
@@ -257,6 +258,22 @@ export class App {
     const id = this.model.selectedId;
     if (!id) return null;
     return this.allViews().find((view) => view.id === id) ?? null;
+  }
+
+  /**
+   * The one browser notification to raise now, or null. Several quotas due together make one message, as
+   * on every other route. Sample data never raises one: its quotas are invented.
+   */
+  tabReminder(): { title: string; body: string; tag: string; keys: string[] } | null {
+    const { prefs, now, state, reminders, demo } = this.model;
+    if (!prefs.notify || demo) return null;
+    // The service raises the same reminders on this computer when that is switched on. One is enough.
+    if (reminders.desktop.enabled) return null;
+    const due = dueReminders(state, now, prefs.notified);
+    const digest = digestReminders(due);
+    const first = due[0];
+    if (!digest || !first) return null;
+    return { ...digest, tag: first.key, keys: due.map((reminder) => reminder.key) };
   }
 
   categoriesInUse(): ProviderCategory[] {

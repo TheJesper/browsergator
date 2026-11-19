@@ -23,6 +23,11 @@ export interface CollectedAccount {
   /** Catalog plan id, when the source reveals the plan. */
   planId?: string;
   meters: CollectedMeter[];
+  /**
+   * Meter keys the source says this account does not have (a bucket it marks as disabled). An account
+   * created from this reading leaves them out, however complete the catalog's preset is.
+   */
+  absent?: string[];
 }
 
 export interface CollectedSpend {

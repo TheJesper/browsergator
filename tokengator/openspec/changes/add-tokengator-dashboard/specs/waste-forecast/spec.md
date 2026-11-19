@@ -109,7 +109,7 @@ The system SHALL assign every allowance meter exactly one tier: `use-now` (at le
 - **THEN** its tier is `hot` and the system reports the time at which the limit is expected to run out
 
 ### Requirement: Action horizon scales with the window
-The system SHALL use an action horizon of 15% of the window's length, never less than 2 hours and never more than 72 hours, when deciding whether a meter is `use-now`.
+The system SHALL use an action horizon of 15% of the window's length, never less than 2 hours, never more than 72 hours and never more than half the window, when deciding whether a meter is `use-now`.
 
 #### Scenario: Weekly window
 - **WHEN** a meter has a 7-day window
@@ -118,6 +118,10 @@ The system SHALL use an action horizon of 15% of the window's length, never less
 #### Scenario: Monthly window
 - **WHEN** a meter has a 30-day window
 - **THEN** its action horizon is 72 hours
+
+#### Scenario: Window of an hour
+- **WHEN** a meter has a 1-hour window that opened a minute ago with nothing used
+- **THEN** its action horizon is 30 minutes and its tier is `fresh`, not `use-now`
 
 ### Requirement: Required pace
 The system SHALL report, for allowance meters that are `use-now` or `behind`, how many times faster than the pace of the current window the remaining quota would have to be used to finish it before the reset.
@@ -160,4 +164,4 @@ The system SHALL produce the headline and explanation of a meter's state from th
 
 #### Scenario: Same sentence in two places
 - **WHEN** the dashboard shows "Use now: 38% left, resets in 14h" for a meter
-- **THEN** the MCP `what_to_use` tool and the CLI status output use the same headline for that meter at the same moment
+- **THEN** the MCP `what_to_use` tool lists it with that headline, and `tokengator status` closes its table with the same headline for the quota to use first

@@ -152,6 +152,19 @@ describe('Claude Code status line', () => {
     });
     expect(statuslineText(await svc.state(), NOW)).toContain('use now: Suno Pro 64% left');
   });
+
+  it('keeps the numbers of a snoozed account and drops the call to act (review finding)', async () => {
+    const svc = service();
+    const account = await svc.addAccount({
+      providerId: 'claude',
+      label: 'Claude Max',
+      price: { amount: 100, currency: 'USD', period: 'month' },
+      meters: [{ label: 'Weekly limit', key: 'weekly', reset: { kind: 'interval', hours: 168 }, used: 62, resetsAt: new Date(NOW + 14 * 3_600_000).toISOString() }]
+    });
+    expect(statuslineText(await svc.state(), NOW)).toMatch(/^week 38% left 14h \(use now, \$\d+\.\d\d at risk\)$/);
+    await svc.updateAccount(account.id, { snoozedUntil: new Date(NOW + 3 * 86_400_000).toISOString() });
+    expect(statuslineText(await svc.state(), NOW)).toBe('week 38% left 14h');
+  });
 });
 
 describe('Antigravity status line', () => {
@@ -184,6 +197,9 @@ describe('Antigravity status line', () => {
     expect(account?.meters.find((meter) => meter.key === 'gemini-weekly')?.used).toBeCloseTo(6.22);
     expect(account?.meters.find((meter) => meter.key === 'gemini-5h')).toMatchObject({ role: 'throttle', source: { kind: 'statusline', id: 'antigravity-statusline' } });
     expect(JSON.stringify(state)).not.toContain('developer@example.com');
+    // Scenario "Disabled bucket": no meter for it, although the catalog's preset has one.
+    expect(account?.meters.map((meter) => meter.key).sort()).toEqual(['3p-5h', 'gemini-5h', 'gemini-weekly']);
+    expect(readStatusline(input, NOW)?.absent).toEqual(['3p-weekly']);
     expect(line).toContain('week 94% left');
     expect(line).toContain('5h 50% left');
   });
@@ -335,9 +351,41 @@ describe('documented API collectors', () => {
     const result = await anthropicCosts.collect(context({ ANTHROPIC_ADMIN_KEY: SECRET }, fetchImpl, anthropicCosts.allowedHosts));
     expect(result.spend[0]?.days).toEqual([{ date: '2026-11-18', amount: 2 }]);
   });
+
+  it.each([
+    ['OpenRouter', openrouter, 'OPENROUTER_API_KEY'],
+    ['OpenAI costs', openaiCosts, 'OPENAI_ADMIN_KEY'],
+    ['Anthropic costs', anthropicCosts, 'ANTHROPIC_ADMIN_KEY'],
+    ['GitHub Copilot', copilot, 'TOKENGATOR_GITHUB_TOKEN']
+  ] as const)('%s: an authorisation failure is reported as one and names no secret', async (_name, collector, variable) => {
+    for (const status of [401, 403]) {
+      const fetchImpl: FetchLike = () => Promise.resolve(jsonResponse({ error: { message: `bad key ${SECRET}` } }, status));
+      const error = (await collector.collect(context({ [variable]: SECRET }, fetchImpl, collector.allowedHosts)).catch((caught: unknown) => caught)) as CollectorError;
+      expect(error, `${status}`).toBeInstanceOf(CollectorError);
+      expect(error.kind, `${status}`).toBe('auth');
+      expect(error.message).not.toContain(SECRET);
+    }
+  });
 });
 
 describe('GitHub Copilot (undocumented)', () => {
+  it('asks its one endpoint with the token and reads the answer', async () => {
+    const seen: { url: string; headers: Record<string, string> }[] = [];
+    const fetchImpl: FetchLike = (url, init) => {
+      seen.push({ url, headers: init.headers as Record<string, string> });
+      return Promise.resolve(
+        jsonResponse({ copilot_plan: 'individual_pro', token_based_billing: true, quota_reset_date_utc: '2026-12-01T00:00:00.000Z', quota_snapshots: { premium_interactions: { entitlement: '1500', quota_remaining: 1086, unlimited: false } } })
+      );
+    };
+    const result = await copilot.collect(context({ TOKENGATOR_GITHUB_TOKEN: SECRET }, fetchImpl, copilot.allowedHosts));
+    expect(seen).toHaveLength(1);
+    expect(new URL(seen[0]?.url ?? '').host).toBe('api.github.com');
+    expect(seen[0]?.headers['Authorization']).toBe(`token ${SECRET}`);
+    expect(result.accounts[0]).toMatchObject({ providerId: 'copilot' });
+    expect(result.accounts[0]?.meters[0]?.reading).toMatchObject({ limit: 1500, remaining: 1086 });
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+  });
+
   it('is labelled as undocumented', () => {
     expect(copilot.sourceKind).toBe('undocumented-api');
     expect(copilot.description).toMatch(/undocumented/);

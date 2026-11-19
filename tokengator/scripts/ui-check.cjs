@@ -353,6 +353,7 @@ async function reminders(browser) {
   await panel.locator('.collector', { hasText: 'In this browser tab' }).getByRole('button').click();
   await page.waitForTimeout(250);
   check('switching the tab route on is what asks for permission', (await page.evaluate(() => window.__asked)) === 1);
+  check('the tab route says it stays quiet on sample data', /Quiet while this page shows sample data/.test(await panel.innerText()));
   await panel.locator('button', { hasText: 'Copy as .ics' }).click();
   await page.waitForTimeout(150);
   const ics = await clipboard(page);
@@ -441,6 +442,36 @@ async function motion(browser) {
       .filter((style) => seconds(style.transitionDuration) > 0.02 || (style.animationName !== 'none' && seconds(style.animationDuration) > 0.02)).length;
   });
   check('nothing animates when motion is reduced', moving === 0, `${moving} moving elements`);
+  await context.close();
+}
+
+// Sample quotas are invented, so no real notification may ever be raised for them: not with the tab
+// route switched on, and not with permission already granted.
+async function sampleStaysQuiet(browser) {
+  console.log('\nSample data and notifications');
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  await context.addInitScript(() => {
+    window.__raised = [];
+    class Quiet {
+      constructor(title) {
+        window.__raised.push(title);
+      }
+      static requestPermission() {
+        return Promise.resolve('granted');
+      }
+    }
+    Quiet.permission = 'granted';
+    window.Notification = Quiet;
+    localStorage.setItem('tokengator.prefs.v1', JSON.stringify({ notify: true }));
+  });
+  const page = await context.newPage();
+  await page.goto(URL_);
+  await page.waitForSelector('.row');
+  await page.waitForTimeout(400);
+  const useNow = await page.locator('.tabs .count').innerText().catch(() => '0');
+  const raised = await page.evaluate(() => window.__raised);
+  check('the sample has quotas to use now', Number(useNow) > 0, `count ${useNow}`);
+  check('no notification is raised for sample data', raised.length === 0, raised.join(' | '));
   await context.close();
 }
 
@@ -606,6 +637,7 @@ async function reviewed(browser) {
     await reminders(browser);
     await keyboard(browser);
     await motion(browser);
+    await sampleStaysQuiet(browser);
     await reviewed(browser);
   } catch (error) {
     failures += 1;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { renderStatus } from '../../src/cli/render.js';
 import { addAccount, updateAccount, type AccountInput, type MeterInput } from '../../src/core/accounts.js';
 import { agentPrompt, briefMarkdown, meterMarkdown, meterRecord, queueText, snapshot, stamp } from '../../src/core/brief.js';
 import { TIER_ORDER, allowanceQueue, summarise, viewAccount, viewState, type MeterView, type Tier } from '../../src/core/forecast.js';
@@ -515,8 +516,11 @@ describe('one wording everywhere', () => {
     const snap = snapshot(state, NOW, 'UTC'); // what_to_use and status --json
     expect(snap.queue[0]).toMatchObject({ id: 'claude-max:weekly', headline: sentence, tier: 'use-now', state: 'Use now' });
 
-    const text = queueText(state, NOW, 'UTC'); // tool text and CLI status
+    const text = queueText(state, NOW, 'UTC'); // the text of what_to_use
     expect(text.split('\n')).toContain(`1. Claude Max, Weekly: ${sentence} ($7.41 at risk)`);
+
+    // `tokengator status` closes its table with the same sentence for the quota to use first.
+    expect(renderStatus(state, NOW, { timeZone: 'UTC' }).split('\n')).toContain(`First: Claude Max, Weekly: ${sentence} ($7.41 at risk)`);
 
     expect(meterMarkdown(v, NOW, 'UTC')).toContain(`**${sentence}**`); // copy as Markdown
     expect(agentPrompt(v, NOW, 'UTC')).toContain(`Claude Max, Weekly: ${sentence}`); // copy as agent prompt

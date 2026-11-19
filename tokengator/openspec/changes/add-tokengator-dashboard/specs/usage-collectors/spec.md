@@ -88,7 +88,11 @@ The same command SHALL accept the Antigravity CLI's status line JSON, tell it ap
 
 #### Scenario: Disabled bucket
 - **WHEN** a bucket in the input is marked disabled
-- **THEN** no meter is created or updated for it
+- **THEN** no meter is created or updated for it, also when the account is created from this input and the catalog's preset lists that bucket
+
+#### Scenario: Snoozed account in the status line
+- **WHEN** the account of the tool that asked is snoozed and its weekly limit is `use-now`
+- **THEN** the line shows the share left and the time to the reset without the call to use it or the value at risk
 
 ### Requirement: Local session logs
 A collector SHALL be able to read the most recent rate-limit snapshot from Codex session logs on the local machine without contacting any server, ignoring snapshots whose windows have already ended.

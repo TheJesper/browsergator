@@ -11,7 +11,7 @@ import { TIER_ORDER, sortViews, summarise, viewState, type MeterView, type Tier 
 import { formatMoney, formatPercent } from '../core/format.js';
 import { formatAge, formatDuration } from '../core/time.js';
 import type { Price, State } from '../core/types.js';
-import { TIER_HINT, TIER_LABEL, moneyPair, riskMoney, stateLabel, summaryLine } from '../core/wording.js';
+import { TIER_HINT, TIER_LABEL, moneyPair, riskMoney, stateLabel, statusLine, summaryLine } from '../core/wording.js';
 
 export type ColorMode = 'none' | '256' | 'truecolor';
 
@@ -178,6 +178,8 @@ export interface StatusOptions {
   width?: number;
   /** How the CLI is invoked, for the hints. */
   program?: string;
+  /** Zone for clock times in the closing sentence; the machine's own when omitted. */
+  timeZone?: string;
 }
 
 interface Row {
@@ -420,6 +422,11 @@ export function renderStatus(state: State, nowMs: number, options: StatusOptions
   if (lines.length > 0) lines.push('');
   const lost = moneyPair(summary.lost30, summary.creditsLost30, currency);
   if (lost) lines.push(paint(`Expired unused in the last 30 days: ${summary.lostIsEstimate ? 'about ' : ''}${lost}.`, 'muted', mode));
+  // The one to act on, in the sentence the dashboard and the MCP tools use for it.
+  const first = awake[0];
+  if (first && (first.tier === 'use-now' || first.tier === 'behind' || first.tier === 'hot')) {
+    lines.push(`First: ${statusLine(first, nowMs, options.timeZone)}`);
+  }
   lines.push(paint(summaryLine(summary, currency), summary.useNow > 0 ? 'expiring' : null, mode, true));
   if (summary.stale > 0) {
     lines.push(

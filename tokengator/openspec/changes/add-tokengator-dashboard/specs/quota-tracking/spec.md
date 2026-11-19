@@ -182,7 +182,7 @@ The system SHALL ship a catalog of provider presets with their common plans, eac
 
 #### Scenario: Add from a preset
 - **WHEN** a user adds the catalog's GitHub Copilot Pro plan
-- **THEN** an account is created with a monthly premium-request meter that resets on the first day of each month at 00:00 UTC and the plan's list price
+- **THEN** an account is created with a monthly allowance meter (AI credits) that resets on the first day of each month at 00:00 UTC and the plan's list price
 
 #### Scenario: Presets are a starting point
 - **WHEN** a user edits the limit, price or reset rule of an account created from a preset

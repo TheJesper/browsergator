@@ -87,9 +87,13 @@ export interface MeterView {
   needsReset: boolean;
 }
 
-/** Action horizon: the stretch before a reset in which leftover quota becomes "use now". */
+/**
+ * Action horizon: the stretch before a reset in which leftover quota becomes "use now". It is 15% of the
+ * window, between 2 and 72 hours, and never more than half the window: without that last bound a window
+ * of two hours or less would be "use now" from the moment it opened.
+ */
 export function horizonFor(windowMs: number): number {
-  return clamp(windowMs * 0.15, 2 * HOUR, 72 * HOUR);
+  return Math.min(windowMs / 2, clamp(windowMs * 0.15, 2 * HOUR, 72 * HOUR));
 }
 
 /** Projected final used share from the used and elapsed shares of a window. */

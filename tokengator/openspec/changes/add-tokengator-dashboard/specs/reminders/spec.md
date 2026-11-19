@@ -61,6 +61,14 @@ The local service SHALL, only when the `desktopReminders` setting is on and the 
 - **WHEN** the service is serving sample data
 - **THEN** no reminder is delivered through any channel
 
+#### Scenario: Sample data in the browser
+- **WHEN** the dashboard shows sample data, the browser-tab route is switched on and notification permission is granted
+- **THEN** no browser notification is raised
+
+#### Scenario: Several due in the browser tab
+- **WHEN** three quotas become due at the same check while only the browser-tab route is on
+- **THEN** one browser notification is raised, titled with the count
+
 #### Scenario: No notification command
 - **WHEN** the platform has no standard notification command or the command is missing
 - **THEN** the delivery is reported as failed with a reason and the service keeps running

@@ -150,7 +150,21 @@ describe('horizonFor', () => {
     expect(horizonFor(DAY)).toBeCloseTo(3.6 * HOUR, 3);
     expect(horizonFor(10 * DAY)).toBeCloseTo(36 * HOUR, 3);
     expect(horizonFor(365 * DAY)).toBe(72 * HOUR);
-    expect(horizonFor(HOUR)).toBe(2 * HOUR);
+  });
+
+  it('is never more than half the window, so a short window is not "use now" from its first minute (review finding)', () => {
+    expect(horizonFor(HOUR)).toBe(0.5 * HOUR);
+    expect(horizonFor(2 * HOUR)).toBe(HOUR);
+    expect(horizonFor(3 * HOUR)).toBe(1.5 * HOUR);
+    expect(horizonFor(4 * HOUR)).toBe(2 * HOUR);
+    // Scenario "A window that just opened", for windows of one and two hours.
+    for (const hours of [1, 2, 5, 24, 168]) {
+      const v = view(windowed(hours, 0.02, 0), { price: USD_100 });
+      expect(v.tier, `${hours}h`).toBe('fresh');
+      expect(v.valueAtRisk ?? 0, `${hours}h`).toBe(0);
+    }
+    // Its last stretch still is.
+    expect(view(windowed(2, 0.7, 20)).tier).toBe('use-now');
   });
 
   it('is exposed on the view of a meter', () => {

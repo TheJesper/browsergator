@@ -5,7 +5,7 @@ import { briefMarkdown } from '../core/brief.js';
 import { CATEGORY_LABEL, type ProviderCategory } from '../core/catalog-types.js';
 import { SORT_ORDERS, type MeterView, type Money, type SortOrder } from '../core/forecast.js';
 import { formatMoney, formatMoneyTotals, formatPercent } from '../core/format.js';
-import { dueReminders, rememberReminders } from '../core/reminders.js';
+import { rememberReminders } from '../core/reminders.js';
 import { formatAge, formatDuration } from '../core/time.js';
 import { CREDIT_VALUE_NOTE, PLAN_VALUE_NOTE, leftText, summaryLine } from '../core/wording.js';
 import { App, VIEWS, type ViewId } from './app.js';
@@ -544,20 +544,15 @@ function start(app: App, fellBack: boolean): void {
 
   // -- notifications -----------------------------------------------------------
   function notify(): void {
-    const { prefs, now, state, reminders } = app.model;
-    if (!prefs.notify || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
-    // The service raises the same reminders on this computer when that is switched on. One is enough.
-    if (reminders.desktop.enabled) return;
-    const due = dueReminders(state, now, prefs.notified);
-    if (due.length === 0) return;
-    for (const reminder of due) {
-      try {
-        new Notification(reminder.title, { body: reminder.body, tag: reminder.key });
-      } catch {
-        // some platforms only allow notifications from a service worker; the title badge still shows
-      }
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    const reminder = app.tabReminder();
+    if (!reminder) return;
+    try {
+      new Notification(reminder.title, { body: reminder.body, tag: reminder.tag });
+    } catch {
+      // some platforms only allow notifications from a service worker; the title badge still shows
     }
-    app.setPrefs({ notified: rememberReminders(prefs.notified, due.map((reminder) => reminder.key), now) });
+    app.setPrefs({ notified: rememberReminders(app.model.prefs.notified, reminder.keys, app.model.now) });
   }
 
   // -- ticker ------------------------------------------------------------------

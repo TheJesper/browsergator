@@ -241,6 +241,7 @@ export async function status(args: readonly string[], io: Io): Promise<number> {
           color,
           all: flags.switches.has('all'),
           program: PROGRAM,
+          timeZone: service.timeZone,
           // Only a terminal has a width worth fitting; a file or a pipe gets every name in full.
           ...(io.stdout.isTTY === true && io.stdout.columns ? { width: io.stdout.columns } : {})
         })

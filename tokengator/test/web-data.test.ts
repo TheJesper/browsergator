@@ -143,6 +143,41 @@ describe('the shared list behind every view', () => {
     expect(instance.filtered().every((view) => view.account.providerId === 'claude')).toBe(true);
   });
 
+  it('raises one browser reminder for everything due, and none on sample data (review findings)', async () => {
+    const now = Date.now();
+    const backend = new MemoryBackend(emptyState());
+    // Three weekly quotas with a third left, all resetting within the same half day.
+    for (const [index, label] of ['Alpha', 'Bravo', 'Charlie'].entries()) {
+      await backend.addAccount({ label, meters: [{ label: 'Weekly limit', reset: { kind: 'interval', hours: 168 }, used: 60, resetsAt: new Date(now + (3 + index) * 3_600_000).toISOString() }] });
+    }
+    const instance = new App(backend);
+    await instance.use(backend);
+    instance.setPrefs({ notify: true });
+
+    // The in-memory backend is sample data: nothing is raised, whatever the preference says.
+    expect(instance.model.demo).toBe(true);
+    expect(instance.tabReminder()).toBeNull();
+
+    // The same state as the person's own data: one message for the three, most urgent first.
+    instance.model.demo = false;
+    const reminder = instance.tabReminder();
+    expect(reminder?.title).toBe('3 quotas to use now');
+    expect(reminder?.body.split('\n')).toHaveLength(3);
+    expect(reminder?.body).toMatch(/^Alpha: 40% left of the weekly limit/);
+    expect(reminder?.keys).toHaveLength(3);
+    expect(reminder?.tag).toBe(reminder?.keys[0]);
+
+    // Once raised they stay quiet, the service's own channel takes over when it is on, and off is off.
+    instance.setPrefs({ notified: reminder?.keys ?? [] });
+    expect(instance.tabReminder()).toBeNull();
+    instance.setPrefs({ notified: [] });
+    instance.model.reminders = { ...instance.model.reminders, desktop: { ...instance.model.reminders.desktop, enabled: true } };
+    expect(instance.tabReminder()).toBeNull();
+    instance.model.reminders = { ...instance.model.reminders, desktop: { ...instance.model.reminders.desktop, enabled: false } };
+    instance.setPrefs({ notify: false });
+    expect(instance.tabReminder()).toBeNull();
+  });
+
   it('keeps the selection addressable by meter id and notifies listeners', async () => {
     const instance = await app();
     let notified = 0;

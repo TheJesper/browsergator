@@ -130,6 +130,8 @@ describe('status (spec: Command line)', () => {
     expect(copilot).toMatch(/^\s+Behind pace\s/);
     expect(copilot).toMatch(/\s88%\s+1[12]d( \d+h)?\s+\$\d+\.\d\d$/);
     expect(out.trimEnd().split('\n').pop()).toMatch(/^1 quota needs using now, \$\d+\.\d\d at risk\.$/);
+    // Scenario "Same sentence in two places": the headline the dashboard and the MCP tools use.
+    expect(out).toMatch(/^First: Claude Max, Weekly limit: Use now: 38% left, resets in 1[34]h( \d+m)? \(\$\d+\.\d\d at risk\)$/m);
     // Rate limits are context, not quota that can be wasted: they stay out unless asked for.
     expect(out).not.toContain('5-hour session');
     expect(out).not.toContain(ESC);

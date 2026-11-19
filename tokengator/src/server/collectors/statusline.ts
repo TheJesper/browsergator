@@ -24,6 +24,8 @@ export interface StatuslineReading {
   providerId: 'claude' | 'antigravity';
   collectorId: string;
   meters: CollectedMeter[];
+  /** Keys of buckets the tool reported as disabled for this account. */
+  absent?: string[];
 }
 
 /** Pulls the rate-limit windows out of Claude Code status line input. Returns an empty list for anything else. */
@@ -61,22 +63,28 @@ function claudeMeters(document: unknown, nowMs: number): CollectedMeter[] {
 //   quota.<bucket>.remaining_fraction   number 0..1
 //   quota.<bucket>.reset_time           ISO 8601
 // with bucket ids such as gemini-weekly, gemini-5h, 3p-weekly and 3p-5h.
-function antigravityMeters(document: unknown, nowMs: number): CollectedMeter[] {
+function antigravityMeters(document: unknown, nowMs: number): { meters: CollectedMeter[]; absent: string[] } {
   const quota = record(record(document)?.['quota']);
-  if (!quota) return [];
   const meters: CollectedMeter[] = [];
+  const absent: string[] = [];
+  if (!quota) return { meters, absent };
   for (const [bucket, raw] of Object.entries(quota).slice(0, 12)) {
     const entry = record(raw);
-    const remaining = numeric(entry?.['remaining_fraction']);
-    if (!entry || remaining === null || entry['disabled'] === true) continue;
     const key = bucket.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
-    if (!key) continue;
+    if (!entry || !key) continue;
+    // A disabled bucket is not part of this account: no meter is made for it, now or from the preset.
+    if (entry['disabled'] === true) {
+      absent.push(key);
+      continue;
+    }
+    const remaining = numeric(entry['remaining_fraction']);
+    if (remaining === null) continue;
     const reading: CollectedMeter['reading'] = { remainingPercent: Math.min(100, Math.max(0, remaining * 100)) };
     const resetsAt = instant(entry['reset_time']);
     if (resetsAt && Date.parse(resetsAt) > nowMs) reading.resetsAt = resetsAt;
     meters.push({ key, label: bucket, reading });
   }
-  return meters;
+  return { meters, absent };
 }
 
 /** Works out which tool sent the input and what it says. Null when it carries no quota data. */
@@ -90,7 +98,9 @@ export function readStatusline(input: string, nowMs: number): StatuslineReading 
   const claude = claudeMeters(document, nowMs);
   if (claude.length > 0) return { providerId: 'claude', collectorId: STATUSLINE_COLLECTOR_ID, meters: claude };
   const antigravity = antigravityMeters(document, nowMs);
-  if (antigravity.length > 0) return { providerId: 'antigravity', collectorId: ANTIGRAVITY_STATUSLINE_ID, meters: antigravity };
+  if (antigravity.meters.length > 0) {
+    return { providerId: 'antigravity', collectorId: ANTIGRAVITY_STATUSLINE_ID, meters: antigravity.meters, absent: antigravity.absent };
+  }
   return null;
 }
 
@@ -111,11 +121,13 @@ export function statuslineText(state: State, nowMs: number, providerId: string =
     if (session) parts.push(part(session, shortLabel(session)));
     if (weekly) {
       let text = part(weekly, shortLabel(weekly));
-      if (weekly.tier === 'use-now') {
+      // A snoozed account keeps its numbers and loses the call to act, here as in every other alert.
+      const tier = weekly.snoozed ? null : weekly.tier;
+      if (tier === 'use-now') {
         const money = weekly.valueAtRisk && weekly.currency && weekly.valueAtRisk >= 0.005 ? `, ${formatMoney(weekly.valueAtRisk, weekly.currency)} at risk` : '';
         text += ` (use now${money})`;
-      } else if (weekly.tier === 'behind') text += ` (behind pace, ${formatPercent(weekly.projectedUnused)} will expire)`;
-      else if (weekly.tier === 'hot') text += ' (running hot)';
+      } else if (tier === 'behind') text += ` (behind pace, ${formatPercent(weekly.projectedUnused)} will expire)`;
+      else if (tier === 'hot') text += ' (running hot)';
       parts.push(text);
     }
   }
@@ -151,7 +163,8 @@ export async function runStatusline(input: string, service: TokengatorService): 
     const reading = readStatusline(input, service.nowMs());
     if (reading) {
       try {
-        await service.applyCollected(reading.collectorId, [{ providerId: reading.providerId, meters: reading.meters }], []);
+        const account = { providerId: reading.providerId, meters: reading.meters, ...(reading.absent ? { absent: reading.absent } : {}) };
+        await service.applyCollected(reading.collectorId, [account], []);
       } catch {
         // The state file may be locked or read-only; the line below still reflects what is stored.
       }

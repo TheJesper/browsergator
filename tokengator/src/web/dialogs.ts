@@ -888,7 +888,7 @@ export function remindersDialog(ctx: Ctx, tab: TabNotifications): void {
           'In this browser tab',
           'A browser notification while a Tokengator tab is open.',
           switchButton(tab.on(), false, () => void tab.toggle().then(draw)),
-          [tag(tab.on() ? 'on' : 'off')]
+          [tag(tab.on() ? 'on' : 'off'), demo ? h('span', null, 'Quiet while this page shows sample data.') : null]
         ),
         row(
           'On this computer',
