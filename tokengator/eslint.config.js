@@ -46,12 +46,21 @@ export default tseslint.config(
     languageOptions: { sourceType: 'module', globals: nodeGlobals }
   },
   {
-    // The end-to-end script is CommonJS so it can `require` a globally installed Playwright, and it
-    // passes functions into the page, where `document` and `navigator` exist.
+    // The end-to-end and browser checks are CommonJS so they can `require` a globally installed Playwright,
+    // and they pass functions into the page, where `document` and `navigator` exist.
     files: ['scripts/**/*.cjs'],
     languageOptions: {
       sourceType: 'commonjs',
-      globals: { ...nodeGlobals, require: 'readonly', module: 'readonly', __dirname: 'readonly', document: 'readonly', navigator: 'readonly' }
+      globals: {
+        ...nodeGlobals,
+        require: 'readonly',
+        module: 'readonly',
+        __dirname: 'readonly',
+        document: 'readonly',
+        navigator: 'readonly',
+        getComputedStyle: 'readonly',
+        HTMLElement: 'readonly'
+      }
     },
     rules: { '@typescript-eslint/no-require-imports': 'off' }
   }

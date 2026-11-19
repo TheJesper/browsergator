@@ -202,7 +202,20 @@ The token is never accepted in a query string, where it would end up in history 
 
 ## Provider sources
 
-Filled in from the research pass; see `research.md` in this change for sources and the verification verdicts.
+What each shipped collector reads, and how sure the research pass was of it. `research.md` in this change has the sources and the verification verdicts.
+
+| Collector | Reads | Standing |
+| --- | --- | --- |
+| `claude-statusline` | The JSON Claude Code pipes to its status line command: `rate_limits.five_hour` and `rate_limits.seven_day`, each with `used_percentage` and `resets_at` (Unix seconds). | Documented by Anthropic. Present only for subscription sign-ins, and only after the first response of a session. |
+| `antigravity-statusline` | The JSON the Antigravity CLI pipes to its status line command: `quota.<bucket>.remaining_fraction` and `reset_time`. | Documented by Google. Buckets are created as they appear, since their names are per model family. |
+| `codex-sessions` | The newest `payload.rate_limits` snapshot in `~/.codex/sessions/**/rollout-*.jsonl`: `primary` and `secondary`, each with `used_percent`, `window_minutes` and `resets_at`. | A local file format, not a contract. Windows are classified by their length, never by position, because plans differ in which window comes first. |
+| `elevenlabs` | `GET /v1/user/subscription`: `character_count`, `character_limit`, `next_character_count_reset_unix`. | Documented. The reset field is optional, so a missing one leaves the schedule as it was. |
+| `openrouter` | `GET /api/v1/credits`: `total_credits`, `total_usage`. | Documented. Needs a key allowed to read credits. |
+| `openai-costs` | `GET /v1/organization/costs` in daily buckets. | Documented. Needs an organisation admin key. |
+| `anthropic-costs` | `GET /v1/organizations/cost_report` in daily buckets. | Documented. Needs an organisation admin key; data ends at the last UTC midnight. |
+| `copilot` | `GET /copilot_internal/user`: `quota_snapshots.premium_interactions` and `quota_reset_at`. | Undocumented and labelled so. The editor uses it; GitHub may change it without notice. |
+
+Everything else in the catalog has no source that could be verified and that a third party may call with the user's own key: the provider's usage page is the source, and an agent or the user reads it. Session-cookie endpoints (ChatGPT, Cursor, Suno, Midjourney and others) are deliberately not used: they need browser credentials Tokengator must never hold.
 
 ## Risks / Trade-offs
 
@@ -210,7 +223,7 @@ Filled in from the research pass; see `research.md` in this change for sources a
 - [A linear forecast is wrong for bursty users] → Tiers use generous thresholds, the inspector shows real samples, and "stale" is surfaced so old data is not trusted.
 - [Manual meters go stale and the dashboard cries wolf] → Staleness is shown on the bar and in every summary; the queue separates "use now" from "needs an update".
 - [Two processes writing one file] → Lock directory plus read-modify-write inside the lock; covered by a concurrency test.
-- [Local web servers are a classic rebinding target] → Host and Origin checks on every route, JSON-only writes, optional token, SDK rebinding protection on `/mcp`.
+- [Local web servers are a classic rebinding target] → Host and Origin checks on every route, JSON-only writes, optional token; the MCP endpoint sits behind the same checks.
 - [Catalog prices and limits drift] → Presets are a starting point and every field is editable; the catalog records the date it was checked.
 - [The skill could push agents to burn quota for its own sake] → The skill forbids it in so many words and the spec has a requirement for it.
 

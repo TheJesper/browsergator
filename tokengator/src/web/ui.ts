@@ -102,19 +102,25 @@ export function showMenu(anchor: HTMLElement, entries: MenuEntry[]): void {
     const target = event.target as Node;
     if (!el.contains(target) && !anchor.contains(target)) close();
   };
+  // A menu follows nothing: when the page moves under it, it closes. Scrolling inside the menu itself, or a
+  // scroll that leaves the anchor where it was, is not that.
+  const onScroll = (): void => {
+    const moved = anchor.getBoundingClientRect();
+    if (Math.abs(moved.top - a.top) > 1 || Math.abs(moved.left - a.left) > 1) close();
+  };
   function close(): void {
     el.remove();
     document.removeEventListener('keydown', onKey, true);
     document.removeEventListener('pointerdown', onPointer, true);
     removeEventListener('resize', close);
-    removeEventListener('scroll', close, true);
+    removeEventListener('scroll', onScroll, true);
     anchor.setAttribute('aria-expanded', 'false');
     if (openMenu?.el === el) openMenu = null;
   }
   document.addEventListener('keydown', onKey, true);
   document.addEventListener('pointerdown', onPointer, true);
   addEventListener('resize', close);
-  addEventListener('scroll', close, true);
+  addEventListener('scroll', onScroll, true);
   anchor.setAttribute('aria-haspopup', 'menu');
   anchor.setAttribute('aria-expanded', 'true');
   openMenu = { el, anchor, close };
@@ -145,7 +151,19 @@ export function openDialog(options: { title: string; class?: string; onClose?: (
   const errorLine = h('p', { class: 'err', role: 'alert', hidden: true });
   const foot = h('div', { class: 'dlg-foot' }, errorLine);
   const el = h('dialog', { class: `dialog ${options.class ?? ''}`.trim(), 'aria-label': options.title });
-  const close = (): void => el.close();
+  // The platform reports a close a task later. Until then the closed dialog would still be in the page
+  // holding focus, and a shortcut pressed straight after Esc would be taken for typing. So tidy up at once.
+  let finished = false;
+  const finish = (): void => {
+    if (finished) return;
+    finished = true;
+    el.remove();
+    options.onClose?.();
+  };
+  const close = (): void => {
+    if (el.open) el.close();
+    finish();
+  };
   if (options.head !== false) {
     el.appendChild(
       h(
@@ -157,10 +175,11 @@ export function openDialog(options: { title: string; class?: string; onClose?: (
     );
   }
   el.append(body, foot);
-  el.addEventListener('close', () => {
-    el.remove();
-    options.onClose?.();
+  el.addEventListener('cancel', (event) => {
+    event.preventDefault();
+    close();
   });
+  el.addEventListener('close', finish);
   // A click on the backdrop lands on the dialog element itself.
   el.addEventListener('mousedown', (event) => {
     if (event.target === el) close();

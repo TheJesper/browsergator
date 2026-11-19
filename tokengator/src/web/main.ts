@@ -441,6 +441,7 @@ function start(app: App, fellBack: boolean): void {
 
     // Keep keyboard focus on the same row across a rebuild.
     const focused = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>('[data-id]')?.dataset['id'];
+    const updating = document.activeElement?.id === 'insp-update';
     const scrollY = window.scrollY;
 
     const view = prefs.view;
@@ -467,6 +468,8 @@ function start(app: App, fellBack: boolean): void {
     if (focused) {
       const again = pane.querySelector<HTMLElement>(`[data-nav="row"][data-id="${CSS.escape(focused)}"]`);
       again?.focus({ preventScroll: true });
+    } else if (updating) {
+      layout.querySelector<HTMLElement>('#insp-update')?.focus({ preventScroll: true });
     }
     if (window.scrollY !== scrollY) window.scrollTo({ top: scrollY });
     notify();

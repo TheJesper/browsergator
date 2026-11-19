@@ -1,0 +1,426 @@
+#!/usr/bin/env node
+// Browser check of the dashboard, run against the single-file sample page so it needs no server.
+//
+//   node scripts/build.mjs --web --demo && node scripts/ui-check.cjs
+//
+// Playwright is not a dependency of this package: the check runs where it is installed and reports
+// "skipped" where it is not. It drives the page the way a person would (keys, clicks, typing) and
+// asserts what they would see: views, quick entry, dialogs, copy contents, focus, narrow layout.
+
+const { existsSync } = require('node:fs');
+const { resolve } = require('node:path');
+const { pathToFileURL } = require('node:url');
+
+let chromium;
+try {
+  ({ chromium } = require('playwright'));
+} catch {
+  console.log('ui-check: skipped (Playwright is not installed)');
+  process.exit(0);
+}
+
+const page_ = resolve(__dirname, '..', 'dist', 'demo', 'index.html');
+if (!existsSync(page_)) {
+  console.error('ui-check: dist/demo/index.html is missing. Run: node scripts/build.mjs --web --demo');
+  process.exit(1);
+}
+const URL_ = pathToFileURL(page_).href;
+
+const results = [];
+let failures = 0;
+
+function check(name, pass, detail = '') {
+  results.push({ name, pass });
+  if (!pass) failures += 1;
+  console.log(`${pass ? '  ok  ' : ' FAIL '} ${name}${!pass && detail ? `\n        ${detail}` : ''}`);
+}
+
+async function open(browser, { width = 1280, height = 900, theme = 'light', reducedMotion = 'no-preference' } = {}) {
+  const context = await browser.newContext({ viewport: { width, height }, colorScheme: theme, reducedMotion });
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => undefined);
+  const page = await context.newPage();
+  const errors = [];
+  const requests = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text());
+  });
+  page.on('request', (request) => {
+    const url = request.url();
+    if (!url.startsWith('file:') && !url.startsWith('data:') && !url.startsWith('blob:')) requests.push(url);
+  });
+  await page.goto(URL_);
+  await page.waitForSelector('.row');
+  return { context, page, errors, requests };
+}
+
+const clipboard = (page) => page.evaluate(() => navigator.clipboard.readText());
+const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+const menuItem = (page, text) => page.locator('.menu .menu-item', { hasText: text }).first();
+const dialogGone = (page) => page.waitForSelector('dialog[open]', { state: 'detached', timeout: 3000 }).then(() => true, () => false);
+const mainText = (page) => page.locator('#main').innerText();
+
+const VIEWS = [
+  ['1', 'queue', '.queue'],
+  ['2', 'board', '.cards'],
+  ['3', 'timeline', '.tl'],
+  ['4', 'table', '.tbl'],
+  ['5', 'costs', '.spend'],
+  ['6', 'history', '.hist-row']
+];
+
+async function views(browser) {
+  console.log('\nViews and themes');
+  for (const theme of ['light', 'dark']) {
+    const { context, page, errors, requests } = await open(browser, { theme });
+    for (const [key, name, selector] of VIEWS) {
+      await page.keyboard.press(key);
+      const shown = (await page.$(selector)) !== null;
+      const hash = new URL(page.url()).hash.replace('#', '');
+      const current = await page.locator('.tabs [aria-current="page"]').innerText();
+      check(`${theme}: key ${key} shows ${name}`, shown && (hash === name || (name === 'queue' && hash === '')) && current.toLowerCase().startsWith(name), `shown=${shown} hash=${hash} current=${current}`);
+      check(`${theme}: ${name} fits 1280 without sideways scroll`, (await overflow(page)) <= 0);
+    }
+    const scheme = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    const [r, g, b] = scheme.match(/\d+/g).map(Number);
+    check(`${theme}: page ground follows the system theme`, theme === 'dark' ? r + g + b < 200 : r + g + b > 600, scheme);
+    check(`${theme}: no script errors`, errors.length === 0, errors.join(' | '));
+    check(`${theme}: sample page makes no network requests`, requests.length === 0, requests.join(' | '));
+    await context.close();
+  }
+}
+
+async function narrow(browser) {
+  console.log('\nPhone width');
+  for (const theme of ['light', 'dark']) {
+    const { context, page, errors } = await open(browser, { width: 400, height: 800, theme });
+    for (const [key, name, selector] of VIEWS) {
+      await page.keyboard.press(key);
+      await page.waitForSelector(selector);
+      check(`${theme} 400px: ${name} does not scroll sideways`, (await overflow(page)) <= 0, `overflow ${await overflow(page)}px`);
+    }
+    await page.keyboard.press('1');
+    await page.locator('.row .row-name').first().click();
+    await page.waitForSelector('.insp');
+    const box = await page.locator('.insp').boundingBox();
+    check(`${theme} 400px: details fit the screen`, box !== null && box.x >= 0 && box.x + box.width <= 400.5, JSON.stringify(box));
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('u');
+    await page.waitForSelector('dialog[open]');
+    const dialog = await page.locator('dialog[open]').boundingBox();
+    check(`${theme} 400px: quick entry fits the screen`, dialog !== null && dialog.x >= 0 && dialog.x + dialog.width <= 400.5, JSON.stringify(dialog));
+    await page.keyboard.press('Escape');
+    check(`${theme} 400px: no script errors`, errors.length === 0, errors.join(' | '));
+    await context.close();
+  }
+}
+
+async function quickEntry(browser) {
+  console.log('\nQuick entry');
+  const { context, page, errors } = await open(browser);
+  await page.keyboard.press('u');
+  await page.waitForSelector('dialog[open]');
+  check('U opens quick entry with the input focused', await page.evaluate(() => document.activeElement?.id === 'quick-input'));
+  await page.keyboard.type('suno 1200 left resets in 9d');
+  await page.waitForSelector('.palette-preview.ok');
+  const preview = await page.locator('.palette-preview').innerText();
+  check('the preview spells out used and left before saving', /1,300 credits used/.test(preview) && /1,200 credits left/.test(preview) && /in 9d/.test(preview), preview);
+  await page.keyboard.press('Enter');
+  check('Enter saves and closes', await dialogGone(page));
+  const row = page.locator('.row[data-id="suno:credits"], .row[data-id^="suno"]').first();
+  const text = (await row.count()) ? await row.innerText() : await mainText(page);
+  check('the row shows the new reading', /48%/.test(text), text.replace(/\s+/g, ' ').slice(0, 160));
+
+  await page.keyboard.press('u');
+  await page.waitForSelector('dialog[open]');
+  await page.keyboard.type('claude 50%');
+  await page.waitForFunction(() => document.querySelectorAll('dialog[open] .cands > *').length > 0, null, { timeout: 3000 }).catch(() => undefined);
+  const candidates = await page.locator('dialog[open] .cands > *').count();
+  check('an ambiguous name lists the meters it could mean', candidates >= 2, `candidates=${candidates}`);
+  await page.keyboard.press('Escape');
+  check('Esc closes without saving', await dialogGone(page));
+
+  await page.keyboard.press('u');
+  await page.waitForSelector('dialog[open]');
+  await page.keyboard.type('nosuchthing 50%');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(250);
+  check('an unknown name stays open and says why', (await page.$('dialog[open]')) !== null && !/ok/.test((await page.locator('.palette-preview').getAttribute('class')) ?? ''));
+  await page.keyboard.press('Escape');
+  check('no script errors', errors.length === 0, errors.join(' | '));
+  await context.close();
+}
+
+async function inspector(browser) {
+  console.log('\nInspector');
+  const { context, page, errors } = await open(browser);
+  const first = page.locator('.row .row-name').first();
+  await first.click();
+  await page.waitForSelector('.insp');
+  check('a row opens its details and says so to assistive tech', (await first.getAttribute('aria-expanded')) === 'true');
+  const chartMarks = await page.locator('.insp .chart svg').count();
+  check('details draw the window chart', chartMarks >= 1);
+  await page.fill('#insp-update', '70%');
+  await page.waitForTimeout(200);
+  const preview = await page.locator('.insp .preview').innerText();
+  check('inline update previews the reading', /70%/.test(preview), preview);
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => /70%/.test(document.querySelector('.insp .facts')?.textContent ?? ''), null, { timeout: 3000 }).catch(() => undefined);
+  check('inline update saves', /70%/.test(await page.locator('.insp .facts').innerText()));
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  check('Esc closes the details', (await page.$('.insp')) === null);
+  check('no script errors', errors.length === 0, errors.join(' | '));
+  await context.close();
+}
+
+async function copying(browser) {
+  console.log('\nCopy');
+  const { context, page, errors } = await open(browser);
+  await page.keyboard.press('c');
+  await page.waitForSelector('.toast');
+  const brief = await clipboard(page);
+  check('C copies a Markdown brief', brief.startsWith('#') && /Claude Max/.test(brief) && /Use now/i.test(brief), brief.slice(0, 120));
+  check('copying is confirmed on screen', /cop/i.test(await page.locator('.toast').first().innerText()));
+
+  const copyButton = page.locator('.row [aria-label^="Copy "]').first();
+  const wanted = [
+    ['Copy status line', (text) => /^Claude Max, Weekly limit: /.test(text) && !text.includes('\n')],
+    ['Copy as Markdown', (text) => /Claude Max/.test(text) && /\*\*|^#|^- /m.test(text)],
+    ['Copy as JSON', (text) => JSON.parse(text) && /claude-max:weekly/.test(text)],
+    ['Copy agent prompt', (text) => /Claude Max/.test(text) && text.length > 120]
+  ];
+  for (const [label, valid] of wanted) {
+    await copyButton.click();
+    await menuItem(page, label).click();
+    await page.waitForTimeout(120);
+    const text = await clipboard(page);
+    let pass;
+    try {
+      pass = Boolean(valid(text));
+    } catch {
+      pass = false;
+    }
+    check(`${label} puts the right thing on the clipboard`, pass, text.slice(0, 140));
+  }
+
+  await page.keyboard.press('4');
+  await page.waitForSelector('.tbl');
+  for (const [label, valid] of [
+    ['CSV', (text) => text.split('\n').length > 3 && text.split('\n')[0].includes(',')],
+    ['Markdown', (text) => text.split('\n').length > 3 && text.startsWith('|') && /\| ?-{3}/.test(text)]
+  ]) {
+    const button = page.getByRole('button', { name: label, exact: true });
+    if ((await button.count()) === 0) {
+      check(`the table offers ${label}`, false, 'no such button');
+      continue;
+    }
+    await button.click();
+    await page.waitForTimeout(120);
+    const text = await clipboard(page);
+    check(`the table copies as ${label}`, valid(text), text.slice(0, 100));
+  }
+
+  // Without clipboard access the text is offered for manual copying instead of being lost.
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: () => Promise.reject(new Error('denied')) } });
+  });
+  await page.keyboard.press('1');
+  await page.keyboard.press('c');
+  await page.waitForSelector('dialog[open] textarea', { timeout: 3000 }).catch(() => undefined);
+  const manual = await page.$('dialog[open] textarea');
+  check('a refused clipboard falls back to selectable text', manual !== null && /Claude Max/.test(await manual.inputValue()));
+  await page.keyboard.press('Escape');
+  check('no script errors', errors.filter((message) => !/denied/.test(message)).length === 0, errors.join(' | '));
+  await context.close();
+}
+
+async function managing(browser) {
+  console.log('\nAdd, edit, snooze, delete, connect');
+  const { context, page, errors } = await open(browser);
+
+  // Add from the catalog.
+  await page.keyboard.press('a');
+  await page.waitForSelector('dialog[open]');
+  await page.fill('#add-search', 'udio');
+  await page.locator('dialog[open] .provider', { hasText: 'Udio' }).click();
+  const add = page.locator('dialog[open] .btn.primary');
+  await page.waitForFunction(() => !document.querySelector('dialog[open] .btn.primary')?.disabled, null, { timeout: 3000 }).catch(() => undefined);
+  await add.click();
+  check('a catalog subscription is added', (await dialogGone(page)) && /Udio/.test(await mainText(page)));
+
+  // Add a custom one.
+  await page.keyboard.press('a');
+  await page.waitForSelector('dialog[open]');
+  await page.locator('dialog[open] .provider', { hasText: 'Something else' }).click();
+  await page.fill('#add-label', 'Check Custom');
+  await page.fill('dialog[open] input[id$="-label"]:not(#add-label)', 'Fast hours');
+  await page.selectOption('dialog[open] select[id$="-unit"]', 'hours');
+  await page.fill('dialog[open] input[id$="-limit"]', '15');
+  await page.locator('dialog[open] .btn.primary').click();
+  check('a custom subscription is added', (await dialogGone(page)) && /Check Custom/.test(await mainText(page)), await page.locator('dialog[open] .err').innerText().catch(() => ''));
+
+  // Refuse an incomplete one, in place.
+  await page.keyboard.press('a');
+  await page.waitForSelector('dialog[open]');
+  await page.locator('dialog[open] .provider', { hasText: 'Something else' }).click();
+  await page.fill('#add-label', '');
+  const disabled = await page.locator('dialog[open] .btn.primary').isDisabled();
+  if (!disabled) await page.locator('dialog[open] .btn.primary').click();
+  await page.waitForTimeout(150);
+  check('an incomplete subscription is refused in the dialog', (await page.$('dialog[open]')) !== null);
+  await page.keyboard.press('Escape');
+
+  // Edit. (A new subscription opens in the details pane, which takes over the row's own actions.)
+  await page.keyboard.press('Escape');
+  const row = page.locator('.row', { hasText: 'Check Custom' }).first();
+  await row.locator('[aria-label^="More actions"]').click();
+  await menuItem(page, 'Edit subscription').click();
+  await page.waitForSelector('dialog[open]');
+  const label = page.locator('dialog[open] input').first();
+  await label.fill('Check Renamed');
+  await page.locator('dialog[open] .btn.primary').click();
+  check('an edit is saved', (await dialogGone(page)) && /Check Renamed/.test(await mainText(page)));
+
+  // Snooze.
+  const urgent = page.locator('.row').first();
+  const urgentId = await urgent.getAttribute('data-id');
+  await urgent.locator('[aria-label^="More actions"]').click();
+  await menuItem(page, 'For a day').click();
+  await page.waitForTimeout(200);
+  const firstNow = await page.locator('.row').first().getAttribute('data-id');
+  check('a snoozed quota leaves the top of the queue', firstNow !== urgentId, `still first: ${firstNow}`);
+  check('a snoozed quota stays on screen', /Snoozed/i.test(await mainText(page)));
+
+  // Delete, with a confirmation that can be declined.
+  const target = page.locator('.row', { hasText: 'Check Renamed' }).first();
+  await target.locator('[aria-label^="More actions"]').click();
+  await menuItem(page, 'Delete').click();
+  await page.waitForSelector('dialog[open]');
+  await page.keyboard.press('Escape');
+  await dialogGone(page);
+  check('declining the confirmation keeps the subscription', /Check Renamed/.test(await mainText(page)));
+  await page.locator('.row', { hasText: 'Check Renamed' }).first().locator('[aria-label^="More actions"]').click();
+  await menuItem(page, 'Delete').click();
+  await page.waitForSelector('dialog[open]');
+  await page.locator('dialog[open] .btn.danger, dialog[open] .btn.primary').last().click();
+  await dialogGone(page);
+  check('confirming removes it', !/Check Renamed/.test(await mainText(page)));
+
+  // Connect panel.
+  await page.locator('[aria-label="Menu"]').click();
+  await menuItem(page, 'Connect agents').click();
+  await page.waitForSelector('dialog[open] .snip');
+  const panel = await page.locator('dialog[open]').innerText();
+  check('the connect panel has MCP, status line and skill snippets', /mcp/i.test(panel) && /statusline/i.test(panel) && /skill/i.test(panel));
+  await page.locator('dialog[open] .snip .btn.small').first().click();
+  await page.waitForTimeout(120);
+  check('a snippet copies', /tokengator/i.test(await clipboard(page)), (await clipboard(page)).slice(0, 120));
+  await page.keyboard.press('Escape');
+  check('no script errors', errors.length === 0, errors.join(' | '));
+  await context.close();
+}
+
+async function keyboard(browser) {
+  console.log('\nKeyboard only');
+  const { context, page, errors } = await open(browser);
+  await page.keyboard.press('j');
+  await page.keyboard.press('j');
+  const second = await page.locator('.row .row-name').nth(1).getAttribute('data-id');
+  check('J moves focus down the rows', (await page.evaluate(() => document.activeElement?.getAttribute('data-id'))) === second);
+  await page.keyboard.press('k');
+  const firstId = await page.locator('.row .row-name').first().getAttribute('data-id');
+  check('K moves it back', (await page.evaluate(() => document.activeElement?.getAttribute('data-id'))) === firstId);
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.insp');
+  check('Enter opens the focused row', true);
+  await page.keyboard.press('Escape');
+  check('Esc returns focus to the row', (await page.evaluate(() => document.activeElement?.getAttribute('data-id'))) === firstId);
+
+  await page.keyboard.press('/');
+  check('/ focuses the filter', await page.evaluate(() => document.activeElement?.id === 'filter'));
+  await page.keyboard.type('suno');
+  await page.waitForTimeout(150);
+  const rows = await page.locator('.row').count();
+  check('typing filters the rows', rows >= 1 && (await page.locator('.row', { hasText: 'Suno' }).count()) === rows, `rows=${rows}`);
+  check('view keys are typed, not acted on, inside the filter', await (async () => {
+    await page.keyboard.type('3');
+    return (await page.inputValue('#filter')) === 'suno3' && (await page.$('.tl')) === null;
+  })());
+  await page.keyboard.press('Escape');
+  check('Esc clears the filter', (await page.inputValue('#filter')) === '');
+  await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+
+  await page.keyboard.press('?');
+  await page.waitForSelector('dialog[open]');
+  check('? lists the shortcuts', /shortcut/i.test(await page.locator('dialog[open]').innerText()));
+  check('focus is inside the dialog', await page.evaluate(() => document.querySelector('dialog[open]')?.contains(document.activeElement) ?? false));
+  await page.keyboard.press('Escape');
+  await dialogGone(page);
+
+  const before = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+  await page.keyboard.press('t');
+  const after = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+  check('T switches the theme', before !== after && (after === 'dark' || after === 'light'), `${before} -> ${after}`);
+
+  await page.keyboard.press('s');
+  await page.waitForSelector('.toast');
+  check('S changes the order and says which', /order|sort|first|soon|risk|name/i.test(await page.locator('.toast').last().innerText()));
+
+  // Tab reaches every control in the bar, and every one shows a focus ring.
+  await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+  const seen = [];
+  for (let i = 0; i < 14; i += 1) {
+    await page.keyboard.press('Tab');
+    seen.push(await page.evaluate(() => {
+      const el = document.activeElement;
+      if (!el || el === document.body) return null;
+      const style = getComputedStyle(el);
+      return { tag: el.tagName, ring: style.outlineStyle !== 'none' || style.boxShadow !== 'none' };
+    }));
+  }
+  const focused = seen.filter(Boolean);
+  check('Tab walks the controls', focused.length >= 12, `${focused.length} stops`);
+  check('every stop shows a focus ring', focused.every((stop) => stop.ring), JSON.stringify(focused.filter((stop) => !stop.ring)));
+
+  check('the tab title counts what needs using', /^\(\d+\) /.test(await page.title()), await page.title());
+  check('no script errors', errors.length === 0, errors.join(' | '));
+  await context.close();
+}
+
+async function motion(browser) {
+  console.log('\nReduced motion');
+  const { context, page } = await open(browser, { reducedMotion: 'reduce' });
+  await page.locator('.row .row-name').first().click();
+  await page.waitForSelector('.insp');
+  const moving = await page.evaluate(() => {
+    const seconds = (value) => Math.max(...value.split(',').map((part) => (part.trim().endsWith('ms') ? parseFloat(part) / 1000 : parseFloat(part) || 0)));
+    return [...document.querySelectorAll('.row, .insp, .tab, .btn, .seg-used, .seg-exp, .fbar-now')]
+      .map((el) => getComputedStyle(el))
+      .filter((style) => seconds(style.transitionDuration) > 0.02 || (style.animationName !== 'none' && seconds(style.animationDuration) > 0.02)).length;
+  });
+  check('nothing animates when motion is reduced', moving === 0, `${moving} moving elements`);
+  await context.close();
+}
+
+(async () => {
+  const browser = await chromium.launch();
+  try {
+    await views(browser);
+    await narrow(browser);
+    await quickEntry(browser);
+    await inspector(browser);
+    await copying(browser);
+    await managing(browser);
+    await keyboard(browser);
+    await motion(browser);
+  } catch (error) {
+    failures += 1;
+    console.error(`\nui-check: stopped early: ${error instanceof Error ? error.stack : String(error)}`);
+  } finally {
+    await browser.close();
+  }
+  const passed = results.filter((result) => result.pass).length;
+  console.log(`\nui-check: ${passed} passed, ${results.length - passed} failed${failures > results.length - passed ? ' (and stopped early)' : ''}`);
+  process.exit(failures === 0 ? 0 : 1);
+})();

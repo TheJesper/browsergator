@@ -76,8 +76,15 @@ export function inspector(ctx: Ctx, view: MeterView): HTMLElement {
       refreshPreview();
       return;
     }
-    const ok = await ctx.actions.run(ctx.app.model.backend.quick(line()), 'Updated');
-    if (ok) input.value = '';
+    // Empty the field before the change lands: a rebuild is held back while it still has text in it.
+    const typed = input.value;
+    const text = line();
+    input.value = '';
+    const ok = await ctx.actions.run(ctx.app.model.backend.quick(text), 'Updated');
+    if (!ok && input.isConnected) {
+      input.value = typed;
+      refreshPreview();
+    }
   };
   input.addEventListener('input', refreshPreview);
   input.addEventListener('keydown', (event) => {

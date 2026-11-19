@@ -40,6 +40,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:ui": "node scripts/build.mjs --web --demo && node scripts/ui-check.cjs",
+    "test:e2e": "node scripts/e2e.cjs",
     "spec:validate": "openspec validate --all --strict"
   },
   "dependencies": {
