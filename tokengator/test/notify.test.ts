@@ -11,6 +11,7 @@ import {
   NOTIFY_URL_VARIABLE,
   ReminderRunner,
   TEST_MESSAGE,
+  WINDOWS_TOAST_SCRIPT,
   desktopCommand,
   webhookRequest,
   webhookTarget,
@@ -80,9 +81,14 @@ describe('desktopCommand', () => {
 
     const windows = desktopCommand('win32', HOSTILE);
     expect(windows?.command).toBe('powershell.exe');
-    expect(windows?.args.slice(0, 4)).toEqual(['-NoProfile', '-NonInteractive', '-NoLogo', '-Command']);
-    expect(windows?.args.join(' ')).not.toContain('Claude');
-    expect(windows?.args.join(' ')).not.toContain('38%');
+    expect(windows?.args.slice(0, 4)).toEqual(['-NoProfile', '-NonInteractive', '-NoLogo', '-EncodedCommand']);
+    // The script is the same whatever the text is, and it is handed over encoded, so nothing can requote it.
+    const script = Buffer.from(windows?.args[4] ?? '', 'base64').toString('utf16le');
+    expect(script).toBe(WINDOWS_TOAST_SCRIPT);
+    expect(script).toBe(Buffer.from(desktopCommand('win32', TEST_MESSAGE)?.args[4] ?? '', 'base64').toString('utf16le'));
+    expect(script).not.toContain('Claude');
+    expect(script).toContain('[System.Security.SecurityElement]::Escape($env:TOKENGATOR_NOTIFY_TITLE)');
+    expect(script).toContain('[System.Security.SecurityElement]::Escape($env:TOKENGATOR_NOTIFY_BODY)');
     expect(windows?.env).toEqual({ TOKENGATOR_NOTIFY_TITLE: HOSTILE.title, TOKENGATOR_NOTIFY_BODY: HOSTILE.body });
 
     const linux = desktopCommand('linux', { title: '--urgency=critical', body: '-x' });

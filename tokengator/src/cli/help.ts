@@ -71,8 +71,13 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
   statusline: {
     synopsis: 'statusline',
     summary: 'status line command for Claude Code and the Antigravity CLI',
-    usage: [`${PROGRAM} statusline   (reads the JSON the tool pipes in, prints one line)`],
-    notes: ['Records the rate-limit windows it is handed. Always exits 0 and always prints a line.']
+    usage: [`${PROGRAM} statusline   (reads the JSON the tool pipes in, prints one line)`, `${PROGRAM} statusline -- <command> [arguments]`],
+    notes: [
+      'Records the rate-limit windows it is handed. Always exits 0 and always prints a line.',
+      'After "--", names a status line command you already had: it gets the same input and its line is',
+      'printed with Tokengator\'s after it. It is run directly, not through a shell, so name the program:',
+      `  ${PROGRAM} statusline -- bash ~/.claude/statusline.sh`
+    ]
   },
   collectors: {
     synopsis: 'collectors',

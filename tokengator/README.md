@@ -128,6 +128,11 @@ Claude Code status line, in `~/.claude/settings.json` (the Antigravity CLI takes
 { "statusLine": { "type": "command", "command": "tokengator statusline" } }
 ```
 
+It prints the session and weekly limits and, when another subscription needs using, names it:
+`5h 36% left 1h 57m · week 30% left 13h (use now, $6.90 at risk) · use now: Suno Pro 64% left 2d 2h`.
+Already have a status line? Keep it: `tokengator statusline -- bash ~/.claude/statusline.sh` runs
+yours with the same input and prints its line with Tokengator's after it.
+
 ## Agents
 
 Tokengator speaks MCP over Streamable HTTP at `/mcp` and over stdio:
@@ -158,7 +163,7 @@ tokengator add <provider>          add from the catalog           --plan --label
 tokengator notify                  raise due reminders once       --dry-run --test --no-desktop
 tokengator calendar                coming resets as iCalendar     --days
 tokengator mcp                     MCP server on stdio
-tokengator statusline              Claude Code status line command
+tokengator statusline              status line command            -- <your own command>
 tokengator collectors              list | enable <id> | disable <id> | run
 tokengator connect                 connection snippets for this machine   --client --stdio
 tokengator skill install           install the agent skill        --dry-run, uninstall

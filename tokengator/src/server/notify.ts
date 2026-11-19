@@ -26,19 +26,25 @@ export interface DesktopCommand {
 }
 
 // Windows PowerShell 5.1 ships with every supported Windows and can raise a toast through WinRT with no
-// module to install. The application id is PowerShell's own, which Windows already knows, so the toast is
-// shown and kept in the notification centre; the price is that it is attributed to PowerShell.
+// module to install (PowerShell 7 cannot: it does not load WinRT types). The application id is PowerShell's
+// own, which Windows already knows, so the toast is shown and kept in the notification centre; the price is
+// that it is attributed to PowerShell. The text arrives in two environment variables and is XML-escaped by
+// the script before it is placed in the toast document, so it is never parsed as PowerShell or as markup.
 const WINDOWS_APP_ID = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe';
-const WINDOWS_TOAST = [
+export const WINDOWS_TOAST_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
   '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null',
-  '$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)',
-  "$text = $xml.GetElementsByTagName('text')",
-  '$text.Item(0).AppendChild($xml.CreateTextNode($env:TOKENGATOR_NOTIFY_TITLE)) | Out-Null',
-  '$text.Item(1).AppendChild($xml.CreateTextNode($env:TOKENGATOR_NOTIFY_BODY)) | Out-Null',
-  '$toast = [Windows.UI.Notifications.ToastNotification]::new($xml)',
+  '[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null',
+  '$title = [System.Security.SecurityElement]::Escape($env:TOKENGATOR_NOTIFY_TITLE)',
+  '$body = [System.Security.SecurityElement]::Escape($env:TOKENGATOR_NOTIFY_BODY)',
+  '$xml = New-Object Windows.Data.Xml.Dom.XmlDocument',
+  "$xml.LoadXml('<toast><visual><binding template=\"ToastGeneric\"><text>' + $title + '</text><text>' + $body + '</text></binding></visual></toast>')",
+  '$toast = New-Object Windows.UI.Notifications.ToastNotification $xml',
   `[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('${WINDOWS_APP_ID}').Show($toast)`
-].join('; ');
+].join('\n');
+// Handed over as -EncodedCommand (base64 of UTF-16LE), so no quoting rule of any shell or of CreateProcess
+// can change what PowerShell runs.
+const WINDOWS_TOAST_ENCODED = Buffer.from(WINDOWS_TOAST_SCRIPT, 'utf16le').toString('base64');
 
 /** The command that raises a notification on this platform, or null where there is no standard one. */
 export function desktopCommand(platform: NodeJS.Platform, message: OutgoingMessage): DesktopCommand | null {
@@ -51,7 +57,7 @@ export function desktopCommand(platform: NodeJS.Platform, message: OutgoingMessa
   if (platform === 'win32') {
     return {
       command: 'powershell.exe',
-      args: ['-NoProfile', '-NonInteractive', '-NoLogo', '-Command', WINDOWS_TOAST],
+      args: ['-NoProfile', '-NonInteractive', '-NoLogo', '-EncodedCommand', WINDOWS_TOAST_ENCODED],
       env: { TOKENGATOR_NOTIFY_TITLE: message.title, TOKENGATOR_NOTIFY_BODY: message.body }
     };
   }

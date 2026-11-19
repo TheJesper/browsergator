@@ -120,7 +120,7 @@ export function connectSnippets(options: ConnectOptions): ConnectSnippet[] {
       group: 'statusline',
       title: 'Claude Code status line',
       description:
-        'Add to ~/.claude/settings.json. Claude Code then feeds its own rate-limit data to Tokengator on every turn, with no credentials involved.',
+        'Add to ~/.claude/settings.json. Claude Code then feeds its own rate-limit data to Tokengator on every turn, with no credentials involved. To keep a status line you already have, put it after two dashes: statusline -- bash ~/.claude/statusline.sh',
       language: 'json',
       code: json({ statusLine: { type: 'command', command: [command, ...args, 'statusline'].map(quote).join(' ') } })
     },

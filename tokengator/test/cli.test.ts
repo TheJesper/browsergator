@@ -446,6 +446,39 @@ describe('statusline', () => {
     expect(meters.find((meter) => meter.key === 'session')?.used).toBe(64);
   });
 
+  it('keeps a status line the person already had: same input, their line first, ours after it', async () => {
+    await seed();
+    const theirs = join(root, 'their-statusline.cjs');
+    writeFileSync(
+      theirs,
+      "let text = ''; process.stdin.on('data', (chunk) => (text += chunk)); process.stdin.on('end', () => { const input = JSON.parse(text); console.log('[' + input.model.id + ']'); console.log('second line'); });"
+    );
+    const input = JSON.stringify({ model: { id: 'some-model' }, rate_limits: { seven_day: { used_percentage: 70, resets_at: Math.floor(Date.now() / 1000) + 13 * 3600 } } });
+    const io = makeIo({}, input);
+    expect(await run(['statusline', '--', process.execPath, theirs], io)).toBe(0);
+    const lines = io.out().split('\n');
+    expect(lines[0]).toMatch(/^\[some-model\] · week 30% left .*use now/);
+    expect(lines[1]).toBe('second line');
+    expect(io.err()).toBe('');
+    // The reading was recorded all the same.
+    expect((await readState()).accounts[0]?.meters.find((meter) => meter.key === 'weekly')?.used).toBe(70);
+  });
+
+  it('prints its own line when the wrapped command fails, is missing or says nothing', async () => {
+    await seed();
+    const failing = join(root, 'failing.cjs');
+    writeFileSync(failing, "console.log('half a line'); process.exit(3);");
+    const silent = join(root, 'silent.cjs');
+    writeFileSync(silent, '');
+    for (const command of [[process.execPath, failing], [join(root, 'no-such-program')], [process.execPath, silent], []]) {
+      const io = makeIo({}, JSON.stringify({ model: { id: 'm' } }));
+      expect(await statusline(['--', ...command], io)).toBe(0);
+      expect(io.out()).toMatch(/^week 38% left .*use now.*\n$/);
+      expect(io.out().split('\n')).toHaveLength(2);
+      expect(io.err()).toBe('');
+    }
+  });
+
   it('prints what is stored when the input carries no rate limits', async () => {
     await seed();
     const io = makeIo({}, JSON.stringify({ model: { id: 'some-model' } }));

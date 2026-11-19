@@ -2,6 +2,7 @@
 // They share one application service with the HTTP API and the MCP server, so the terminal can never
 // say something different from the dashboard.
 
+import { spawn } from 'node:child_process';
 import { readFileSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -322,21 +323,75 @@ const STATUSLINE_READ_MS = 1500;
 /** A status line runs after every turn; it gives up on a busy state file rather than hold the terminal. */
 const STATUSLINE_LOCK_MS = 400;
 
-export async function statusline(_args: readonly string[], io: Io): Promise<number> {
+/** How long a wrapped status line command may take before its part of the line is left out. */
+const STATUSLINE_WRAP_MS = 1500;
+const STATUSLINE_WRAP_BYTES = 64 * 1024;
+
+/**
+ * Runs the status line command a person already had, with the same input, and returns what it printed.
+ * No shell: the words after "--" are the program and its arguments, as the calling shell split them.
+ * Anything that goes wrong yields an empty string, so the line Tokengator prints is never held up by it.
+ */
+function runWrapped(command: readonly string[], input: string, env: NodeJS.ProcessEnv): Promise<string> {
+  return new Promise((done) => {
+    const program = command[0];
+    if (!program) {
+      done('');
+      return;
+    }
+    let out = '';
+    let settled = false;
+    const finish = (text: string): void => {
+      if (settled) return;
+      settled = true;
+      done(text);
+    };
+    try {
+      const child = spawn(program, command.slice(1), { stdio: ['pipe', 'pipe', 'ignore'], env: { ...process.env, ...env }, windowsHide: true, shell: false, timeout: STATUSLINE_WRAP_MS });
+      child.once('error', () => finish(''));
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk: string) => {
+        if (out.length < STATUSLINE_WRAP_BYTES) out += chunk;
+      });
+      child.once('close', (code) => finish(code === 0 ? out : ''));
+      child.stdin.on('error', () => undefined);
+      child.stdin.end(input);
+    } catch {
+      finish('');
+    }
+  });
+}
+
+export async function statusline(args: readonly string[], io: Io): Promise<number> {
+  // `tokengator statusline -- <command>` keeps a status line the person already had: it gets the same
+  // input, and its line is printed with Tokengator's after it.
+  const split = args.indexOf('--');
+  const wrapped = split >= 0 ? args.slice(split + 1) : [];
   let line = PROGRAM;
+  let theirs = '';
   try {
     const input = await readAll(io.stdin, { maxBytes: STATUSLINE_MAX_BYTES, timeoutMs: STATUSLINE_READ_MS });
+    const text = input.complete ? input.text : '';
+    const other = wrapped.length > 0 ? runWrapped(wrapped, text, io.env) : Promise.resolve('');
     const store = new FileStateStore(tokengatorHome(io.env), { lockTimeoutMs: STATUSLINE_LOCK_MS, pollMs: 0 });
     try {
-      line = await runStatusline(input.complete ? input.text : '', new TokengatorService(store));
+      line = await runStatusline(text, new TokengatorService(store));
+    } catch {
+      // The fallback line stands; the wrapped command's output below is still printed.
     } finally {
       store.close();
     }
+    theirs = await other;
   } catch {
     // A status line that fails or complains breaks the terminal it sits in: the fallback line stands.
   }
   try {
-    io.stdout.write(`${line || PROGRAM}\n`);
+    const ours = line || PROGRAM;
+    const lines = theirs.replace(/\r/g, '').split('\n');
+    while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+    // Their first line carries ours at its end; any further lines of theirs follow untouched.
+    const first = lines.length > 0 && lines[0] ? `${lines[0]} · ${ours}` : ours;
+    io.stdout.write(`${[first, ...lines.slice(1)].join('\n')}\n`);
   } catch {
     // nowhere left to print
   }
