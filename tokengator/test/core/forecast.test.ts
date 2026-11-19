@@ -174,6 +174,18 @@ describe('viewMeter basics', () => {
     expect(v.id).toBe(v.meter.id);
   });
 
+  it('gives the three figures of the forecast bar: 42% used at 60% of the window projects 71%, so 29% expires', () => {
+    // The dashboard's "Forecast bar" scenario, whose numbers come straight from this maths.
+    const v = view(weekly(0.6, 42));
+    expect(Math.round(v.usedFraction * 100)).toBe(42);
+    expect(Math.round((v.projectedFraction as number) * 100)).toBe(71);
+    expect(Math.round(((v.projectedFraction as number) - v.usedFraction) * 100)).toBe(29);
+    expect(Math.round(v.projectedUnused * 100)).toBe(29);
+    expect(Math.round((v.elapsedFraction as number) * 100)).toBe(60);
+    // Used, still to be used and expiring always add up to the whole bar.
+    expect(v.usedFraction + ((v.projectedFraction as number) - v.usedFraction) + v.projectedUnused).toBeCloseTo(1, 12);
+  });
+
   it('never stores what it derives', () => {
     const state = add(emptyState(), 'Claude Max', [weekly(0.5, 20)], { price: USD_100 });
     const before = JSON.stringify(state);

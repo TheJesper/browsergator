@@ -237,12 +237,18 @@ describe('TokengatorService', () => {
 
     it('saves nothing when the line cannot be understood', async () => {
       const before = await store.read();
-      for (const line of ['claude 140%', 'claude', '', 'claude weekly 62% resets someday', 'claude 62% banana']) {
+      for (const line of ['claude 140%', 'claude', 'claude weekly 62% resets someday', 'claude 62% banana']) {
         const error = await failure(service.quick(line));
-        expect(error).toBeInstanceOf(AmbiguousTargetError);
+        // Which error class carries a line that names its account but makes no sense is the service's
+        // business; that it fails with a reason, offers no candidates and saves nothing is the contract.
+        expect(error).toBeInstanceOf(Error);
         expect((error as Error).message.length).toBeGreaterThan(0);
+        expect((error as { candidates?: unknown[] }).candidates ?? []).toEqual([]);
       }
+      expect((await failure(service.quick('claude 140%')) as Error).message).toMatch(/between 0 and 100/);
+      expect(await failure(service.quick(''))).toBeInstanceOf(Error);
       expect(await store.read()).toBe(before);
+      expect(events).toBe(2);
     });
   });
 

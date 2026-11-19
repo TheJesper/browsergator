@@ -367,6 +367,18 @@ describe('wording per tier', () => {
   });
 });
 
+describe('the forecast in words', () => {
+  it('states the same three figures the forecast bar draws', () => {
+    const v = view(weekly(0.6, 42));
+    const markdown = meterMarkdown(v, NOW, 'UTC');
+    expect(markdown).toContain('- Used: 42% used');
+    expect(markdown).toContain('- Forecast: 71% used by the reset, 29% expires');
+    expect(headline(v, NOW)).toBe('Behind pace: about 29% will expire, resets in 2d 19h');
+    expect(explain(v, NOW)).toContain('At this pace about 29% expires unused.');
+    expect(snapshot(add(emptyState(), 'Claude Max', [weekly(0.6, 42)]), NOW, 'UTC').queue[0]).toMatchObject({ usedPercent: 42, projectedUnusedPercent: 29.1 });
+  });
+});
+
 describe('markers carried into every summary', () => {
   function staleWeekly(): { state: State; v: MeterView } {
     const state = add(emptyState(), 'Claude Max', [{ label: 'Weekly', reset: { kind: 'interval', hours: 168 }, used: 62, resetsAt: iso(NOW + 14 * HOUR) }], { price: USD_100 }, NOW - 3 * DAY);

@@ -278,7 +278,9 @@ export const CATALOG: readonly ProviderPreset[] = [
     collectors: [],
     plans: [
       plan('pro', 'Pro', usd(20), [calendarMonth('credits', 'Monthly credits', 'credits', 1000)]),
-      plan('pro-max', 'Pro Max', usd(100), [calendarMonth('credits', 'Monthly credits', 'credits', 5000)], 'check the credit amount for your tier')
+      plan('pro-plus', 'Pro+', usd(40), [calendarMonth('credits', 'Monthly credits', 'credits', 2000)]),
+      plan('pro-max', 'Pro Max', usd(100), [calendarMonth('credits', 'Monthly credits', 'credits', 5000)]),
+      plan('power', 'Power', usd(200), [calendarMonth('credits', 'Monthly credits', 'credits', 10000)])
     ]
   },
   {
