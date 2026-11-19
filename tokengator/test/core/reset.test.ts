@@ -488,8 +488,15 @@ describe('applyReading', () => {
     expect(view.tier).toBe('spent');
   });
 
-  it('never reports negative usage when more is left than the limit', () => {
-    expect(applyReading(credits(), { remaining: 3000 }, NOW).meter.used).toBe(0);
+  it('says so when more is left than the limit, instead of quietly calling it "nothing used"', () => {
+    // 3,000 left of a 2,500 limit: the limit is stale, and the answer names it.
+    expectReadingError(() => applyReading(credits(), { remaining: 3000 }, NOW), 'remaining');
+    // With the new limit alongside, it is a reading like any other.
+    expect(applyReading(credits(), { remaining: 3000, limit: 5000 }, NOW).meter).toMatchObject({ used: 2000, limit: 5000 });
+    // Quota that carries over can hold more than one grant: the balance is what is available.
+    const banked = applyReading({ ...credits(), rollover: 'carries' }, { remaining: 3000 }, NOW).meter;
+    expect(banked).toMatchObject({ used: 0, limit: 3000 });
+    expect(applyReading(banked, { remaining: 2400 }, NOW + HOUR).meter).toMatchObject({ used: 600, limit: 3000 });
   });
 
   it('stores the time of the reading, clears the estimated marker and keeps a sample', () => {

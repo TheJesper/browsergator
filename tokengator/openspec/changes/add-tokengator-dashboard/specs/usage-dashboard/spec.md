@@ -79,6 +79,10 @@ The dashboard SHALL accept a one-line update naming an account, optionally a met
 - **WHEN** the line matches no account or more than one
 - **THEN** nothing is saved and the candidates are offered for selection
 
+#### Scenario: Two accounts with one name
+- **WHEN** two accounts are both called "Claude Max" and the line begins with the id of one of them, "claude-max"
+- **THEN** that account is the one updated, while the name "claude max" alone is still asked about
+
 ### Requirement: Quick entry refuses what it cannot read
 Quick entry SHALL refuse a line rather than guess: a word that only begins like a weekday or a month SHALL NOT be read as one, a date the calendar does not have SHALL NOT slide into the next month, and a comma in a number SHALL be read only as a thousands separator.
 

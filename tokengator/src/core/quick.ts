@@ -132,22 +132,26 @@ export function resolveTarget(
     if (byId) return { ok: true, account, meter: byId };
   }
 
+  const typedIds = new Set(joined.toLowerCase().split(/\s+/));
   const found: Resolved[] = [];
   for (let split = tokens.length; split >= 1; split -= 1) {
     const accountTokens = tokens.slice(0, split);
     const meterTokens = tokens.slice(split);
     for (const account of state.accounts) {
       if (!matches(accountTokens, accountWords(account))) continue;
-      const exactAccount = account.id === accountTokens.join('-') || account.label.toLowerCase() === accountTokens.join(' ');
+      // An id is unique and a label is not: two accounts can both be called "Claude Max", and the one
+      // whose id was typed is the one that was meant. Only an id typed as an id counts ("claude-max"):
+      // the same words with a space between them are the name, which both accounts share.
+      const exact = typedIds.has(account.id) && account.id === accountTokens.join('-') ? 8 : account.label.toLowerCase() === accountTokens.join(' ') ? 5 : 0;
       if (meterTokens.length === 0) {
         const meter = defaultMeter(account);
-        if (meter) found.push({ account, meter, score: split * 10 + (exactAccount ? 5 : 0) });
+        if (meter) found.push({ account, meter, score: split * 10 + exact });
         continue;
       }
       for (const meter of account.meters) {
         if (!matches(meterTokens, meterWords(meter))) continue;
         const exactMeter = meter.key === meterTokens.join('-') || meter.label.toLowerCase() === meterTokens.join(' ');
-        found.push({ account, meter, score: split * 10 + (exactAccount ? 5 : 0) + (exactMeter ? 3 : 0) + 1 });
+        found.push({ account, meter, score: split * 10 + exact + (exactMeter ? 3 : 0) + 1 });
       }
     }
     if (found.length > 0) break; // the longest account match wins; shorter splits are only fallbacks

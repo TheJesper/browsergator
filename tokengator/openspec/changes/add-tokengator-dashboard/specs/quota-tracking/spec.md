@@ -32,6 +32,10 @@ The system SHALL accept amounts, limits, prices and spend only as finite numbers
 - **WHEN** an account is named with terminal escape sequences, a carriage return and a NUL
 - **THEN** the stored name contains none of them
 
+#### Scenario: A reset time that has passed
+- **WHEN** a meter is created or edited with a reset time earlier than now and its rule is not a one-off expiry
+- **THEN** it is refused with an error naming `resetsAt`, and no finished window is recorded
+
 #### Scenario: A stored rule that cannot be stepped
 - **WHEN** a state file already holds a meter with a window of no length and its reset time passes
 - **THEN** the meter goes back to waiting for a reset time and every other read still works
@@ -53,6 +57,10 @@ The system SHALL accept meters whose provider exposes only a utilisation percent
 #### Scenario: Percentage-only meter
 - **WHEN** a meter is created with unit `percent`
 - **THEN** its limit is 100 and readings of "62% used" store 62
+
+#### Scenario: A limit without a unit
+- **WHEN** a meter is created with a limit of 500 and 150 used and no unit
+- **THEN** it is refused with an error naming the unit, instead of being stored as a percentage meter at 150%
 
 #### Scenario: Custom noun
 - **WHEN** a meter is created with unit `count` and the noun "songs"

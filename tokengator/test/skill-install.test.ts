@@ -226,6 +226,56 @@ describe('install', () => {
   });
 });
 
+describe('uninstall takes only what install put there (review finding)', () => {
+  it('keeps a file the person added next to the skill, and removes only the skill', () => {
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    run({ only: ['claude'] });
+    const dir = join(home, '.claude', 'skills', 'tokengator');
+    writeFileSync(join(dir, 'notes.txt'), 'mine');
+    const [action] = run({ uninstall: true, only: ['claude'] });
+    expect(action).toMatchObject({ client: 'claude', action: 'remove' });
+    expect(action?.note).toMatch(/yours and were kept/);
+    expect(existsSync(join(dir, 'SKILL.md'))).toBe(false);
+    expect(readFileSync(join(dir, 'notes.txt'), 'utf8')).toBe('mine');
+  });
+
+  it('leaves alone a directory of the same name that holds somebody else\'s skill', () => {
+    const dir = join(home, '.claude', 'skills', 'tokengator');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), '---\nname: my-own-thing\n---\nnot ours');
+    const [action] = run({ uninstall: true, only: ['claude'] });
+    expect(action).toMatchObject({ client: 'claude', action: 'skip' });
+    expect(readFileSync(join(dir, 'SKILL.md'), 'utf8')).toContain('not ours');
+  });
+
+  it('removes the directory when the skill was the only thing in it', () => {
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    run({ only: ['claude'] });
+    run({ uninstall: true, only: ['claude'] });
+    expect(existsSync(join(home, '.claude', 'skills', 'tokengator'))).toBe(false);
+  });
+
+  it('gives back an instruction file that held only blank lines, instead of deleting it', () => {
+    const file = join(home, '.config', 'opencode', 'AGENTS.md');
+    mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
+    writeFileSync(file, '\n\n');
+    run({ only: ['opencode'] });
+    expect(readFileSync(file, 'utf8')).toContain(BLOCK_BEGIN);
+    run({ uninstall: true, only: ['opencode'] });
+    expect(existsSync(file)).toBe(true);
+    expect(readFileSync(file, 'utf8').trim()).toBe('');
+  });
+
+  it('deletes an instruction file it created itself', () => {
+    mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
+    const file = join(home, '.config', 'opencode', 'AGENTS.md');
+    run({ only: ['opencode'] });
+    expect(existsSync(file)).toBe(true);
+    run({ uninstall: true, only: ['opencode'] });
+    expect(existsSync(file)).toBe(false);
+  });
+});
+
 describe('shared skill directories', () => {
   it('copies the skill into ~/.agents/skills and the Antigravity skills directory when those clients are set up', () => {
     mkdirSync(join(home, '.agents'), { recursive: true });

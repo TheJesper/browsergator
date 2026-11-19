@@ -9,6 +9,7 @@ import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 
 import { snapshot } from '../core/brief.js';
+import { findProvider } from '../core/catalog-types.js';
 import { CATALOG, CATALOG_CHECKED } from '../core/catalog.js';
 import { connectSnippets } from '../core/connect.js';
 import { calendarFeed } from '../core/reminders.js';
@@ -30,7 +31,7 @@ import { FileStateStore, MemoryStateStore, type FileStoreOptions } from '../serv
 import { ArgError, integerFlag, parseArgs } from './args.js';
 import { PROGRAM, commandUsage, usage } from './help.js';
 import { readAll, type Io } from './io.js';
-import { colorMode, columns, renderCatalog, renderCollectors, renderConnect, renderStatus } from './render.js';
+import { colorMode, columns, renderCatalog, renderCollectors, renderConnect, renderProvider, renderStatus } from './render.js';
 
 export type { Io } from './io.js';
 
@@ -174,6 +175,10 @@ export async function notify(args: readonly string[], io: Io): Promise<number> {
   const flags = parseArgs(args, { values: [], switches: ['dry-run', 'test', 'no-desktop'] });
   noPositionals('notify', flags.positionals);
   const desktop = !flags.switches.has('no-desktop');
+  // A test sends a real message, and a dry run promises that nothing is sent. Asked for both, neither is done.
+  if (flags.switches.has('test') && flags.switches.has('dry-run')) {
+    throw new ArgError('--test sends a real message, so it cannot be combined with --dry-run.');
+  }
   return withState(io, async ({ home, env, service }) => {
     const runner = new ReminderRunner(service, { home, env });
     if (flags.switches.has('test')) {
@@ -267,7 +272,14 @@ export async function add(args: readonly string[], io: Io): Promise<number> {
   const flags = parseArgs(args, { values: ['plan', 'label', 'billing-day'], switches: ['list'] });
   const provider = flags.positionals[0];
   if (flags.switches.has('list') || provider === undefined) {
-    say(io, renderCatalog(CATALOG, CATALOG_CHECKED, PROGRAM));
+    if (flags.positionals.length > 1) throw new ArgError(`add --list takes one provider, got "${flags.positionals.join(' ')}".`);
+    if (provider === undefined) {
+      say(io, renderCatalog(CATALOG, CATALOG_CHECKED, PROGRAM));
+      return 0;
+    }
+    const preset = findProvider(CATALOG, provider);
+    if (!preset) throw new ArgError(`The catalog has no provider "${provider}". See them all: ${PROGRAM} add --list`);
+    say(io, renderProvider(preset, PROGRAM));
     return 0;
   }
   if (flags.positionals.length > 1) {

@@ -471,7 +471,29 @@ export function renderCatalog(catalog: readonly ProviderPreset[], checked: strin
       lines.push(`  ${padEnd(provider.id, idW)}  ${padEnd(provider.name, nameW)}  ${plans}`.trimEnd());
     }
   }
-  lines.push('', `Add one: ${program} add <provider> [--plan <plan>] [--label <name>] [--billing-day <1-31>]`, '');
+  lines.push('', `One provider in full, with its usage page: ${program} add --list <provider>`);
+  lines.push(`Add one: ${program} add <provider> [--plan <plan>] [--label <name>] [--billing-day <1-31>]`, '');
+  return lines.join('\n');
+}
+
+/** One provider in full: where its usage page is, what to read there, its plans, and the documented ways to use it. */
+export function renderProvider(provider: ProviderPreset, program = 'tokengator'): string {
+  const lines: string[] = [`${provider.name} (${provider.id}), ${CATEGORY_LABEL[provider.category].toLowerCase()}`];
+  lines.push('', `Usage page: ${provider.usageUrl}`, `What to read there: ${provider.howToRead}`);
+  lines.push('', 'Plans');
+  const idW = Math.max(...provider.plans.map((plan) => visibleLength(plan.id)), 0);
+  for (const plan of provider.plans) {
+    const price = priceText(plan.price);
+    const meters = plan.meters.map((meter) => meter.label).join('; ');
+    lines.push(`  ${padEnd(plan.id, idW)}  ${[plan.name, price, meters].filter(Boolean).join(' · ')}`.trimEnd());
+    if (plan.note) lines.push(`  ${' '.repeat(idW)}  ${plan.note}`);
+  }
+  if (provider.uses && provider.uses.length > 0) {
+    lines.push('', 'Ways the provider documents for using it while you are away');
+    for (const use of provider.uses) lines.push(`  ${use.title}: ${use.note}`, `    ${use.url}`);
+  }
+  if (provider.collectors.length > 0) lines.push('', `Can be read automatically: ${program} collectors list (${provider.collectors.join(', ')})`);
+  lines.push('', `Add it: ${program} add ${provider.id} [--plan <plan>] [--label <name>] [--billing-day <1-31>]`, '');
   return lines.join('\n');
 }
 

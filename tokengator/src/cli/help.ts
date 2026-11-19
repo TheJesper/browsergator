@@ -2,6 +2,7 @@
 // a command cannot be listed in one place and forgotten in another.
 
 import { VERSION } from '../server/config.js';
+import { SKILL_CLIENT_IDS } from '../server/skill-install.js';
 import { columns } from './render.js';
 
 export const PROGRAM = 'tokengator';
@@ -54,9 +55,9 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
   add: {
     synopsis: 'add [<provider>]',
     summary: 'add a subscription from the catalog',
-    usage: [`${PROGRAM} add <provider> [--plan <plan>] [--label <name>] [--billing-day <1-31>]`, `${PROGRAM} add --list`],
+    usage: [`${PROGRAM} add <provider> [--plan <plan>] [--label <name>] [--billing-day <1-31>]`, `${PROGRAM} add --list [<provider>]`],
     options: [
-      ['--list', 'show the providers and plans the catalog knows (also shown when no provider is given)'],
+      ['--list', 'show the providers and plans the catalog knows; with a provider, its usage page, plans and documented ways to use it'],
       ['--plan <plan>', 'plan id or name; the first plan when omitted'],
       ['--label <name>', 'what to call the account'],
       ['--billing-day <1-31>', 'day of the month the plan renews, for quotas that follow your billing cycle']
@@ -126,7 +127,7 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
     options: [
       ['--dry-run', 'show what would change and write nothing'],
       ['--all', 'also install for clients that are not set up on this machine yet'],
-      ['--only=<a,b>', 'limit to these clients: claude, kiro, codex, gemini, copilot, cursor, windsurf, opencode']
+      ['--only=<a,b>', `limit to these clients: ${SKILL_CLIENT_IDS.join(', ')}`]
     ],
     notes: ['Instruction files get one delimited block. Text outside that block is never changed.']
   },

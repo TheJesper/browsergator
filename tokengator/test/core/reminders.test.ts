@@ -173,6 +173,13 @@ describe('calendarFeed', () => {
     expect(new Set(list.map((event) => field(event, 'UID'))).size).toBe(list.length);
   });
 
+  it('words each alarm by the time actually left when it rings (review finding)', () => {
+    const state = add(emptyState(), 'Claude Max', [weekly(14, 62)]);
+    const alarms = events(calendarFeed(state, NOW, { daysAhead: 10 })).map((event) => event.filter((line) => line.startsWith('DESCRIPTION:')).at(-1));
+    // The window under way has 14 hours left, not the full day and an hour of a later one.
+    expect(alarms).toEqual(['DESCRIPTION:Claude Max: weekly limit resets in 14h', 'DESCRIPTION:Claude Max: weekly limit resets in 1d 1h']);
+  });
+
   it('lists nothing beyond its range, a first reset included', () => {
     const state = add(emptyState(), 'Claude Max', [weekly(120, 62)]);
     expect(events(calendarFeed(state, NOW, { daysAhead: 4 }))).toEqual([]);

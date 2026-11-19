@@ -13,6 +13,7 @@ import {
   padEnd,
   padStart,
   renderCatalog,
+  renderProvider,
   renderCollectors,
   renderConnect,
   renderEmpty,
@@ -390,6 +391,34 @@ describe('other listings', () => {
     const text = renderCatalog([], '2026-11-19');
     expect(text).toContain('The catalog has no providers.');
     expect(text).toContain('tokengator serve');
+  });
+
+  it('shows one provider in full', () => {
+    const text = renderProvider({
+      ...preset,
+      collectors: ['example-api'],
+      uses: [{ title: 'Scheduled runs', note: 'Draws on the same credits.', url: 'https://example.com/docs/schedule' }],
+      plans: [{ id: 'pro', name: 'Pro', price: { amount: 10, currency: 'USD', period: 'month' }, note: 'Limits are not published.', meters: [] }]
+    });
+    expect(text.split('\n')).toEqual([
+      'Example AI (example), music',
+      '',
+      'Usage page: https://example.com/usage',
+      'What to read there: Read the credits.',
+      '',
+      'Plans',
+      '  pro  Pro · $10/mo',
+      '       Limits are not published.',
+      '',
+      'Ways the provider documents for using it while you are away',
+      '  Scheduled runs: Draws on the same credits.',
+      '    https://example.com/docs/schedule',
+      '',
+      'Can be read automatically: tokengator collectors list (example-api)',
+      '',
+      'Add it: tokengator add example [--plan <plan>] [--label <name>] [--billing-day <1-31>]',
+      ''
+    ]);
   });
 
   it('lists providers by category with their plan ids and prices', () => {

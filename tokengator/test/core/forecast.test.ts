@@ -369,7 +369,8 @@ describe('urgency tiers', () => {
     it('spent starts at 98% used', () => {
       expect(view(weekly(0.5, 98)).tier).toBe('spent');
       expect(view(weekly(0.5, 97.9)).tier).not.toBe('spent');
-      expect(view(weekly(0.5, 140)).tier).toBe('spent');
+      // More than the limit, which a counted meter can report, is still simply spent.
+      expect(view({ ...weekly(0.5, 0), unit: 'requests', limit: 300, used: 420 }).tier).toBe('spent');
     });
 
     it('spent wins over use-now in the last hours', () => {

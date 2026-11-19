@@ -5,18 +5,25 @@
 // Nothing in here spends quota or starts work. Tools read Tokengator's records or change them.
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { Readable, Writable } from 'node:stream';
 
 import { NodeStreamableHTTPServerTransport, toNodeHandler, toWebRequest } from '@modelcontextprotocol/node';
 import {
   CLIENT_INFO_META_KEY,
   McpServer,
   createMcpHandler,
+  isJSONRPCRequest,
+  isJSONRPCResponse,
   isLegacyRequest,
+  serializeMessage,
   type CallToolResult,
+  type JSONRPCMessage,
   type ServerContext,
-  type ToolAnnotations
+  type ToolAnnotations,
+  type Transport,
+  type TransportSendOptions
 } from '@modelcontextprotocol/server';
-import { serveStdio } from '@modelcontextprotocol/server/stdio';
+import { StdioServerTransport, serveStdio } from '@modelcontextprotocol/server/stdio';
 import { z } from 'zod';
 
 import {
@@ -1630,28 +1637,99 @@ export function createMcpHttpHandler(deps: McpDeps): (req: IncomingMessage, res:
   };
 }
 
+/**
+ * A transport that knows which requests are still waiting for their answer. A client that sends its
+ * last calls and closes the pipe (a script, or an agent shutting down) has not withdrawn them: they are
+ * answered, and what they report is saved, before the server goes away.
+ */
+class DrainingTransport implements Transport {
+  onclose?: (() => void) | undefined;
+  onerror?: ((error: Error) => void) | undefined;
+  onmessage?: Transport['onmessage'];
+  private readonly waiting = new Set<string | number>();
+  private idle: (() => void)[] = [];
+  /** The wrapped transport gives up the moment its input ends, while its output is still open. */
+  private inputEnded = false;
+
+  constructor(
+    private readonly inner: Transport,
+    private readonly output: { write(chunk: string): unknown },
+    private readonly drainMs: number
+  ) {}
+
+  start(): Promise<void> {
+    this.inner.onmessage = (message, extra) => {
+      if (isJSONRPCRequest(message)) this.waiting.add(message.id);
+      this.onmessage?.(message, extra);
+    };
+    this.inner.onclose = () => {
+      this.inputEnded = true;
+      // Telling the server now would tear it down under the calls it is still working on.
+      void this.drained().then(() => this.onclose?.());
+    };
+    this.inner.onerror = (error) => this.onerror?.(error);
+    return this.inner.start();
+  }
+
+  async send(message: JSONRPCMessage, options?: TransportSendOptions): Promise<void> {
+    try {
+      // After the input has ended the answers still owed go straight to the output, as the same lines.
+      if (this.inputEnded) this.output.write(serializeMessage(message));
+      else await this.inner.send(message, options);
+    } finally {
+      if (isJSONRPCResponse(message) && message.id !== null && message.id !== undefined) {
+        this.waiting.delete(message.id);
+        if (this.waiting.size === 0) for (const done of this.idle.splice(0)) done();
+      }
+    }
+  }
+
+  close(): Promise<void> {
+    return this.inner.close();
+  }
+
+  /** Resolves once every request received so far has been answered, or when the time allowed is up. */
+  drained(): Promise<void> {
+    if (this.waiting.size === 0) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, this.drainMs);
+      this.idle.push(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+}
+
+/** How long requests that were already received get to finish after the client closed its end. */
+const STDIO_DRAIN_MS = 5000;
+
 /** Serves MCP on stdin/stdout until the streams close. Writes nothing but protocol messages to stdout. */
-export function runMcpStdio(deps: McpDeps): Promise<void> {
+export function runMcpStdio(deps: McpDeps, streams: { input?: Readable; output?: Writable } = {}): Promise<void> {
+  const input = streams.input ?? process.stdin;
+  const output = streams.output ?? process.stdout;
   return new Promise<void>((resolve, reject) => {
     let finished = false;
     let handle: { close(): Promise<void> } | null = null;
+    const transport = new DrainingTransport(new StdioServerTransport(input, output), output, STDIO_DRAIN_MS);
     const finish = (): void => {
       if (finished) return;
       finished = true;
-      process.stdin.off('end', finish);
-      process.stdin.off('close', finish);
-      process.stdout.off('error', finish);
+      input.off('end', ended);
+      input.off('close', ended);
+      output.off('error', finish);
       void (handle?.close() ?? Promise.resolve()).catch(() => undefined).then(resolve);
     };
-    // A client that exits closes our stdin. Without these the promise would never settle and the command
-    // could not shut down in order.
-    process.stdin.once('end', finish);
-    process.stdin.once('close', finish);
-    // The client went away while an answer was being written.
-    process.stdout.once('error', finish);
+    // A client that exits closes our stdin. Without this the promise would never settle and the command
+    // could not shut down in order. What it sent before leaving is finished first.
+    const ended = (): void => void transport.drained().then(finish);
+    input.once('end', ended);
+    input.once('close', ended);
+    // The client went away while an answer was being written: nobody is left to answer.
+    output.once('error', finish);
     try {
       // One server for the life of the connection; the opening exchange decides which revision it speaks.
-      handle = serveStdio(() => createMcpServer(deps), { onerror: (error) => log('warn', 'MCP stdio error', { error: error.message }) });
+      handle = serveStdio(() => createMcpServer(deps), { transport, onerror: (error) => log('warn', 'MCP stdio error', { error: error.message }) });
     } catch (error) {
       finished = true;
       reject(error instanceof Error ? error : new Error(String(error)));

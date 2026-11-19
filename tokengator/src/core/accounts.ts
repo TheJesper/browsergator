@@ -194,20 +194,36 @@ function buildMeter(
   takenKeys: Set<string>,
   nowMs: number,
   source: MeterSource,
-  isFirstAllowance: boolean
+  isFirstAllowance: boolean,
+  /** A stored document is being read back: what it holds is taken as it is, including windows that have since ended. */
+  restoring = false
 ): Meter {
   const field = `meters[${index}]`;
   const label = text(`${field}.label`, input.label, 60, true) as string;
   const role: MeterRole = input.role === 'throttle' ? 'throttle' : 'allowance';
   const unit: Unit = input.unit ?? 'percent';
   if (!UNIT_IDS.includes(unit)) throw new ValidationError(`${field}.unit`, `unit must be one of ${UNIT_IDS.join(', ')}.`);
+  // A limit on a percentage meter would be dropped, and the amount beside it read as a percentage: "150 of
+  // 500 credits" would become "150% used". Nothing is dropped in silence; the caller is told what to say.
+  if (!restoring && unit === 'percent' && input.limit !== undefined && input.limit !== 100) {
+    throw new ValidationError(`${field}.unit`, 'A limit needs a unit. Give unit (credits, requests, tokens, …) with the limit, or leave the limit out for a percentage meter.');
+  }
   let limit = unit === 'percent' ? 100 : input.limit;
   if (limit === undefined) throw new ValidationError(`${field}.limit`, 'limit is required unless the unit is percent.');
   if (!isLimit(limit)) throw new ValidationError(`${field}.limit`, 'limit must be a number greater than 0.');
   if (unit === 'percent') limit = 100;
   const used = input.used ?? 0;
   if (!isAmount(used)) throw new ValidationError(`${field}.used`, 'used must be a number of 0 or more.');
+  if (!restoring && unit === 'percent' && used > 100) {
+    throw new ValidationError(`${field}.used`, 'used must be from 0 to 100 on a percentage meter.');
+  }
   const reset = validateResetRule(input.reset, `${field}.reset`);
+  // A reset time that has already passed would roll the meter over at once and write a finished window
+  // that nobody observed into the ledger. A one-off expiry in the past is different: that pack has expired.
+  const givenEnd = parseInstant(input.resetsAt);
+  if (!restoring && givenEnd !== null && givenEnd <= nowMs && reset.kind !== 'once') {
+    throw new ValidationError(`${field}.resetsAt`, 'resetsAt is in the past.');
+  }
   const valueShare = input.valueShare ?? (role === 'allowance' && isFirstAllowance ? 1 : 0);
   if (typeof valueShare !== 'number' || !(valueShare >= 0 && valueShare <= 1)) {
     throw new ValidationError(`${field}.valueShare`, 'valueShare must be between 0 and 1.');
@@ -244,7 +260,8 @@ export function addAccount(
   state: State,
   input: AccountInput,
   nowMs: number,
-  source: MeterSource = { kind: 'manual' }
+  source: MeterSource = { kind: 'manual' },
+  options: { restoring?: boolean } = {}
 ): { state: State; account: Account } {
   const label = text('label', input.label, 60, true) as string;
   if (!Array.isArray(input.meters) || input.meters.length === 0) {
@@ -256,7 +273,7 @@ export function addAccount(
   let seenAllowance = false;
   const meters = input.meters.map((meterInput, index) => {
     const isAllowance = meterInput.role !== 'throttle';
-    const meter = buildMeter(id, meterInput, index, takenKeys, nowMs, source, isAllowance && !seenAllowance);
+    const meter = buildMeter(id, meterInput, index, takenKeys, nowMs, source, isAllowance && !seenAllowance, options.restoring === true);
     if (isAllowance) seenAllowance = true;
     return meter;
   });
@@ -360,6 +377,9 @@ export function updateMeter(state: State, meterId: string, patch: MeterPatch, no
     if (unitLabel) next.unitLabel = unitLabel;
     else delete next.unitLabel;
   }
+  if ('limit' in patch && patch.limit !== undefined && next.unit === 'percent' && patch.limit !== 100) {
+    throw new ValidationError('limit', 'A percentage meter has no limit of its own. Change its unit as well to give it one.');
+  }
   if ('limit' in patch && patch.limit !== undefined && next.unit !== 'percent') {
     if (!isLimit(patch.limit)) throw new ValidationError('limit', 'limit must be a number greater than 0.');
     next.limit = patch.limit;
@@ -367,6 +387,7 @@ export function updateMeter(state: State, meterId: string, patch: MeterPatch, no
   }
   if ('used' in patch && patch.used !== undefined) {
     if (!isAmount(patch.used)) throw new ValidationError('used', 'used must be a number of 0 or more.');
+    if (next.unit === 'percent' && patch.used > 100) throw new ValidationError('used', 'used must be from 0 to 100 on a percentage meter.');
     next.used = patch.used;
     next.updatedAt = iso(nowMs);
     next.estimated = false;
@@ -390,6 +411,8 @@ export function updateMeter(state: State, meterId: string, patch: MeterPatch, no
     // an edit must not differ. Without it a billing-cycle placeholder stays a 730.5-hour interval and its
     // windows wander off the billing day.
     const reported = toMs(next.resetsAt);
+    // See buildMeter: a past reset would roll at once and record a window nobody saw end.
+    if (reported !== null && reported <= nowMs && next.reset.kind !== 'once') throw new ValidationError('resetsAt', 'resetsAt is in the past.');
     if (reported !== null && reported > nowMs && !('reset' in patch && patch.reset !== undefined)) {
       next.reset = adoptSchedule(next.reset, reported);
     }
@@ -498,7 +521,9 @@ export function parseState(document: unknown, nowMs: number): State {
           notes: raw['notes'] as string | null,
           meters: meters.map((meter) => (isRecord(meter) ? (meter as unknown as MeterInput) : ({} as MeterInput)))
         },
-        nowMs
+        nowMs,
+        { kind: 'manual' },
+        { restoring: true }
       ).account;
       // Keep the document's own ids so references from cycles and external tools stay valid.
       const wantedId = typeof raw['id'] === 'string' && /^[a-z0-9-]{1,48}$/.test(raw['id']) ? raw['id'] : built.id;

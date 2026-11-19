@@ -528,6 +528,21 @@ describe('one wording everywhere', () => {
     expect(snap.queue[0]?.recommendation).toContain('38% left and it resets in 14h');
   });
 
+  it('says why the list is empty, so an agent does not add a subscription twice (review finding)', () => {
+    expect(queueText(emptyState(), NOW, 'UTC')).toContain('No subscriptions are tracked yet. Add one with add_account.');
+
+    // Everything snoozed: the accounts exist, and the text names them.
+    let snoozed = add(emptyState(), 'Claude Max', [weeklyResettingIn(14, 62)]);
+    snoozed = updateAccount(snoozed, 'claude-max', { snoozedUntil: iso(NOW + 5 * DAY) }, NOW);
+    const text = queueText(snoozed, NOW, 'UTC');
+    expect(text).toContain('Nothing to list: Claude Max is snoozed. 1 subscription is tracked; do not add it again.');
+    expect(text).not.toContain('No subscriptions are tracked');
+
+    // Rate limits only: nothing expires with one, and the account is still there.
+    const throttles = add(emptyState(), 'Cursor', [{ label: 'Session', role: 'throttle', reset: { kind: 'rolling', hours: 5 } }]);
+    expect(queueText(throttles, NOW, 'UTC')).toContain('Nothing to list: 1 subscription is tracked, with rate limits only');
+  });
+
   it('agrees for every meter, in every tier, at the same moment', () => {
     const state = zoo();
     const snap = snapshot(state, NOW, 'UTC');

@@ -419,6 +419,18 @@ export function applyReading(
     }
   }
 
+  // More left than the limit says there can be. Clamping that to "nothing used" would make the difference
+  // vanish without a word. Quota that carries over really can exceed one grant, so there the balance is
+  // what is available now; anywhere else the stored limit is stale and the caller is told so.
+  if (reading.remaining !== undefined && isAmount(reading.remaining) && reading.remaining > outOf && current.unit !== 'percent') {
+    if (current.rollover === 'carries' && reading.limit === undefined) {
+      outOf = reading.remaining;
+      limit = reading.remaining;
+    } else {
+      throw new ReadingError('remaining', `remaining (${reading.remaining}) is more than the limit (${outOf}). If the limit has changed, send limit as well.`);
+    }
+  }
+
   const reported = resolveUsed(reading, outOf);
   const used = reported === null || outOf === limit ? reported : (reported * limit) / outOf;
   // Every input was in range, but two of them divided can still leave it. Nothing out of range is stored.

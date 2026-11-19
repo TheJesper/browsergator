@@ -36,7 +36,7 @@ import { cliCommand, createApp, packageRoot, resolvePublicDir, type App } from '
 import { COLLECTORS } from '../src/server/collectors/index.js';
 import { ConfigError, VERSION } from '../src/server/config.js';
 import { TokengatorService } from '../src/server/service.js';
-import { BLOCK_BEGIN } from '../src/server/skill-install.js';
+import { BLOCK_BEGIN, SKILL_CLIENT_IDS } from '../src/server/skill-install.js';
 import { FileStateStore } from '../src/server/store.js';
 
 const TOKEN = 'tg-secret-token-0123456789-do-not-print';
@@ -373,6 +373,26 @@ describe('add', () => {
     }
   });
 
+  it('shows one provider in full with --list <provider>: its usage page, plans and documented ways', async () => {
+    for (const provider of CATALOG) {
+      const io = makeIo();
+      expect(await add(['--list', provider.id], io)).toBe(0);
+      expect(io.out()).toContain(`Usage page: ${provider.usageUrl}`);
+      expect(io.out()).toContain(provider.howToRead);
+      for (const plan of provider.plans) expect(io.out()).toMatch(new RegExp(`^  ${plan.id}\\s`, 'm'));
+      for (const use of provider.uses ?? []) expect(io.out()).toContain(use.url);
+      expect(io.out()).toContain(`tokengator add ${provider.id}`);
+    }
+    // Looking never creates anything.
+    expect(existsSync(home)).toBe(false);
+
+    const unknown = makeIo();
+    expect(await run(['add', '--list', 'no-such-provider'], unknown)).toBe(1);
+    expect(unknown.err()).toContain('The catalog has no provider "no-such-provider"');
+    const two = makeIo();
+    expect(await run(['add', '--list', 'claude', 'codex'], two)).toBe(1);
+  });
+
   it('says so when the catalog is empty, and still refuses an unknown provider', async () => {
     vi.resetModules();
     vi.doMock('../src/core/catalog.js', () => ({ CATALOG: [], CATALOG_CHECKED: '2026-01-01' }));
@@ -617,6 +637,14 @@ describe('notify and calendar (spec: reminders)', () => {
     } finally {
       await target.close();
     }
+  });
+
+  it('refuses --test together with --dry-run: a test always sends (review finding)', async () => {
+    const io = makeIo();
+    expect(await run(['notify', '--test', '--dry-run'], io)).toBe(1);
+    expect(io.err()).toContain('--test');
+    expect(io.err()).toContain('--dry-run');
+    expect(io.out()).toBe('');
   });
 
   it('says so when nothing is due, and refuses stray arguments', async () => {
@@ -939,6 +967,12 @@ describe('skill (spec: Installation)', () => {
     mkdirSync(join(agentHome(), '.claude'), { recursive: true });
     mkdirSync(join(agentHome(), '.codex'), { recursive: true });
     writeFileSync(join(agentHome(), '.codex', 'AGENTS.md'), userText);
+  });
+
+  it('lists in its help every client it can install for (review finding)', async () => {
+    const help = makeIo();
+    expect(await run(['help', 'skill'], help)).toBe(0);
+    expect(help.out()).toContain(`limit to these clients: ${SKILL_CLIENT_IDS.join(', ')}`);
   });
 
   it('installs, reports that everything is up to date the second time, and uninstalls cleanly', async () => {

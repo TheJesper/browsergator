@@ -34,7 +34,7 @@ which reads the same state:
 | See what to use first | `what_to_use` | `tokengator status --json` |
 | Report a number you read | `report_usage` | `tokengator set <account> <meter> <amount> [resets <when>]` |
 | Report in one line | `quick_update` | same |
-| Find a provider's usage page | `list_catalog` | `tokengator add --list` |
+| Find a provider's usage page | `list_catalog` | `tokengator add --list <provider>` |
 | Refresh automatic sources | `refresh_usage` | `tokengator collectors run` |
 | Put the resets in a calendar | none | `tokengator calendar > resets.ics` |
 

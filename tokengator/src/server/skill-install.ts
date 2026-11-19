@@ -6,7 +6,7 @@
 // The block is the only part of an instruction file this module ever touches: installing replaces what
 // is between the markers, uninstalling removes it, and the person's own text is left exactly as it was.
 
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, rmdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 export const SKILL_NAME = 'tokengator';
@@ -162,9 +162,30 @@ function installOne(client: Client, skill: string, dryRun: boolean): SkillAction
 function uninstallOne(client: Client, dryRun: boolean): SkillAction {
   const path = client.target;
   if (client.kind === 'skills') {
-    if (!existsSync(path)) return { client: client.id, path, action: 'skip', note: NOTE_NOT_INSTALLED };
-    if (!dryRun) rmSync(path, { recursive: true, force: true });
-    return { client: client.id, path, action: 'remove' };
+    // Only the one file the installer writes is removed. Anything else in that directory was put there
+    // by the person, and a directory of theirs that happens to share the name is not touched at all.
+    const file = join(path, 'SKILL.md');
+    const installed = read(file);
+    if (installed === null) return { client: client.id, path, action: 'skip', note: NOTE_NOT_INSTALLED };
+    if (!/^name:\s*tokengator\s*$/m.test(installed.slice(0, 400))) {
+      return { client: client.id, path, action: 'skip', note: 'The SKILL.md there is not Tokengator\'s, so it was left alone.' };
+    }
+    let emptied: boolean;
+    if (!dryRun) {
+      rmSync(file, { force: true });
+      try {
+        // Succeeds only when nothing else is in it.
+        rmdirSync(path);
+        emptied = true;
+      } catch {
+        emptied = false;
+      }
+    } else {
+      emptied = readdirSync(path).length === 1;
+    }
+    return emptied
+      ? { client: client.id, path, action: 'remove' }
+      : { client: client.id, path: file, action: 'remove', note: 'Other files in that directory are yours and were kept.' };
   }
 
   const existing = read(path);
@@ -174,9 +195,10 @@ function uninstallOne(client: Client, dryRun: boolean): SkillAction {
     return { client: client.id, path, action: 'skip', note: 'Found a begin marker without its end marker. Remove it by hand.' };
   }
   const next = withoutBlock(existing, span);
-  // A file that held nothing but the block was created by the installer, so it goes with the block.
-  // Any other file is the person's and stays, however little is left in it.
-  const ours = next.trim() === '';
+  // A file that is exactly what the installer writes into an empty place was created by the installer,
+  // so it goes with the block. Any other file is the person's and stays, however little is left in it:
+  // a file that held only blank lines before is given back with its blank lines.
+  const ours = next === '';
   if (!dryRun) {
     if (ours) rmSync(path, { force: true });
     else writeFileSync(path, next, 'utf8');

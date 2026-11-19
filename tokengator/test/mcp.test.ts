@@ -1292,6 +1292,8 @@ describe('docs/MCP.md', () => {
     args: Record<string, unknown>;
     /** The fields the document shows of the structured content, when it shows any. */
     shown: Record<string, unknown> | null;
+    /** For a refused call: the answer the document quotes. */
+    quoted: string | null;
   }
 
   // An example is a marker comment, a JSON block with the arguments and, for calls that succeed, a
@@ -1301,7 +1303,8 @@ describe('docs/MCP.md', () => {
   for (let index = 1; index < parts.length; index += 3) {
     const blocks = [...(parts[index + 2] ?? '').matchAll(/```json\n([\s\S]*?)```/g)].map((match) => JSON.parse(match[1] ?? '') as Record<string, unknown>);
     const fails = parts[index + 1] !== undefined;
-    examples.push({ tool: parts[index] ?? '', fails, args: blocks[0] ?? {}, shown: fails ? null : (blocks[1] ?? null) });
+    const quoted = /```text\n([\s\S]*?)```/.exec(parts[index + 2] ?? '')?.[1]?.trim() ?? null;
+    examples.push({ tool: parts[index] ?? '', fails, args: blocks[0] ?? {}, shown: fails ? null : (blocks[1] ?? null), quoted: fails ? quoted : null });
   }
 
   it('has a tool table that agrees with what the server lists', async () => {
@@ -1333,6 +1336,8 @@ describe('docs/MCP.md', () => {
       const answer = example.fails ? await refused(harness, tool, example.args) : await call(harness, tool, example.args);
       expect(answer.isError).toBe(example.fails);
       if (example.shown) expect(answer.data).toMatchObject(example.shown);
+      // A refusal is quoted word for word, so the quotation is checked word for word.
+      if (example.fails) expect(answer.text.trim()).toBe(example.quoted);
     }
   );
 });
@@ -1704,9 +1709,38 @@ describe('stdio', () => {
     for (const line of wire.lines) expect(JSON.parse(line)).toMatchObject({ jsonrpc: '2.0' });
   });
 
+  it('answers and applies what a client sent before it closed the pipe (review finding)', async () => {
+    const service = serviceOn(new MemoryStateStore(fixture()));
+    const input = new PassThrough();
+    const output = new PassThrough();
+    let written = '';
+    output.on('data', (chunk: Buffer) => (written += chunk.toString('utf8')));
+    const served = runMcpStdio({ service }, { input, output });
+
+    // A script that writes its calls and goes away, the way `printf ... | tokengator mcp` does.
+    for (const message of [
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: LEGACY_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'one-shot', version: '1.0.0' } } },
+      { jsonrpc: '2.0', method: 'notifications/initialized' },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'report_usage', arguments: { account: 'suno', remaining: 1200, resetsInMinutes: 30 } } },
+      { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'what_to_use', arguments: {} } }
+    ]) {
+      input.write(`${JSON.stringify(message)}\n`);
+    }
+    input.end();
+    await served;
+
+    const answers = written
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { id: number; result?: { isError?: boolean } });
+    expect(answers.map((answer) => answer.id).sort()).toEqual([1, 2, 3]);
+    expect(answers.every((answer) => answer.result !== undefined && answer.result.isError !== true)).toBe(true);
+    const suno = (await service.state()).accounts.find((account) => account.label.startsWith('Suno'));
+    expect(suno?.meters[0]).toMatchObject({ used: 1300, source: { kind: 'agent', id: 'one-shot' } });
+  });
+
   it('exports the stdio entry point', () => {
     expect(typeof runMcpStdio).toBe('function');
-    expect(runMcpStdio).toHaveLength(1);
   });
 });
 

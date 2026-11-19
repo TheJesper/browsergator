@@ -182,6 +182,9 @@ export function calendarFeed(state: State, nowMs: number, options: CalendarOptio
     const lead = horizonFor(length);
     const meterName = view.meter.label.charAt(0).toLowerCase() + view.meter.label.slice(1);
     for (const resetMs of upcomingResets(view, nowMs, untilMs)) {
+      // The entry for the window already under way starts now, so its alarm must speak of what is left
+      // of it and not of the full lead time.
+      const startsMs = Math.max(nowMs, resetMs - lead);
       const description = [
         `The ${meterName} of ${view.account.label} resets at the end of this entry. Whatever is left then expires.`,
         options.dashboardUrl ? `What is left right now: ${options.dashboardUrl}` : '',
@@ -193,14 +196,14 @@ export function calendarFeed(state: State, nowMs: number, options: CalendarOptio
         'BEGIN:VEVENT',
         `UID:${view.id.replace(/[^A-Za-z0-9:._-]/g, '-')}-${stamp(resetMs)}@tokengator`,
         `DTSTAMP:${stamp(nowMs)}`,
-        `DTSTART:${stamp(Math.max(nowMs, resetMs - lead))}`,
+        `DTSTART:${stamp(startsMs)}`,
         `DTEND:${stamp(resetMs)}`,
         `SUMMARY:${escapeText(`Use up ${view.account.label}: ${meterName} resets`)}`,
         `DESCRIPTION:${escapeText(description)}`,
         'TRANSP:TRANSPARENT',
         'BEGIN:VALARM',
         'ACTION:DISPLAY',
-        `DESCRIPTION:${escapeText(`${view.account.label}: ${meterName} resets in ${formatDuration(lead)}`)}`,
+        `DESCRIPTION:${escapeText(`${view.account.label}: ${meterName} resets in ${formatDuration(resetMs - startsMs)}`)}`,
         'TRIGGER:PT0S',
         'END:VALARM',
         'END:VEVENT'

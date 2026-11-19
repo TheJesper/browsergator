@@ -263,12 +263,26 @@ export function snapshot(state: State, nowMs: number, tz: string = localZone()):
   };
 }
 
+/**
+ * What to say when the queue has nothing in it. "Nothing is tracked" is true only when nothing is: said
+ * of a snoozed subscription it sends an agent off to add the same one again.
+ */
+export function emptyQueueNote(state: State, nowMs: number): string {
+  if (state.accounts.length === 0) return 'No subscriptions are tracked yet. Add one with add_account.';
+  const tracked = `${state.accounts.length} ${state.accounts.length === 1 ? 'subscription is' : 'subscriptions are'} tracked`;
+  const snoozed = [...new Set(allowanceQueue(state, nowMs).filter((view) => view.snoozed).map((view) => view.account.label))];
+  if (snoozed.length > 0) {
+    return `Nothing to list: ${snoozed.join(', ')} ${snoozed.length === 1 ? 'is' : 'are'} snoozed. ${tracked}; do not add ${state.accounts.length === 1 ? 'it' : 'them'} again.`;
+  }
+  return `Nothing to list: ${tracked}, with rate limits only, and nothing of value expires with a rate limit.`;
+}
+
 /** A terse plain-text queue for tool output: one line per meter, most urgent first. */
 export function queueText(state: State, nowMs: number, tz: string = localZone(), limit = 20): string {
   const queue = allowanceQueue(state, nowMs).filter((view) => !view.snoozed);
   const summary = summarise(state, nowMs);
   const lines = [`As of ${stamp(nowMs, tz)}.`, summaryLine(summary, state.settings.currency), ''];
-  if (queue.length === 0) lines.push('No subscriptions are tracked yet. Add one with add_account.');
+  if (queue.length === 0) lines.push(emptyQueueNote(state, nowMs));
   queue.slice(0, limit).forEach((view, index) => {
     lines.push(`${index + 1}. ${statusLine(view, nowMs, tz)}`);
     if (view.tier === 'use-now' || view.tier === 'behind' || view.tier === 'hot') lines.push(`   ${recommend(view, nowMs, tz)}`);

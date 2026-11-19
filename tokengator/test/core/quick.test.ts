@@ -299,6 +299,18 @@ describe('resolveTarget', () => {
     expect(idsOf(state, ['claude-pro:weekly'])).toBe('claude-pro:weekly');
   });
 
+  it('takes an exact account id over another account whose id merely starts the same (review finding)', () => {
+    // Two subscriptions with one name: the second gets a numbered id, and the first id is a prefix of it.
+    let state = add(emptyState(), 'Claude Max', [{ label: 'Weekly', reset: { kind: 'none' } }]);
+    state = add(state, 'Claude Max', [{ label: 'Weekly', reset: { kind: 'none' } }]);
+    const [first, second] = state.accounts.map((account) => account.id) as [string, string];
+    expect(second.startsWith(first)).toBe(true);
+    expect(idsOf(state, [first])).toBe(`${first}:weekly`);
+    expect(idsOf(state, [second])).toBe(`${second}:weekly`);
+    // The shared name alone is still a question.
+    expect(idsOf(state, ['claude', 'max'])).toMatch(/^error: /);
+  });
+
   it('prefers an exact name over a longer one that merely starts the same', () => {
     let state = add(emptyState(), 'Claude Code', [{ label: 'Weekly', reset: { kind: 'none' } }]);
     state = add(state, 'Claude', [

@@ -105,13 +105,45 @@ describe('addAccount', () => {
     expect(state).toEqual(emptyState());
   });
 
-  it('gives a percentage-only meter a limit of 100, whatever limit was sent', () => {
+  it('gives a percentage-only meter a limit of 100', () => {
     // Scenario: Percentage-only meter.
-    const { account } = addAccount(emptyState(), base({ meters: [{ ...WEEKLY, unit: 'percent', limit: 500 }, { label: 'Default unit', reset: { kind: 'none' } }] }), NOW);
+    const { account } = addAccount(emptyState(), base({ meters: [{ ...WEEKLY, unit: 'percent', limit: 100 }, { label: 'Default unit', reset: { kind: 'none' } }] }), NOW);
     expect(account.meters.map((meter) => [meter.unit, meter.limit])).toEqual([
       ['percent', 100],
       ['percent', 100]
     ]);
+  });
+
+  it('refuses a limit without a unit instead of dropping the limit and reading the amount as a percentage', () => {
+    // Scenario: A limit without a unit. "150 of 500" with the unit left out must not become "150% used".
+    const refuse = (meter: MeterInput): string | undefined => {
+      try {
+        addAccount(emptyState(), base({ meters: [meter] }), NOW);
+      } catch (error) {
+        return (error as ValidationError).field;
+      }
+      return undefined;
+    };
+    expect(refuse({ label: 'Monthly credits', limit: 500, used: 150, reset: { kind: 'none' } })).toBe('meters[0].unit');
+    expect(refuse({ ...WEEKLY, unit: 'percent', limit: 500 })).toBe('meters[0].unit');
+    expect(refuse({ ...WEEKLY, used: 150 })).toBe('meters[0].used');
+    expect(refuse({ label: 'Monthly credits', unit: 'credits', limit: 500, used: 150, reset: { kind: 'none' } })).toBeUndefined();
+  });
+
+  it('refuses a reset time that has already passed, except for a one-off expiry', () => {
+    const refuse = (meter: MeterInput): string | undefined => {
+      try {
+        addAccount(emptyState(), base({ meters: [meter] }), NOW);
+      } catch (error) {
+        return (error as ValidationError).field;
+      }
+      return undefined;
+    };
+    expect(refuse({ ...WEEKLY, resetsAt: iso(NOW - HOUR) })).toBe('meters[0].resetsAt');
+    expect(refuse({ ...WEEKLY, resetsAt: iso(NOW - 365 * DAY) })).toBe('meters[0].resetsAt');
+    expect(refuse({ ...WEEKLY, resetsAt: iso(NOW + HOUR) })).toBeUndefined();
+    // A pack that has expired is a fact worth recording, not a mistake.
+    expect(refuse({ label: 'Pack', unit: 'credits', limit: 100, used: 40, reset: { kind: 'once' }, resetsAt: iso(NOW - HOUR) })).toBeUndefined();
   });
 
   it('accepts every unit of the spec and keeps a custom noun for counts', () => {
@@ -515,12 +547,23 @@ describe('updateMeter', () => {
     expect(meterOf(state).samples[meterOf(state).samples.length - 1]).toEqual({ t: iso(NOW + 3 * HOUR), used: 33 });
   });
 
-  it('changes the limit of a counted meter and ignores one for a percentage-only meter', () => {
+  it('changes the limit of a counted meter and refuses one for a percentage-only meter', () => {
     let state = addAccount(emptyState(), base({ meters: [WEEKLY, { label: 'Credits', unit: 'credits', limit: 2500, reset: { kind: 'none' } }] }), NOW).state;
     state = updateMeter(state, 'claude-max:credits', { limit: 10_000 }, NOW);
-    state = updateMeter(state, 'claude-max:weekly', { limit: 500 }, NOW);
     expect(meterOf(state, 'claude-max:credits').limit).toBe(10_000);
+    // Saying "changed" for a limit that was ignored would be a lie; the caller is told what to do instead.
+    expect(() => updateMeter(state, 'claude-max:weekly', { limit: 500 }, NOW)).toThrow(/percentage meter has no limit/);
+    expect(() => updateMeter(state, 'claude-max:weekly', { used: 150 }, NOW)).toThrow(/0 to 100/);
+    expect(meterOf(updateMeter(state, 'claude-max:weekly', { limit: 100 }, NOW)).limit).toBe(100);
     expect(meterOf(state).limit).toBe(100);
+  });
+
+  it('refuses a reset time in the past when a meter is edited', () => {
+    const state = updateMeter(one(), 'claude-max:weekly', { resetsAt: iso(NOW + 2 * DAY) }, NOW);
+    expect(() => updateMeter(state, 'claude-max:weekly', { resetsAt: iso(NOW - HOUR) }, NOW)).toThrow(/in the past/);
+    expect(() => updateMeter(state, 'claude-max:weekly', { resetsAt: '2025-11-21T09:00:00Z' }, NOW)).toThrow(/in the past/);
+    // Clearing it is still allowed.
+    expect(meterOf(updateMeter(state, 'claude-max:weekly', { resetsAt: null }, NOW)).resetsAt).toBeNull();
   });
 
   it('drops the stored window when the reset rule changes, and anchors the new rule', () => {

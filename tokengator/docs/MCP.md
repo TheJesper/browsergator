@@ -17,7 +17,7 @@ Both transports build the same server on the same stored state (`~/.tokengator/s
 | Needs the service running | yes | no, it opens the state file itself |
 | Use it when | the dashboard is running anyway, several agents share it, or the client speaks HTTP | the client only launches stdio servers, or the service is not running |
 | Access control | the service's Host and Origin checks, plus `Authorization: Bearer <token>` when `TOKENGATOR_TOKEN` is set | none needed: no network listener |
-| Reporter recorded on a reading | `agent:mcp` | `agent:<client name>` from the MCP handshake |
+| Reporter recorded on a reading | `agent:<client name>` for clients of the 2026-07-28 revision, `agent:mcp` for clients that open with a handshake | `agent:<client name>` |
 
 `tokengator connect` and the dashboard's Connect panel print the exact registration command for each
 client. Two typical ones:
@@ -36,8 +36,9 @@ Details of the HTTP endpoint:
   session id, so restarting the service never leaves a client holding a dead session.
 - `GET` and `DELETE` answer `405` with a JSON-RPC error. Clients treat that as "no server-sent stream, no
   session to end" and carry on.
-- Because no session exists, the server cannot tell which client a call came from. Readings reported over
-  HTTP are attributed to `agent:mcp`.
+- A client of the 2026-07-28 revision names itself in every request, so its readings are attributed to
+  `agent:<client name>`. An older client names itself once, in a handshake that a stateless endpoint
+  does not keep, so its readings over HTTP are attributed to `agent:mcp`.
 - The stdio server writes only protocol messages to standard output; logs go to standard error. It ends
   when its standard input closes.
 
@@ -637,8 +638,8 @@ Candidates (name one by its id):
 - Claude Max, 5-hour session (account id: claude-max, meter id: claude-max:session)
 ```
 
-A value outside the accepted range, a wrong type or an unknown argument is refused before the tool runs,
-naming the argument:
+A value outside the accepted range, a wrong type or an unknown argument is refused before the tool runs.
+That too is a tool result with `isError: true`, and it names the argument:
 
 <!-- example: report_usage error -->
 
@@ -647,7 +648,7 @@ naming the argument:
 ```
 
 ```text
-MCP error -32602: Input validation error: Invalid arguments for tool report_usage: must be a percentage from 0 to 100 at usedPercent
+Input validation error: Invalid arguments for tool report_usage: usedPercent: must be a percentage from 0 to 100
 ```
 
 A value the tool itself rejects names the field in parentheses. Errors about a reset time also say what
