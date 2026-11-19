@@ -108,8 +108,11 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
   calendar: {
     synopsis: 'calendar',
     summary: 'the coming resets as an iCalendar document',
-    usage: [`${PROGRAM} calendar [--days <n>] > resets.ics`],
-    options: [['--days <n>', 'how far ahead to list resets (default 62)']]
+    usage: [`${PROGRAM} calendar [--days <n>] --output resets.ics`, `${PROGRAM} calendar [--days <n>] > resets.ics`],
+    options: [
+      ['--days <n>', 'how far ahead to list resets (default 62)'],
+      ['--output <file>', 'write the file directly; use this in Windows PowerShell, where > changes the encoding']
+    ]
   },
   connect: {
     synopsis: 'connect',
@@ -134,7 +137,8 @@ export const COMMAND_HELP: Readonly<Record<string, CommandHelp>> = {
   export: {
     synopsis: 'export',
     summary: 'print the whole state as JSON',
-    usage: [`${PROGRAM} export > backup.json`]
+    usage: [`${PROGRAM} export --output backup.json`, `${PROGRAM} export > backup.json`],
+    options: [['--output <file>', 'write the file directly; use this in Windows PowerShell, where > changes the encoding']]
   },
   import: {
     synopsis: 'import <file>',

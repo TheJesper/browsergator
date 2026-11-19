@@ -50,16 +50,51 @@ export function resolvePublicDir(): string {
   return join(packageRoot(), 'dist', 'public');
 }
 
+export interface CliLocation {
+  /** The search path of the process that will later run the command. */
+  path?: string | undefined;
+  platform?: NodeJS.Platform;
+  /** Where the package is installed. */
+  root?: string;
+}
+
 /**
- * How this machine invokes the CLI, for connection snippets. Started through the installed `tokengator`
- * shim, the short name works everywhere a client will run it. Started any other way (a clone, `npm
- * start`, a test runner) the name may not be on the PATH, so the snippets get the built entry point.
+ * How this machine invokes the CLI, for connection snippets. The short name is used only when the shim
+ * that started this process sits in a directory on the search path, which is what a global install
+ * gives. A project-local shim (`node_modules/.bin`, on the path only while npm runs a script), a clone,
+ * `npm start` and a test runner all get the built entry point instead, because whatever runs the
+ * snippet later will not find the short name.
+ *
+ * The entry point is written with forward slashes on every platform. Node accepts them on Windows, and
+ * a path with backslashes does not survive Git Bash, which is what runs a Claude Code status line there.
  */
-export function cliCommand(script: string | undefined = process.argv[1]): string {
+export function cliCommand(script: string | undefined = process.argv[1], where: CliLocation = {}): string {
+  const platform = where.platform ?? process.platform;
+  const windows = platform === 'win32';
   // Split on both separators: a Windows path must be read correctly whatever platform parses it.
-  const name = (script ?? '').split(/[\\/]/).pop() ?? '';
-  if (/^tokengator(\.(cmd|ps1|exe))?$/i.test(name)) return 'tokengator';
-  return `node "${join(packageRoot(), 'dist', 'cli', 'main.js')}"`;
+  const parts = (script ?? '').split(/[\\/]/);
+  const name = parts.pop() ?? '';
+  const fold = (dir: string): string => {
+    const plain = dir.replace(/[\\/]+/g, '/').replace(/\/$/, '');
+    return windows ? plain.toLowerCase() : plain;
+  };
+  const dir = fold(parts.join('/'));
+  if (/^tokengator(\.(cmd|ps1|exe))?$/i.test(name) && !dir.endsWith('/node_modules/.bin')) {
+    const searched = (where.path ?? process.env['PATH'] ?? '').split(windows ? ';' : ':').map(fold);
+    if (dir !== '' && searched.includes(dir)) return 'tokengator';
+  }
+  const entry = join(where.root ?? packageRoot(), 'dist', 'cli', 'main.js');
+  return `node "${windows ? entry.replace(/\\/g, '/') : entry}"`;
+}
+
+/**
+ * The CLI as an absolute program and an absolute script, for schedulers and start-up entries. Those run
+ * with a search path of two or three system directories, so neither `tokengator` nor `node` is found.
+ */
+export function fullCommand(where: CliLocation & { node?: string } = {}): string {
+  const windows = (where.platform ?? process.platform) === 'win32';
+  const plain = (path: string): string => (windows ? path.replace(/\\/g, '/') : path);
+  return `"${plain(where.node ?? process.execPath)}" "${plain(join(where.root ?? packageRoot(), 'dist', 'cli', 'main.js'))}"`;
 }
 
 export async function createApp(options: AppOptions): Promise<App> {

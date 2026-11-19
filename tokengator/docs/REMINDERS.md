@@ -79,8 +79,10 @@ no link back to your machine.
 ### Calendar
 
 ```bash
-tokengator calendar > resets.ics          # import the file into any calendar
+tokengator calendar --output resets.ics   # import the file into any calendar
 ```
+
+(`--output` writes the file itself. In Windows PowerShell, `> resets.ics` would re-encode it.)
 
 or subscribe to `http://127.0.0.1:4777/api/calendar.ics` in a calendar program **on the same
 computer** (Apple Calendar, Thunderbird, Outlook for desktop). Web calendars fetch from their own
@@ -96,26 +98,43 @@ where you are signed in, and import it.
 
 ## Without the service running
 
-`tokengator notify` does one check and exits. Let your scheduler run it:
+`tokengator notify` does one check and exits. Let your scheduler run it.
+
+A scheduler does not search your PATH: it looks in two or three system directories, where neither
+`tokengator` nor, usually, `node` is. So write the command out in full. `tokengator doctor` prints
+it for your machine, under Reminders, in this form:
+
+```
+"/usr/local/bin/node" "/home/you/tokengator/dist/cli/main.js" notify
+```
+
+Below, `NODE` and `MAIN` stand for those two paths.
 
 ```bash
-# cron, every 15 minutes (the session variables are what notify-send needs)
-*/15 * * * * XDG_RUNTIME_DIR=/run/user/$(id -u) tokengator notify
+# cron, every 15 minutes (the session variable is what notify-send needs)
+*/15 * * * * XDG_RUNTIME_DIR=/run/user/$(id -u) NODE MAIN notify
 ```
 
 ```powershell
 # Windows Task Scheduler, every 15 minutes, for the signed-in user
-schtasks /Create /TN "Tokengator reminders" /SC MINUTE /MO 15 /TR "tokengator notify"
+$action  = New-ScheduledTaskAction -Execute 'NODE' -Argument '"MAIN" notify'
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 15)
+Register-ScheduledTask -TaskName 'Tokengator reminders' -Action $action -Trigger $trigger
 ```
 
+On Windows a console window appears for a moment at each run. Keeping the service running, as
+below, avoids that and is the better choice there.
+
 `tokengator notify --dry-run` prints what is due without sending or recording anything.
-`tokengator notify --test` sends a test message through every route that is set up.
+`tokengator notify --test` sends a test message through every route that is set up and, when one
+fails, prints the reason the system gave.
 
 ## Starting the service at sign-in
 
 Desktop reminders need the service. These are the standard per-user ways to keep it running; none
 needs administrator rights, and none should be a system service, because a system service has no
-desktop to show a notification on.
+desktop to show a notification on. `NODE` and `MAIN` are the two paths from `tokengator doctor`,
+as above.
 
 **Linux** (`~/.config/systemd/user/tokengator.service`, then `systemctl --user enable --now tokengator`):
 
@@ -124,7 +143,7 @@ desktop to show a notification on.
 Description=Tokengator
 
 [Service]
-ExecStart=/usr/bin/env tokengator serve
+ExecStart=NODE MAIN serve
 Restart=on-failure
 
 [Install]
@@ -140,15 +159,19 @@ WantedBy=default.target
 <dict>
   <key>Label</key><string>dev.tokengator</string>
   <key>ProgramArguments</key>
-  <array><string>/usr/bin/env</string><string>tokengator</string><string>serve</string></array>
+  <array><string>NODE</string><string>MAIN</string><string>serve</string></array>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
 </dict>
 </plist>
 ```
 
-**Windows**: press Win+R, open `shell:startup`, and put a shortcut to `tokengator serve` there
-(set it to run minimised).
+**Windows**: press Win+R, open `shell:startup`, and create a shortcut there whose target is
+`"NODE" "MAIN" serve`, set to run minimised.
+
+The scheduler and start-up recipes on this page were written from each system's documentation and
+have not been run on a real machine. The command they start is the one `tokengator doctor` prints,
+and that command is tested.
 
 ## What is kept
 

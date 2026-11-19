@@ -6,10 +6,12 @@
 // read from the environment when needed and never logged, stored or returned.
 
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { plainLine } from '../core/limits.js';
 import { digestReminders, dueReminders, rememberReminders, type Reminder } from '../core/reminders.js';
+import { replaceFile } from './files.js';
 import { log } from './logger.js';
 import type { TokengatorService } from './service.js';
 
@@ -23,6 +25,8 @@ export interface DesktopCommand {
   args: string[];
   /** Extra environment for the command. This is how text reaches PowerShell without being parsed by it. */
   env?: Record<string, string>;
+  /** Variables of this process the command must not inherit. */
+  withoutEnv?: string[];
 }
 
 // Windows PowerShell 5.1 ships with every supported Windows and can raise a toast through WinRT with no
@@ -31,15 +35,18 @@ export interface DesktopCommand {
 // that it is attributed to PowerShell. The text arrives in two environment variables and is XML-escaped by
 // the script before it is placed in the toast document, so it is never parsed as PowerShell or as markup.
 const WINDOWS_APP_ID = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe';
+// The script uses no cmdlet at all, only .NET and WinRT types. A cmdlet such as New-Object is loaded from a
+// module on first use, and when the service was started from PowerShell 7 the module path inherited from
+// it makes Windows PowerShell pick the wrong copy and fail.
 export const WINDOWS_TOAST_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
-  '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null',
-  '[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null',
+  '$null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]',
+  '$null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]',
   '$title = [System.Security.SecurityElement]::Escape($env:TOKENGATOR_NOTIFY_TITLE)',
   '$body = [System.Security.SecurityElement]::Escape($env:TOKENGATOR_NOTIFY_BODY)',
-  '$xml = New-Object Windows.Data.Xml.Dom.XmlDocument',
+  '$xml = [Windows.Data.Xml.Dom.XmlDocument]::new()',
   "$xml.LoadXml('<toast><visual><binding template=\"ToastGeneric\"><text>' + $title + '</text><text>' + $body + '</text></binding></visual></toast>')",
-  '$toast = New-Object Windows.UI.Notifications.ToastNotification $xml',
+  '$toast = [Windows.UI.Notifications.ToastNotification]::new($xml)',
   `[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('${WINDOWS_APP_ID}').Show($toast)`
 ].join('\n');
 // Handed over as -EncodedCommand (base64 of UTF-16LE), so no quoting rule of any shell or of CreateProcess
@@ -57,8 +64,11 @@ export function desktopCommand(platform: NodeJS.Platform, message: OutgoingMessa
   if (platform === 'win32') {
     return {
       command: 'powershell.exe',
-      args: ['-NoProfile', '-NonInteractive', '-NoLogo', '-EncodedCommand', WINDOWS_TOAST_ENCODED],
-      env: { TOKENGATOR_NOTIFY_TITLE: message.title, TOKENGATOR_NOTIFY_BODY: message.body }
+      // Errors as plain text: redirected, PowerShell would otherwise write them as an XML document.
+      args: ['-NoProfile', '-NonInteractive', '-NoLogo', '-OutputFormat', 'Text', '-EncodedCommand', WINDOWS_TOAST_ENCODED],
+      env: { TOKENGATOR_NOTIFY_TITLE: message.title, TOKENGATOR_NOTIFY_BODY: message.body },
+      // PowerShell 7 puts its own modules first on this path, and Windows PowerShell must not inherit it.
+      withoutEnv: ['PSModulePath']
     };
   }
   if (platform === 'linux' || platform === 'freebsd' || platform === 'openbsd') {
@@ -69,28 +79,52 @@ export function desktopCommand(platform: NodeJS.Platform, message: OutgoingMessa
 
 const COMMAND_TIMEOUT_MS = 15_000;
 
-function runCommand(command: DesktopCommand): Promise<void> {
+/** The environment a notification command runs in: this process's, minus what the command must not inherit. */
+export function commandEnv(command: DesktopCommand, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const dropped = new Set((command.withoutEnv ?? []).map((name) => name.toUpperCase()));
+  // Windows variable names are not case-sensitive, so the comparison is not either.
+  const kept = Object.entries(base).filter(([name]) => !dropped.has(name.toUpperCase()));
+  return { ...Object.fromEntries(kept), ...command.env };
+}
+
+/** The first line a failed command wrote, as one short plain line, so "it failed" comes with a reason. */
+function firstLine(output: string): string {
+  const line = output.split(/\r?\n/).map((text) => plainLine(text)).find((text) => text !== '') ?? '';
+  return line.length > 200 ? `${line.slice(0, 200)}…` : line;
+}
+
+/** Runs a notification command without a shell. Rejects with a reason a person can act on. */
+export function runCommand(command: DesktopCommand): Promise<void> {
   return new Promise((resolve, reject) => {
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(command.command, command.args, {
-        stdio: 'ignore',
+        stdio: ['ignore', 'ignore', 'pipe'],
         windowsHide: true,
         shell: false,
         timeout: COMMAND_TIMEOUT_MS,
-        env: { ...process.env, ...command.env }
+        env: commandEnv(command)
       });
     } catch {
       // Node refuses some arguments outright. Its message quotes them, so it is not passed on.
       reject(new Error(`${command.command} could not be started.`));
       return;
     }
+    let complaint = '';
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (chunk: string) => {
+      if (complaint.length < 4096) complaint += chunk;
+    });
     child.once('error', (error: NodeJS.ErrnoException) => {
       reject(new Error(error.code === 'ENOENT' ? `${command.command} is not installed.` : `${command.command} could not be started.`));
     });
     child.once('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`${command.command} ended with status ${String(code)}.`));
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      const why = firstLine(complaint);
+      reject(new Error(`${command.command} ended with status ${String(code)}${why ? `: ${why}` : '.'}`));
     });
   });
 }
@@ -270,7 +304,11 @@ export class ReminderRunner {
     const deliveries = await this.deliver(message, options.desktop ?? state.settings.desktopReminders === true);
     // Recorded as raised once any channel took it. With none, the same reminders are tried again later.
     if (deliveries.some((delivery) => delivery.ok)) {
-      await this.save(rememberReminders(sent, due.map((reminder) => reminder.key), nowMs));
+      // The reminder has been delivered, so a record that cannot be written is a warning, not a failure:
+      // this process remembers it either way.
+      await this.save(rememberReminders(sent, due.map((reminder) => reminder.key), nowMs)).catch((error: unknown) => {
+        log('warn', 'reminder record not written', { reason: (error as NodeJS.ErrnoException).code ?? 'error' });
+      });
     }
     for (const delivery of deliveries) {
       if (!delivery.ok) log('warn', 'reminder not delivered', { channel: delivery.channel, reason: delivery.error });
@@ -347,10 +385,12 @@ export class ReminderRunner {
     try {
       const parsed: unknown = JSON.parse(await readFile(file, 'utf8'));
       const sent = (parsed as { sent?: unknown } | null)?.sent;
-      return Array.isArray(sent) ? sent.filter((key): key is string => typeof key === 'string') : [];
+      const stored = Array.isArray(sent) ? sent.filter((key): key is string => typeof key === 'string') : [];
+      // Plus what this process raised and could not write down.
+      return [...new Set([...stored, ...this.memory])];
     } catch {
-      // Missing or unreadable: at worst a reminder is raised a second time.
-      return [];
+      // Missing or unreadable: at worst a reminder is raised a second time after a restart.
+      return this.memory;
     }
   }
 
@@ -360,14 +400,10 @@ export class ReminderRunner {
       this.memory = sent;
       return;
     }
+    // What was raised is remembered in this process whatever happens to the file, so a record that cannot
+    // be written costs at most one repeat after a restart, never one every check.
+    this.memory = sent;
     await mkdir(this.options.home, { recursive: true, mode: 0o700 });
-    const temp = `${file}.${process.pid}.tmp`;
-    try {
-      await writeFile(temp, `${JSON.stringify({ sent }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-      await rename(temp, file);
-    } catch (error) {
-      await rm(temp, { force: true }).catch(() => undefined);
-      throw error;
-    }
+    await replaceFile(file, `${JSON.stringify({ sent }, null, 2)}\n`, String(process.pid));
   }
 }

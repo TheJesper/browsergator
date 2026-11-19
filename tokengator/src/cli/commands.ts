@@ -4,7 +4,7 @@
 
 import { spawn } from 'node:child_process';
 import { readFileSync, statSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 
@@ -16,12 +16,13 @@ import { calendarFeed } from '../core/reminders.js';
 import { summarise, viewAccount, viewMeter } from '../core/forecast.js';
 import { emptyState, type State } from '../core/types.js';
 import { headline } from '../core/wording.js';
-import { cliCommand, createApp, packageRoot, resolvePublicDir, type App } from '../server/app.js';
+import { cliCommand, createApp, fullCommand, packageRoot, resolvePublicDir, type App } from '../server/app.js';
 import { createCollectorRunner } from '../server/collectors/index.js';
 import { runStatusline } from '../server/collectors/statusline.js';
 import type { CollectorStatus } from '../server/collectors/types.js';
 import { VERSION, ConfigError, loadConfig, tokengatorHome, type ServiceConfig } from '../server/config.js';
 import { envFilePath, liveEnv, loadEnvFile, mergedEnv } from '../server/env.js';
+import { decodeText } from '../server/files.js';
 import { redact } from '../server/logger.js';
 import { NOTIFY_URL_VARIABLE, ReminderRunner, TEST_MESSAGE, desktopCommand, webhookTarget, type Delivery } from '../server/notify.js';
 import { isWildcardHost } from '../server/security.js';
@@ -31,6 +32,7 @@ import { FileStateStore, MemoryStateStore, type FileStoreOptions } from '../serv
 import { ArgError, integerFlag, parseArgs } from './args.js';
 import { PROGRAM, commandUsage, usage } from './help.js';
 import { readAll, type Io } from './io.js';
+import { planSpawn } from './wrap.js';
 import { colorMode, columns, renderCatalog, renderCollectors, renderConnect, renderProvider, renderStatus } from './render.js';
 
 export type { Io } from './io.js';
@@ -205,8 +207,28 @@ export async function notify(args: readonly string[], io: Io): Promise<number> {
 }
 
 /** The coming resets as an iCalendar document on standard output. */
+/**
+ * Prints a document, or with `--output <file>` writes it there as UTF-8. The file route exists because a
+ * shell is not a safe way to make one: `>` in Windows PowerShell 5.1 re-encodes what it redirects.
+ */
+async function deliver(io: Io, text: string, output: string | undefined): Promise<number> {
+  if (output === undefined) {
+    io.stdout.write(text);
+    return 0;
+  }
+  const path = resolve(io.cwd, output);
+  try {
+    await writeFile(path, text, 'utf8');
+  } catch (error) {
+    warn(io, `Cannot write ${path} (${(error as NodeJS.ErrnoException).code ?? 'error'}).`);
+    return 1;
+  }
+  say(io, `Wrote ${path}`);
+  return 0;
+}
+
 export async function calendar(args: readonly string[], io: Io): Promise<number> {
-  const flags = parseArgs(args, { values: ['days'], switches: [] });
+  const flags = parseArgs(args, { values: ['days', 'output'], switches: [] });
   noPositionals('calendar', flags.positionals);
   const days = integerFlag(flags, 'days', 1, 366);
   return withState(io, async ({ env, home, service }) => {
@@ -216,8 +238,7 @@ export async function calendar(args: readonly string[], io: Io): Promise<number>
       ...(days !== undefined ? { daysAhead: days } : {})
     });
     // Written as it is: an iCalendar document ends its lines with CR LF, including the last.
-    io.stdout.write(feed);
-    return 0;
+    return deliver(io, feed, flags.values.get('output'));
   });
 }
 
@@ -336,41 +357,62 @@ const STATUSLINE_READ_MS = 1500;
 /** A status line runs after every turn; it gives up on a busy state file rather than hold the terminal. */
 const STATUSLINE_LOCK_MS = 400;
 
-/** How long a wrapped status line command may take before its part of the line is left out. */
-const STATUSLINE_WRAP_MS = 1500;
+/**
+ * How long a wrapped status line command may take before its part of the line is left out. Generous on
+ * purpose: a command started through `npx` spends a second or more before it prints anything.
+ */
+const STATUSLINE_WRAP_MS = 5000;
 const STATUSLINE_WRAP_BYTES = 64 * 1024;
+
+interface Wrapped {
+  text: string;
+  /** Why there is no text, in two or three words, or null when the command worked. */
+  failure: string | null;
+}
 
 /**
  * Runs the status line command a person already had, with the same input, and returns what it printed.
- * No shell: the words after "--" are the program and its arguments, as the calling shell split them.
- * Anything that goes wrong yields an empty string, so the line Tokengator prints is never held up by it.
+ * No shell reads the words after "--": they are the program and its arguments, as the calling shell
+ * split them (see wrap.ts for what Windows needs on top of that). Whatever goes wrong comes back as a
+ * reason instead of a line, so the line Tokengator prints is never held up or lost with it.
  */
-function runWrapped(command: readonly string[], input: string, env: NodeJS.ProcessEnv): Promise<string> {
+function runWrapped(command: readonly string[], input: string, env: NodeJS.ProcessEnv): Promise<Wrapped> {
   return new Promise((done) => {
-    const program = command[0];
-    if (!program) {
-      done('');
+    const merged = { ...process.env, ...env };
+    const plan = planSpawn(command, process.platform, merged);
+    if (!plan) {
+      done({ text: '', failure: null });
       return;
     }
     let out = '';
     let settled = false;
-    const finish = (text: string): void => {
+    const finish = (text: string, failure: string | null): void => {
       if (settled) return;
       settled = true;
-      done(text);
+      done({ text, failure });
     };
     try {
-      const child = spawn(program, command.slice(1), { stdio: ['pipe', 'pipe', 'ignore'], env: { ...process.env, ...env }, windowsHide: true, shell: false, timeout: STATUSLINE_WRAP_MS });
-      child.once('error', () => finish(''));
+      const child = spawn(plan.file, plan.args, {
+        stdio: ['pipe', 'pipe', 'ignore'],
+        env: merged,
+        windowsHide: true,
+        shell: false,
+        windowsVerbatimArguments: plan.verbatim,
+        timeout: STATUSLINE_WRAP_MS
+      });
+      child.once('error', (error: NodeJS.ErrnoException) => finish('', error.code === 'ENOENT' ? 'not found' : 'could not start'));
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', (chunk: string) => {
         if (out.length < STATUSLINE_WRAP_BYTES) out += chunk;
       });
-      child.once('close', (code) => finish(code === 0 ? out : ''));
+      child.once('close', (code, signal) => {
+        if (code === 0) finish(out, null);
+        else finish('', signal !== null ? 'timed out' : `exit ${String(code)}`);
+      });
       child.stdin.on('error', () => undefined);
       child.stdin.end(input);
     } catch {
-      finish('');
+      finish('', 'could not start');
     }
   });
 }
@@ -382,10 +424,11 @@ export async function statusline(args: readonly string[], io: Io): Promise<numbe
   const wrapped = split >= 0 ? args.slice(split + 1) : [];
   let line = PROGRAM;
   let theirs = '';
+  let failure: string | null = null;
   try {
     const input = await readAll(io.stdin, { maxBytes: STATUSLINE_MAX_BYTES, timeoutMs: STATUSLINE_READ_MS });
     const text = input.complete ? input.text : '';
-    const other = wrapped.length > 0 ? runWrapped(wrapped, text, io.env) : Promise.resolve('');
+    const other: Promise<Wrapped> = wrapped.length > 0 ? runWrapped(wrapped, text, io.env) : Promise.resolve({ text: '', failure: null });
     const store = new FileStateStore(tokengatorHome(io.env), { lockTimeoutMs: STATUSLINE_LOCK_MS, pollMs: 0 });
     try {
       line = await runStatusline(text, new TokengatorService(store));
@@ -394,12 +437,15 @@ export async function statusline(args: readonly string[], io: Io): Promise<numbe
     } finally {
       store.close();
     }
-    theirs = await other;
+    ({ text: theirs, failure } = await other);
   } catch {
     // A status line that fails or complains breaks the terminal it sits in: the fallback line stands.
   }
   try {
-    const ours = line || PROGRAM;
+    // A wrapped command that failed is named rather than dropped: a status line that silently loses half
+    // of itself looks like the other tool broke.
+    const program = (wrapped[0] ?? 'command').split(/[\\/]/).pop() ?? 'command';
+    const ours = `${line || PROGRAM}${failure ? ` · [${program}: ${failure}]` : ''}`;
     const lines = theirs.replace(/\r/g, '').split('\n');
     while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
     // Their first line carries ours at its end; any further lines of theirs follow untouched.
@@ -553,11 +599,9 @@ export async function skill(args: readonly string[], io: Io): Promise<number> {
 // ---------------------------------------------------------------------------
 
 export async function exportState(args: readonly string[], io: Io): Promise<number> {
-  noPositionals('export', parseArgs(args).positionals);
-  return withState(io, async ({ service }) => {
-    say(io, JSON.stringify(await service.exportState(), null, 2));
-    return 0;
-  });
+  const flags = parseArgs(args, { values: ['output'], switches: [] });
+  noPositionals('export', flags.positionals);
+  return withState(io, async ({ service }) => deliver(io, `${JSON.stringify(await service.exportState(), null, 2)}\n`, flags.values.get('output')));
 }
 
 /** Far above any real state document, and low enough that a wrong file is refused instead of parsed. */
@@ -578,7 +622,8 @@ export async function importState(args: readonly string[], io: Io): Promise<numb
   } else {
     const path = resolve(io.cwd, file);
     try {
-      raw = await readFile(path, 'utf8');
+      // By its byte-order mark: a backup made with `>` in Windows PowerShell is UTF-16.
+      raw = decodeText(await readFile(path));
     } catch (error) {
       warn(io, `Cannot read ${path} (${(error as NodeJS.ErrnoException).code ?? 'error'}).`);
       return 1;
@@ -619,7 +664,7 @@ function isFile(path: string): boolean {
 function inspectState(path: string): { note: string; enabledCollectors: string[]; desktopReminders?: boolean } {
   let raw: string;
   try {
-    raw = readFileSync(path, 'utf8');
+    raw = decodeText(readFileSync(path));
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     return { note: code === 'ENOENT' ? 'not created yet' : `cannot be read (${code ?? 'error'})`, enabledCollectors: [] };
@@ -725,6 +770,8 @@ export async function doctor(args: readonly string[], io: Io): Promise<number> {
     ).join('\n')
   );
   say(io, `  Check that one arrives: ${PROGRAM} notify --test`);
+  // A scheduler or a start-up entry searches two or three system directories and nothing else.
+  say(io, `  In a scheduler or a start-up entry, write the command out in full: ${fullCommand()} notify`);
   return configProblem === null ? 0 : 1;
 }
 

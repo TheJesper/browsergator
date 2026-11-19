@@ -1,6 +1,8 @@
 // What a command may touch. Commands never reach for `process` themselves, so a test can hand them
 // buffers and a temporary home and run them in-process.
 
+import { decodeText } from '../server/files.js';
+
 export interface Writer {
   write(chunk: string): unknown;
   isTTY?: boolean;
@@ -59,7 +61,7 @@ export function readAll(stream: Reader, limits: ReadLimits): Promise<ReadResult>
         stream.pause();
         stream.unref?.();
       }
-      resolve({ text: Buffer.concat(chunks).toString('utf8'), complete });
+      resolve({ text: decodeText(Buffer.concat(chunks)), complete });
     };
     const onData = (chunk: string | Uint8Array): void => {
       const buffer = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : Buffer.from(chunk);

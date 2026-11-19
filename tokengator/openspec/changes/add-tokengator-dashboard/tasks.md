@@ -37,7 +37,7 @@
 - [x] 6.2 Implement the application service on top of the store; verify with tests using the in-memory store and an injected clock
 - [x] 6.3 Implement the HTTP server: routing, JSON bodies with a 256 KB cap, static files, server-sent events; verify every row of the D15 contract with an integration test on an ephemeral port
 - [x] 6.4 Implement Host and Origin validation, the optional token with bearer and session cookie, and the non-loopback start guard; verify each "Request validation" and "Optional access token" scenario
-- [ ] 6.5 Document the service in `tokengator/README.md` (start, configuration, security model) and verify the documented commands run as written
+- [x] 6.5 Document the service in `tokengator/README.md` (start, configuration, security model) and verify the documented commands run as written
 
 ## 7. MCP server (mcp-server)
 

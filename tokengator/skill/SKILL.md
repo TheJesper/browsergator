@@ -36,7 +36,7 @@ which reads the same state:
 | Report in one line | `quick_update` | same |
 | Find a provider's usage page | `list_catalog` | `tokengator add --list <provider>` |
 | Refresh automatic sources | `refresh_usage` | `tokengator collectors run` |
-| Put the resets in a calendar | none | `tokengator calendar > resets.ics` |
+| Put the resets in a calendar | none | `tokengator calendar --output resets.ics` |
 
 If neither is available, say so once and carry on; do not guess numbers.
 

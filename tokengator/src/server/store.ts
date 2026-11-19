@@ -2,10 +2,11 @@
 // and a stdio MCP server can all write without losing each other's updates.
 
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { STATE_VERSION, emptyState, type State } from '../core/types.js';
+import { decodeText, replaceFile } from './files.js';
 
 export interface StateStore {
   /** Where the state lives, for diagnostics. */
@@ -211,7 +212,8 @@ export class FileStateStore implements StateStore {
   private async load(): Promise<State> {
     let raw: string;
     try {
-      raw = await readFile(this.location, 'utf8');
+      // Decoded by its byte-order mark: a state file saved from a Windows editor is still the state file.
+      raw = decodeText(await readFile(this.location));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyState();
       throw error;
@@ -238,22 +240,7 @@ export class FileStateStore implements StateStore {
   private async persist(state: State): Promise<void> {
     const text = JSON.stringify(state, null, 2);
     if (!looksLikeState(JSON.parse(text))) throw new UnstorableStateError();
-    const temp = `${this.location}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
-    await writeFile(temp, `${text}\n`, { encoding: 'utf8', mode: 0o600 });
-    // On Windows a rename can fail briefly while another process has the target open.
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        await rename(temp, this.location);
-        return;
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (attempt >= 8 || (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES')) {
-          await rm(temp, { force: true }).catch(() => undefined);
-          throw error;
-        }
-        await sleep(20 * (attempt + 1));
-      }
-    }
+    await replaceFile(this.location, `${text}\n`, `${process.pid}.${randomBytes(4).toString('hex')}`);
   }
 
   private async fingerprint(): Promise<string> {

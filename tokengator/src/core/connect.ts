@@ -177,8 +177,12 @@ export function connectSnippets(options: ConnectOptions): ConnectSnippet[] {
   return snippets;
 }
 
+/**
+ * One word of a command line. Anything a shell could read as more than plain text is wrapped in double
+ * quotes: spaces, quotes, and also a backslash, which Git Bash would otherwise swallow from a Windows path.
+ */
 function quote(part: string): string {
-  return /[\s"']/.test(part) ? `"${part.replace(/"/g, '\\"')}"` : part;
+  return /^[A-Za-z0-9_@%+=:,./~-]+$/.test(part) ? part : `"${part.replace(/"/g, '\\"')}"`;
 }
 
 export const CONNECT_GROUP_LABEL: Record<ConnectSnippet['group'], string> = {

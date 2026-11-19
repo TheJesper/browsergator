@@ -24,9 +24,14 @@ loopback unless you switch on a collector that calls a provider's API with your 
 cd tokengator
 npm ci
 npm run build
+npm link             # puts the `tokengator` command on your PATH
 npm start            # http://127.0.0.1:4777
 npm run demo         # the same, on built-in sample data
 ```
+
+Every `tokengator ...` line below needs that `npm link`. Without it, write
+`node <this folder>/dist/cli/main.js ...` instead; `tokengator connect` and the dashboard's Connect
+panel print their snippets in whichever form works on your machine.
 
 Open the dashboard, press **A** to add a subscription from the catalog, then type what the provider's
 usage page says:
@@ -94,7 +99,7 @@ Use Claude Max now
 | --- | --- |
 | This computer | menu > Reminders > On this computer. Uses your system's own notification command. |
 | Phone or chat | `TOKENGATOR_NOTIFY_URL=https://ntfy.sh/a-name-only-you-know` (ntfy, Slack and Discord webhooks) |
-| Calendar | `tokengator calendar > resets.ics`, or subscribe to `/api/calendar.ics` |
+| Calendar | `tokengator calendar --output resets.ics`, or subscribe to `/api/calendar.ics` |
 | Agents | the status line names the most urgent quota |
 | No service running | `tokengator notify` from cron or Task Scheduler |
 
@@ -131,7 +136,8 @@ Claude Code status line, in `~/.claude/settings.json` (the Antigravity CLI takes
 It prints the session and weekly limits and, when another subscription needs using, names it:
 `5h 36% left 1h 57m · week 30% left 13h (use now, $6.90 at risk) · use now: Suno Pro 64% left 2d 2h`.
 Already have a status line? Keep it: `tokengator statusline -- bash ~/.claude/statusline.sh` runs
-yours with the same input and prints its line with Tokengator's after it.
+yours with the same input and prints its line with Tokengator's after it. If yours fails or takes
+longer than five seconds, the line says so (`[bash: timed out]`) instead of losing it silently.
 
 ## Agents
 

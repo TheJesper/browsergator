@@ -224,3 +224,7 @@ The system SHALL export the complete state as one JSON document and SHALL import
 #### Scenario: Invalid document
 - **WHEN** an imported document fails validation
 - **THEN** the current state is kept and the response names the first invalid field
+
+#### Scenario: A backup a shell re-encoded
+- **WHEN** an exported document was saved as UTF-16 or with a byte-order mark, as Windows PowerShell does on redirection
+- **THEN** importing it from the command line restores the same state

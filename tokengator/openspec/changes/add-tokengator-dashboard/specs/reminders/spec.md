@@ -99,6 +99,13 @@ The reminder address SHALL use HTTPS unless its host is the local computer and S
 - **WHEN** a delivery fails or the reminder status is read
 - **THEN** the output contains the host of the address and not its path
 
+### Requirement: A delivered reminder is not repeated for a record that could not be written
+The service SHALL remember within the running process which reminders it has delivered, and SHALL treat a failure to write the reminder record as a warning.
+
+#### Scenario: The record file is locked
+- **WHEN** a reminder is delivered and the record file cannot be replaced
+- **THEN** the check succeeds, a warning is logged, and the same reminder is not raised again by that process
+
 ### Requirement: A reminder counts once any channel took it
 The system SHALL record a reminder as raised when at least one channel delivered it, and SHALL keep it due when none did. The record SHALL be a file in the Tokengator home directory that holds reminder keys only, SHALL forget windows that have ended, and SHALL be bounded. A missing or unreadable record SHALL be treated as empty.
 
@@ -124,6 +131,14 @@ The HTTP API SHALL report whether desktop reminders are on and supported on this
 #### Scenario: Sending a test
 - **WHEN** a test is requested
 - **THEN** the fixed test message is delivered and each channel's outcome is returned with a reason for any failure
+
+#### Scenario: The notification command fails
+- **WHEN** the system's notification command exits with an error
+- **THEN** the reason given is the first line the command wrote, as one short plain line
+
+#### Scenario: Started from another shell on Windows
+- **WHEN** the service was started from PowerShell 7 and raises a Windows notification
+- **THEN** the notification script uses no module command and does not inherit that shell's module path
 
 ### Requirement: One-shot reminders from the command line
 The command line SHALL offer a command that checks once for due reminders, delivers them through the desktop channel and any configured webhook, records them, and exits, so that a scheduler can run it without the service. It SHALL offer a dry run that prints what is due and delivers and records nothing.

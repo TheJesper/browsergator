@@ -32,7 +32,7 @@ import type { Snapshot } from '../src/core/brief.js';
 import { CATALOG } from '../src/core/catalog.js';
 import { DAY, HOUR, iso } from '../src/core/time.js';
 import type { State } from '../src/core/types.js';
-import { cliCommand, createApp, packageRoot, resolvePublicDir, type App } from '../src/server/app.js';
+import { cliCommand, createApp, fullCommand, packageRoot, resolvePublicDir, type App } from '../src/server/app.js';
 import { COLLECTORS } from '../src/server/collectors/index.js';
 import { ConfigError, VERSION } from '../src/server/config.js';
 import { TokengatorService } from '../src/server/service.js';
@@ -492,11 +492,21 @@ describe('statusline', () => {
     writeFileSync(failing, "console.log('half a line'); process.exit(3);");
     const silent = join(root, 'silent.cjs');
     writeFileSync(silent, '');
-    for (const command of [[process.execPath, failing], [join(root, 'no-such-program')], [process.execPath, silent], []]) {
+    // A command that failed is named with the reason; one that worked and said nothing leaves no trace.
+    const cases: [string[], RegExp | null][] = [
+      [[process.execPath, failing], / · \[node(\.exe)?: exit 3\]$/],
+      [[join(root, 'no-such-program')], / · \[no-such-program: not found\]$/],
+      [[process.execPath, silent], null],
+      [[], null]
+    ];
+    for (const [command, marker] of cases) {
       const io = makeIo({}, JSON.stringify({ model: { id: 'm' } }));
       expect(await statusline(['--', ...command], io)).toBe(0);
       expect(io.out()).toMatch(/^week 38% left .*use now.*\n$/);
       expect(io.out().split('\n')).toHaveLength(2);
+      const line = io.out().trimEnd();
+      if (marker) expect(line).toMatch(marker);
+      else expect(line).not.toContain('[');
       expect(io.err()).toBe('');
     }
   });
@@ -794,6 +804,45 @@ describe('export and import', () => {
     expect(await readState(third)).toEqual(copy);
   });
 
+  it('restores a backup whatever encoding a Windows shell gave it (review finding)', async () => {
+    await seed();
+    const exported = makeIo();
+    await exportState([], exported);
+    const text = exported.out();
+    const files: [string, Buffer][] = [
+      ['bom8.json', Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text, 'utf8')])],
+      // What `tokengator export > backup.json` leaves behind in Windows PowerShell 5.1.
+      ['utf16.json', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text.replace(/\n/g, '\r\n'), 'utf16le')])]
+    ];
+    for (const [name, bytes] of files) {
+      writeFileSync(join(root, name), bytes);
+      const target = join(root, `home-${name}`);
+      const io = makeIo({ TOKENGATOR_HOME: target });
+      expect(await importState([name], io), name).toBe(0);
+      expect((await readState(target)).accounts.map((account) => account.id)).toEqual(['claude-max', 'copilot-pro']);
+    }
+  });
+
+  it('writes the backup and the calendar to a file itself with --output, as UTF-8', async () => {
+    await seed();
+    const io = makeIo();
+    expect(await run(['export', '--output', 'out.json'], io)).toBe(0);
+    expect(io.out()).toBe(`Wrote ${join(root, 'out.json')}\n`);
+    const bytes = readFileSync(join(root, 'out.json'));
+    expect(bytes[0]).toBe(0x7b); // "{", no byte-order mark
+    expect(JSON.parse(bytes.toString('utf8'))).toEqual(await readState());
+
+    const cal = makeIo();
+    expect(await run(['calendar', '--output', 'resets.ics'], cal)).toBe(0);
+    const ics = readFileSync(join(root, 'resets.ics'), 'utf8');
+    expect(ics.startsWith('BEGIN:VCALENDAR\r\n')).toBe(true);
+    expect(ics.endsWith('END:VCALENDAR\r\n')).toBe(true);
+
+    const nowhere = makeIo();
+    expect(await run(['export', '--output', join('no-such-dir', 'x.json')], nowhere)).toBe(1);
+    expect(nowhere.err()).toContain('Cannot write');
+  });
+
   it('reads the document from standard input with -', async () => {
     await seed();
     const exported = makeIo();
@@ -839,6 +888,19 @@ describe('export and import', () => {
 });
 
 describe('doctor', () => {
+  it('prints the command in full for schedulers, whose search path is short (review finding)', async () => {
+    const io = makeIo();
+    expect(await doctor([], io)).toBe(0);
+    const line = io.out().split('\n').find((text) => text.includes('write the command out in full')) ?? '';
+    const [, node, script] = /"([^"]+)" "([^"]+)" notify$/.exec(line) ?? [];
+    // Both absolute, both existing: nothing here depends on a PATH.
+    expect(node).toBe(process.platform === 'win32' ? process.execPath.replace(/\\/g, '/') : process.execPath);
+    expect(script?.endsWith('/dist/cli/main.js')).toBe(true);
+    expect(existsSync(node as string)).toBe(true);
+    expect(fullCommand({ platform: 'win32', node: 'C:\\Program Files\\nodejs\\node.exe', root: 'C:\\Users\\me\\tokengator' })).toBe(
+      '"C:/Program Files/nodejs/node.exe" "C:/Users/me/tokengator/dist/cli/main.js"'.replace('C:/Users/me/tokengator/dist/cli/main.js', join('C:\\Users\\me\\tokengator', 'dist', 'cli', 'main.js').replace(/\\/g, '/'))
+    );
+  });
 
   it('says where reminders can go, and shows the host of the address but never the address', async () => {
     await seed();
@@ -1024,7 +1086,8 @@ describe('skill (spec: Installation)', () => {
   it('limits the run with --only and installs for missing clients with --all', async () => {
     const only = io();
     expect(await skill(['install', '--only=codex'], only)).toBe(0);
-    expect(only.out()).not.toContain('claude');
+    // The client column, not the whole output: a path in it may well contain the word.
+    expect(only.out()).not.toMatch(/^claude\s/m);
     expect(existsSync(join(agentHome(), '.claude', 'skills'))).toBe(false);
 
     const all = io();
@@ -1219,14 +1282,14 @@ describe('composition root', () => {
     expect(resolvePublicDir()).toBe(join(packageRoot(), 'dist', 'public'));
   });
 
-  it('names the CLI by its shim when started through one, and by the built entry point otherwise', () => {
+  it('names the CLI by the built entry point unless it was started through a shim on the search path', () => {
     const entry = `node "${join(packageRoot(), 'dist', 'cli', 'main.js')}"`;
-    expect(cliCommand('/usr/local/bin/tokengator')).toBe('tokengator');
-    expect(cliCommand('/home/me/project/node_modules/.bin/tokengator')).toBe('tokengator');
-    expect(cliCommand('C:\\Users\\me\\AppData\\Roaming\\npm\\tokengator.cmd')).toBe('tokengator');
-    expect(cliCommand(join(packageRoot(), 'dist', 'cli', 'main.js'))).toBe(entry);
-    expect(cliCommand('/somewhere/else/vitest.mjs')).toBe(entry);
-    expect(cliCommand('/opt/not-tokengator')).toBe(entry);
+    const where = { path: '/usr/local/bin:/usr/bin', platform: 'linux' as const };
+    expect(cliCommand('/usr/local/bin/tokengator', where)).toBe('tokengator');
+    expect(cliCommand('/home/me/project/node_modules/.bin/tokengator', where)).toBe(entry);
+    expect(cliCommand(join(packageRoot(), 'dist', 'cli', 'main.js'), where)).toBe(entry);
+    expect(cliCommand('/somewhere/else/vitest.mjs', where)).toBe(entry);
+    expect(cliCommand('/opt/not-tokengator', where)).toBe(entry);
     expect(cliCommand(undefined)).toMatch(/^(tokengator|node ".*main\.js")$/);
   });
 });

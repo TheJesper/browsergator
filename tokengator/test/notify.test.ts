@@ -12,7 +12,9 @@ import {
   ReminderRunner,
   TEST_MESSAGE,
   WINDOWS_TOAST_SCRIPT,
+  commandEnv,
   desktopCommand,
+  runCommand,
   webhookRequest,
   webhookTarget,
   type DesktopCommand,
@@ -81,11 +83,19 @@ describe('desktopCommand', () => {
 
     const windows = desktopCommand('win32', HOSTILE);
     expect(windows?.command).toBe('powershell.exe');
-    expect(windows?.args.slice(0, 4)).toEqual(['-NoProfile', '-NonInteractive', '-NoLogo', '-EncodedCommand']);
+    expect(windows?.args.slice(0, 6)).toEqual(['-NoProfile', '-NonInteractive', '-NoLogo', '-OutputFormat', 'Text', '-EncodedCommand']);
     // The script is the same whatever the text is, and it is handed over encoded, so nothing can requote it.
-    const script = Buffer.from(windows?.args[4] ?? '', 'base64').toString('utf16le');
+    const script = Buffer.from(windows?.args[6] ?? '', 'base64').toString('utf16le');
     expect(script).toBe(WINDOWS_TOAST_SCRIPT);
-    expect(script).toBe(Buffer.from(desktopCommand('win32', TEST_MESSAGE)?.args[4] ?? '', 'base64').toString('utf16le'));
+    expect(script).toBe(Buffer.from(desktopCommand('win32', TEST_MESSAGE)?.args[6] ?? '', 'base64').toString('utf16le'));
+    // No cmdlet: one would be loaded from a module, and the module path inherited from PowerShell 7 breaks that.
+    expect(script).not.toMatch(/New-Object|Out-Null|Add-Type|Import-Module/i);
+    expect(windows?.withoutEnv).toEqual(['PSModulePath']);
+    expect(commandEnv(windows as DesktopCommand, { Path: 'C:\\Windows', psmodulepath: 'C:\\pwsh7\\Modules', PSModulePath: 'x' })).toEqual({
+      Path: 'C:\\Windows',
+      TOKENGATOR_NOTIFY_TITLE: HOSTILE.title,
+      TOKENGATOR_NOTIFY_BODY: HOSTILE.body
+    });
     expect(script).not.toContain('Claude');
     expect(script).toContain('[System.Security.SecurityElement]::Escape($env:TOKENGATOR_NOTIFY_TITLE)');
     expect(script).toContain('[System.Security.SecurityElement]::Escape($env:TOKENGATOR_NOTIFY_BODY)');
@@ -93,6 +103,15 @@ describe('desktopCommand', () => {
 
     const linux = desktopCommand('linux', { title: '--urgency=critical', body: '-x' });
     expect(linux).toEqual({ command: 'notify-send', args: ['--app-name=Tokengator', '--', '--urgency=critical', '-x'] });
+  });
+
+  it('says why a notification command failed, in one short plain line (review finding)', async () => {
+    const failing: DesktopCommand = { command: process.execPath, args: ['-e', "console.error('No desktop\\u0007 session'); console.error('second line'); process.exit(3)"] };
+    const error = (await runCommand(failing).catch((caught: unknown) => caught)) as Error;
+    // The first line only, with the control character gone.
+    expect(error.message.endsWith(' ended with status 3: No desktop session')).toBe(true);
+    await expect(runCommand({ command: process.execPath, args: ['-e', ''] })).resolves.toBeUndefined();
+    await expect(runCommand({ command: join(tmpdir(), 'tg-no-such-command'), args: [] })).rejects.toThrow(/is not installed\.$/);
   });
 
   it('is nothing on a platform without a standard command', () => {
@@ -317,5 +336,17 @@ describe('ReminderRunner', () => {
     await writeFile(join(home, 'reminders.json'), '{not json');
     const third = harness(state, { home });
     expect((await third.runner.check()).deliveries).toEqual([{ channel: 'desktop', ok: true }]);
+  });
+
+  it('does not repeat a delivered reminder because its record could not be written (review finding)', async () => {
+    // A home that is a file: the record can never be written there.
+    const blocked = join(home, 'not-a-directory');
+    await writeFile(blocked, 'x');
+    const h = harness(stateWith([['Claude Max', weekly(14, 62)]], true), { home: blocked });
+    const first = await h.runner.check();
+    expect(first.deliveries).toEqual([{ channel: 'desktop', ok: true }]);
+    // Delivered, so the check succeeded; and this process remembers it.
+    expect((await h.runner.check()).due).toEqual([]);
+    expect(h.commands).toHaveLength(1);
   });
 });

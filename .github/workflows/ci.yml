@@ -2,8 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # The second branch is listed only until Tokengator has been seen to pass on Windows and macOS.
+    branches: [main, claude/magical-knuth-x2w303]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read

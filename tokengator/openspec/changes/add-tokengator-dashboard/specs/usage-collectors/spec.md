@@ -79,6 +79,18 @@ The command line SHALL accept Claude Code's status line JSON on standard input, 
 - **WHEN** the input has no rate-limit data
 - **THEN** nothing is changed, a line is still printed and the exit code is 0
 
+#### Scenario: A status line the person already had
+- **WHEN** the command is given another status line command after two dashes
+- **THEN** that command receives the same input without a shell reading its words, and its line is printed with Tokengator's after it
+
+#### Scenario: The other status line fails
+- **WHEN** the wrapped command is missing, exits with an error or takes longer than five seconds
+- **THEN** Tokengator's line is printed with the command's name and the reason, and the exit code is 0
+
+#### Scenario: An npm shim on Windows
+- **WHEN** the wrapped command on Windows is a batch file such as `npx.cmd`
+- **THEN** it is run through the command interpreter with every argument escaped, so that each stays one argument
+
 ### Requirement: Antigravity status line input
 The same command SHALL accept the Antigravity CLI's status line JSON, tell it apart from Claude Code's, record each quota bucket's remaining share and reset time on the Antigravity account, and store nothing else from the input.
 

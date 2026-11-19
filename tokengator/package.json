@@ -43,7 +43,8 @@
     "test:watch": "vitest",
     "test:ui": "node scripts/build.mjs --web --demo && node scripts/ui-check.cjs",
     "test:e2e": "node scripts/build.mjs && node scripts/e2e.cjs",
-    "spec:validate": "openspec validate --all --strict"
+    "spec:validate": "openspec validate --all --strict",
+    "prepack": "node scripts/build.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/node": "2.1.2",

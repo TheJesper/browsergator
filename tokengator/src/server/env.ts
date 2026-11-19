@@ -5,6 +5,8 @@
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { decodeText } from './files.js';
+
 /** Anything larger is not a hand-written list of keys. */
 const MAX_ENV_FILE_BYTES = 256 * 1024;
 const ASSIGNMENT = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/;
@@ -54,7 +56,7 @@ export function loadEnvFile(home: string): Record<string, string> {
     const path = envFilePath(home);
     const info = statSync(path);
     if (!info.isFile() || info.size > MAX_ENV_FILE_BYTES) return {};
-    return parseEnvFile(readFileSync(path, 'utf8'));
+    return parseEnvFile(decodeText(readFileSync(path)));
   } catch {
     return {};
   }

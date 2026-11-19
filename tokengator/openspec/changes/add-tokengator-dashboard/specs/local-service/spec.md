@@ -81,6 +81,10 @@ The service SHALL refuse any input that would leave a number in the state that i
 - **WHEN** a change that passed validation would still serialise to a document the service cannot load
 - **THEN** the write is refused and the previous file is untouched
 
+#### Scenario: A file a Windows tool re-encoded
+- **WHEN** the state file or the environment file starts with a byte-order mark, as UTF-8 or as UTF-16
+- **THEN** it is read as the text it holds, and the state file is not set aside as corrupt
+
 ### Requirement: Private home directory
 The service SHALL create its home directory, its state file and its record of reminders readable and writable by the owning user only, and `doctor` SHALL say so when the environment file can be read by other users.
 
@@ -124,6 +128,22 @@ The command line SHALL start the service, print the current situation in the ter
 #### Scenario: Unknown command
 - **WHEN** an unknown command is given
 - **THEN** usage help is printed and the exit code is non-zero
+
+#### Scenario: Snippets on Windows
+- **WHEN** connection snippets are printed on Windows for an installation under `C:\Users\me`
+- **THEN** the path in them is written with forward slashes, so that neither Git Bash nor PowerShell changes it
+
+#### Scenario: A shim that is not on the search path
+- **WHEN** the command was started through a project-local shim, or from a clone
+- **THEN** the snippets name the built entry point in full rather than the short command name
+
+#### Scenario: Writing a document without a shell
+- **WHEN** export or calendar is run with an output file
+- **THEN** the file is written as UTF-8 by the command itself
+
+#### Scenario: A command for schedulers
+- **WHEN** the paths report is printed
+- **THEN** it includes the command with the absolute paths of the runtime and the entry point, for schedulers that search no user directories
 
 ### Requirement: Nothing sensitive in logs
 The service SHALL log to standard error only, SHALL never log credentials, tokens, authorization headers, cookies or request bodies, and SHALL keep standard output of the stdio MCP server free of anything but protocol messages.
