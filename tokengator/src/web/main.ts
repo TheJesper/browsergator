@@ -176,6 +176,9 @@ function start(app: App, fellBack: boolean): void {
       { kind: 'sep' },
       { label: 'Compact rows', icon: 'rows', checked: prefs.density === 'compact', onSelect: () => app.setPrefs({ density: prefs.density === 'compact' ? 'comfortable' : 'compact' }) },
       { label: 'Hide names (screen sharing)', icon: 'eye', checked: prefs.privacy, onSelect: () => app.setPrefs({ privacy: !prefs.privacy }) },
+      // The same two switches a click on a row's figures flips, for people who do not use a mouse.
+      { label: 'Show what is used, not what is left', icon: 'rows', checked: prefs.amounts === 'used', onSelect: () => app.setPrefs({ amounts: prefs.amounts === 'used' ? 'left' : 'used' }) },
+      { label: 'Show reset times, not countdowns', icon: 'clock', checked: prefs.times === 'clock', onSelect: () => app.setPrefs({ times: prefs.times === 'clock' ? 'countdown' : 'clock' }) },
       { kind: 'sep' },
       { label: 'Copy everything as JSON', icon: 'copy', onSelect: () => void copyText(JSON.stringify(app.model.state, null, 2), 'State copied as JSON') },
       { label: 'Import from JSON…', icon: 'upload', onSelect: importState },

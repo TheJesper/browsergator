@@ -24,6 +24,7 @@
   "files": [
     "dist",
     "skill",
+    "docs",
     "README.md"
   ],
   "engines": {
