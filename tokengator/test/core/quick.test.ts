@@ -290,8 +290,8 @@ describe('resolveTarget', () => {
     if (found.ok) return;
     expect(found.error).toMatch(/more than one/);
     expect(found.candidates).toEqual([
-      { accountId: 'claude-max', meterId: 'claude-max:weekly', label: 'Claude Max · Weekly' },
-      { accountId: 'claude-pro', meterId: 'claude-pro:weekly', label: 'Claude Pro · Weekly' }
+      { accountId: 'claude-max', meterId: 'claude-max:weekly', label: 'Claude Max, Weekly' },
+      { accountId: 'claude-pro', meterId: 'claude-pro:weekly', label: 'Claude Pro, Weekly' }
     ]);
     // One more word settles it, and so does either id.
     expect(idsOf(state, ['claude', 'pro'])).toBe('claude-pro:weekly');
@@ -438,7 +438,7 @@ describe('parseQuick', () => {
     it('shows 1,200 credits left and a reset nine days from now for "suno 1200 left resets in 9d"', () => {
       // Scenario: Amount left with a reset.
       const result = ok('suno 1200 left resets in 9d');
-      expect(result.preview).toBe('Suno Pro, Monthly credits: 1,300 credits used, 1,200 credits left (48%) · resets Sat 28 Nov 10:00 (in 9d)');
+      expect(result.preview).toBe('Suno Pro, Monthly credits: 1,300 credits used, 1,200 credits left (48%), resets Sat 28 Nov 10:00 (in 9d)');
       expect(result.reading.resetsAt).toBe('2026-11-28T10:00:00.000Z');
     });
 
@@ -473,7 +473,7 @@ describe('parseQuick', () => {
     it('shows the reset in the given zone', () => {
       const result = ok('claude weekly 62% resets tomorrow 09:00', fixture(), STO);
       expect(result.reading.resetsAt).toBe('2026-11-20T08:00:00.000Z');
-      expect(result.preview).toBe('Claude, Weekly: 62% used, 38% left · resets tomorrow 09:00 (in 22h)');
+      expect(result.preview).toBe('Claude, Weekly: 62% used, 38% left, resets tomorrow 09:00 (in 22h)');
     });
 
     it('describes a reset-only update', () => {
@@ -510,7 +510,7 @@ describe('parseQuick', () => {
       state = add(state, 'Claude Pro', [{ label: 'Weekly', reset: { kind: 'interval', hours: 168 } }]);
       const result = rejected('claude 50%', state);
       expect(result.candidates.map((candidate) => candidate.meterId)).toEqual(['claude-max:weekly', 'claude-pro:weekly']);
-      expect(result.candidates.map((candidate) => candidate.label)).toEqual(['Claude Max · Weekly', 'Claude Pro · Weekly']);
+      expect(result.candidates.map((candidate) => candidate.label)).toEqual(['Claude Max, Weekly', 'Claude Pro, Weekly']);
       // Picking a candidate by its id resolves it.
       expect(ok('claude-pro:weekly 50%', state).meter.id).toBe('claude-pro:weekly');
     });

@@ -1,7 +1,7 @@
 // The contract every collector implements. A collector turns one dependable source (a local file, a
 // documented API, an undocumented API, or data pushed by another tool) into readings.
 
-import type { Reading } from '../../core/types.js';
+import type { MeterRole, Reading, ResetRule } from '../../core/types.js';
 
 /** How trustworthy and how stable the source is. Shown wherever a collector is offered. */
 export type CollectorSourceKind = 'local-file' | 'documented-api' | 'undocumented-api' | 'push';
@@ -12,6 +12,10 @@ export interface CollectedMeter {
   reading: Reading;
   /** Used only when the account has no meter with this key and the preset has none either. */
   label?: string;
+  /** The window's cadence, when the source reveals it. Used for a meter that has to be created. */
+  reset?: ResetRule;
+  /** `throttle` for short rate windows. Used for a meter that has to be created. */
+  role?: MeterRole;
 }
 
 export interface CollectedAccount {

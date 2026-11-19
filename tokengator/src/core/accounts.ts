@@ -13,7 +13,7 @@ import type {
   Unit
 } from './types.js';
 import { STATE_VERSION, emptyState } from './types.js';
-import { anchorMeter, rollState } from './reset.js';
+import { MAX_SAMPLES, anchorMeter, rollState } from './reset.js';
 import { iso, isValidTimeZone, toMs } from './time.js';
 
 export class ValidationError extends Error {
@@ -82,6 +82,8 @@ export function slugify(text: string): string {
   const slug = text
     .toLowerCase()
     .normalize('NFKD')
+    // Drop the combining marks NFKD splits off, so "tjänst" becomes "tjanst" and not "tja-nst".
+    .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 40);
@@ -368,7 +370,7 @@ export function updateMeter(state: State, meterId: string, patch: MeterPatch, no
     next.used = patch.used;
     next.updatedAt = iso(nowMs);
     next.estimated = false;
-    next.samples = [...next.samples, { t: iso(nowMs), used: patch.used }];
+    next.samples = [...next.samples, { t: iso(nowMs), used: patch.used }].slice(-MAX_SAMPLES);
   }
   if ('reset' in patch && patch.reset !== undefined) {
     const rule = validateResetRule(patch.reset);

@@ -124,7 +124,14 @@ export function codexMeters(snapshot: CodexSnapshot, nowMs: number): CollectedMe
           : window.minutes <= 10 * 24 * 60
             ? ['weekly', 'Weekly limit']
             : ['monthly', 'Monthly allowance'];
-    meters.push({ key, label, reading: { usedPercent: Math.min(100, Math.max(0, window.usedPercent)), resetsAt: window.resetsAt as string } });
+    meters.push({
+      key,
+      label,
+      // Codex windows open on first use and run for their length, whatever the plan calls them.
+      reset: { kind: 'rolling', hours: window.minutes / 60 },
+      role: key === 'session' || key === 'daily' ? 'throttle' : 'allowance',
+      reading: { usedPercent: Math.min(100, Math.max(0, window.usedPercent)), resetsAt: window.resetsAt as string }
+    });
   }
   return meters;
 }

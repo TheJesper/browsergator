@@ -71,7 +71,7 @@ describe('zonedTimeToUtc', () => {
     for (const [tz, y, mo, d] of days) {
       for (let hour = 0; hour < 24; hour += 1) {
         // Hour 2 does not exist on the spring-forward days; it is covered separately below.
-        if ((mo === 3) && hour === 2) continue;
+        if (mo === 3 && hour === 2) continue;
         const parts = zonedParts(zonedTimeToUtc(y, mo, d, hour, 15, tz), tz);
         expect([tz, parts.year, parts.month, parts.day, parts.hour, parts.minute]).toEqual([tz, y, mo, d, hour, 15]);
       }

@@ -11,6 +11,8 @@ Tokengator keeps every one of those clocks on one screen and answers a single qu
 - A command line and a status line integration.
 - A skill that teaches agents when to check and when to report.
 
+![The queue, most urgent first, with the inspector open](docs/img/queue-dark.png)
+
 It runs on your machine, on Windows, macOS and Linux. No account, no telemetry, nothing leaves
 loopback unless you switch on a collector that calls a provider's API with your own key.
 
@@ -67,6 +69,8 @@ Six views over the same data, switched with the number keys:
 4. **Table**: dense, sortable, copyable as Markdown or CSV.
 5. **Costs**: optional pay-as-you-go API spend against a budget.
 6. **History**: what actually expired in each finished window, and what it was worth.
+
+![Every reset on one time axis](docs/img/timeline-light.png)
 
 Everything has a copy button: a status line, Markdown, JSON, or a prompt that hands the decision to
 an agent. **C** copies a brief of the whole picture.

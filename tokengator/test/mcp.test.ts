@@ -1,5 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { createServer, type Server } from 'node:http';
+import { createServer, request, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,16 +14,18 @@ import { LATEST_PROTOCOL_VERSION, type CallToolResult } from '@modelcontextproto
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { addAccount, type AccountInput } from '../src/core/accounts.js';
-import { briefMarkdown, costsMarkdown, meterRecord, queueText, snapshot } from '../src/core/brief.js';
-import { ledgerTotals, viewAccount } from '../src/core/forecast.js';
+import { briefMarkdown, costsMarkdown, meterRecord, queueText, snapshot, stamp } from '../src/core/brief.js';
+import { allowanceQueue, ledgerTotals, summarise, viewAccount, type MeterView } from '../src/core/forecast.js';
 import { addSpendSource, recordSpend, summariseSpend } from '../src/core/spend.js';
 import { DAY, HOUR, MINUTE, iso } from '../src/core/time.js';
 import { emptyState, type ClosedCycle, type Price, type State } from '../src/core/types.js';
-import { explain, headline } from '../src/core/wording.js';
+import { explain, headline, recommend, statusLine, summaryLine } from '../src/core/wording.js';
 import type { CollectorHost, CollectorStatus } from '../src/server/collectors/types.js';
+import type { ServiceConfig } from '../src/server/config.js';
+import { TokengatorHttpServer } from '../src/server/http.js';
 import { createMcpHttpHandler, createMcpServer, runMcpStdio, type McpDeps } from '../src/server/mcp.js';
 import { TokengatorService } from '../src/server/service.js';
-import { FileStateStore, MemoryStateStore, type StateStore } from '../src/server/store.js';
+import { FileStateStore, LockTimeoutError, MemoryStateStore, type StateStore } from '../src/server/store.js';
 
 // A local fake preset: the real catalog is data that changes, and these tests are not about it. The
 // array is shared with the mock, so a test can empty it in place.
@@ -48,6 +51,31 @@ const catalog = vi.hoisted(() => ({
       }
     ],
     collectors: ['fake-source']
+  },
+  // Stands in for the preset the examples in docs/MCP.md use.
+  elevenlabs: {
+    id: 'elevenlabs',
+    name: 'ElevenLabs',
+    vendor: 'ElevenLabs',
+    monogram: '11',
+    category: 'voice',
+    usageUrl: 'https://elevenlabs.io/app/subscription',
+    howToRead: 'The subscription page shows credits used out of the monthly quota and the date the quota resets.',
+    plans: [
+      {
+        id: 'starter',
+        name: 'Starter',
+        price: { amount: 6, currency: 'USD', period: 'month' },
+        meters: [{ key: 'credits', label: 'Monthly credits', role: 'allowance', unit: 'credits', limit: 30000, reset: { kind: 'interval', hours: 730.5 }, anchor: 'billing', rollover: 'carries' }]
+      },
+      {
+        id: 'creator',
+        name: 'Creator',
+        price: { amount: 22, currency: 'USD', period: 'month' },
+        meters: [{ key: 'credits', label: 'Monthly credits', role: 'allowance', unit: 'credits', limit: 121000, reset: { kind: 'interval', hours: 730.5 }, anchor: 'billing', rollover: 'carries' }]
+      }
+    ],
+    collectors: ['elevenlabs']
   }
 }));
 
@@ -60,7 +88,9 @@ vi.mock('../src/core/catalog.js', async (importOriginal) => ({
 /** Thursday 19 November 2026, 12:00 UTC. */
 const NOW = Date.parse('2026-11-19T12:00:00.000Z');
 const TZ = 'UTC';
-const STAMP = 'As of 12:00 UTC (2026-11-19T12:00:00.000Z).';
+// Sentences that belong to the core are computed with the core here, never spelled out: these tests are
+// about what the MCP layer does with them.
+const STAMP = `As of ${stamp(NOW, TZ)}.`;
 
 const TOOL_NAMES = [
   'what_to_use',
@@ -319,7 +349,14 @@ describe('what_to_use', () => {
     const answer = await call(harness, 'what_to_use');
     expect(answer.isError).toBe(false);
 
+    const state = await harness.service.state();
+    const urgent = allowanceQueue(state, NOW)[0] as MeterView;
+    expect(urgent.id).toBe('claude-max:weekly');
+    expect(urgent.tier).toBe('use-now');
+
     const first = answer.data.queue[0];
+    expect(first).toEqual(json(meterRecord(urgent, NOW)));
+    // Everything the requirement lists is on the record.
     expect(first).toMatchObject({
       id: 'claude-max:weekly',
       account: 'Claude Max',
@@ -329,17 +366,22 @@ describe('what_to_use', () => {
       resetsAt: iso(NOW + 10 * HOUR),
       currency: 'USD',
       stale: false,
-      blockedBy: null
+      blockedBy: null,
+      recommendation: recommend(urgent, NOW)
     });
     expect(first.valueAtRisk).toBeGreaterThan(0);
     expect(first.requiredPaceMultiple).toBeGreaterThan(1);
-    expect(first.recommendation).toContain('Prefer Claude Max');
 
     const lines = answer.text.split('\n');
     expect(lines[0]).toBe(STAMP);
-    expect(lines[1]).toMatch(/^1 quota needs using now/);
-    expect(answer.text).toContain('1. Claude Max · Weekly limit: Use now: 60% left, resets in 10h');
-    expect(answer.text).toContain('Prefer Claude Max for work the user wants done now');
+    expect(lines).toContain(summaryLine(summarise(state, NOW), state.settings.currency));
+    const entry = lines.find((line) => line.startsWith('1. '));
+    expect(entry).toBe(`1. ${statusLine(urgent, NOW)}`);
+    // How much is left and when it resets, in so many words.
+    expect(entry).toContain('Claude Max');
+    expect(entry).toContain('60% left');
+    expect(entry).toContain('resets in 10h');
+    expect(answer.text).toContain(recommend(urgent, NOW));
   });
 
   it('returns the core snapshot and the core queue text, trimmed as asked', async () => {
@@ -355,13 +397,17 @@ describe('what_to_use', () => {
     // By default the two used-up team quotas are left out of the structured queue.
     const usual = await call(harness, 'what_to_use');
     expect(usual.text).toBe(queueText(state, NOW, TZ, 10));
-    expect(usual.data.queue.map((record: any) => record.id)).toEqual(['claude-max:weekly', 'copilot-pro:premium', 'suno-pro:credits']);
+    const settled = (record: { tier: string | null }): boolean => record.tier === 'spent' || record.tier === 'expired' || record.tier === 'balance';
+    const open = core.queue.filter((record) => !settled(record));
+    expect(core.queue.filter(settled).map((record) => record.id)).toEqual(['team-alpha:weekly', 'team-beta:weekly']);
+    expect(usual.data.queue).toEqual(open);
+    expect(usual.data.queue.map((record: any) => record.id)).toContain('suno-pro:credits');
     expect(usual.data.omitted).toEqual({ settled: 2, beyondLimit: 0 });
     expect(usual.data.summary).toEqual(core.summary);
 
     const one = await call(harness, 'what_to_use', { limit: 1 });
-    expect(one.data.queue.map((record: any) => record.id)).toEqual(['claude-max:weekly']);
-    expect(one.data.omitted).toEqual({ settled: 2, beyondLimit: 2 });
+    expect(one.data.queue).toEqual(open.slice(0, 1));
+    expect(one.data.omitted).toEqual({ settled: 2, beyondLimit: open.length - 1 });
     expect(one.text).toBe(queueText(state, NOW, TZ, 1));
   });
 
@@ -369,14 +415,24 @@ describe('what_to_use', () => {
     const harness = await connect({ state: build([team('Team Alpha'), COPILOT]) });
     const answer = await call(harness, 'what_to_use', { includeSettled: true });
     expect(answer.isError).toBe(false);
-    expect(answer.data.summary).toMatchObject({ useNow: 0, behind: 0, line: 'Nothing is going to waste right now.' });
-    expect(answer.text).toContain('Nothing is going to waste right now.');
+    const state = await harness.service.state();
+    const summary = summarise(state, NOW);
+    expect(summary).toMatchObject({ useNow: 0, behind: 0 });
+    const line = summaryLine(summary, state.settings.currency);
+    expect(line).toMatch(/nothing/i);
+
+    expect(answer.data.summary).toMatchObject({ useNow: 0, behind: 0, atRisk: {}, line });
     expect(answer.data.queue.map((record: any) => [record.id, record.tier])).toEqual([
       ['copilot-pro:premium', 'on-pace'],
       ['team-alpha:weekly', 'spent']
     ]);
-    expect(answer.text).toContain('1. Copilot Pro · Premium requests: On pace: 115 requests left, resets in 11d');
-    expect(answer.text).toContain('2. Team Alpha · Weekly: Used up: resets in 3d');
+    expect(answer.text).toBe(queueText(state, NOW, TZ, 10));
+    expect(answer.text).toContain(line);
+    // Both meters are still listed, in "use first" order.
+    const positions = allowanceQueue(state, NOW).map((view, index) => answer.text.indexOf(`${index + 1}. ${statusLine(view, NOW)}`));
+    expect(positions).toHaveLength(2);
+    expect(positions[0]).toBeGreaterThan(0);
+    expect(positions[1]).toBeGreaterThan(positions[0] as number);
   });
 
   it('answers an empty state by pointing at add_account', async () => {
@@ -412,8 +468,10 @@ describe('reading tools', () => {
 
     expect(answer.text.split('\n')[0]).toBe(STAMP);
     expect(answer.text).toContain('Claude Max (id: claude-max, plan Max, $100 a month) https://claude.example/usage');
-    expect(answer.text).toContain('- Weekly limit [weekly]: Use now: 60% left, resets in 10h');
-    expect(answer.text).toContain('- Credits [credits]: Reset time unknown: 2,500 credits left (no reading yet)');
+    const [weekly] = viewAccount(state.accounts[0]!, NOW);
+    const [credits] = viewAccount(state.accounts[1]!, NOW);
+    expect(answer.text).toContain(`- Weekly limit [weekly]: ${headline(weekly!, NOW)}\n`);
+    expect(answer.text).toContain(`- Credits [credits]: ${headline(credits!, NOW)} (no reading yet)\n`);
   });
 
   it('list_accounts filters by provider and says so when nothing matches', async () => {
@@ -471,8 +529,9 @@ describe('reading tools', () => {
 
     const unknown = await call(harness, 'get_account', { account: 'midjourney' });
     expect(unknown.isError).toBe(true);
-    expect(unknown.text).toContain('No account matches "midjourney".');
+    expect(unknown.text).toContain('midjourney');
     expect(unknown.text).toContain('- Claude Max (account id: claude-max)');
+    expect(unknown.text).toContain('- Team Beta (account id: team-beta)');
   });
 
   it('scenario "Catalog tells an agent where to look": a provider entry carries its usage page and what to read there', async () => {
@@ -656,14 +715,14 @@ describe('report_usage', () => {
       meter: json(meterRecord(view, NOW)),
       explanation: explain(view, NOW)
     });
-    expect(answer.data.meter).toMatchObject({ used: 1300, remaining: 1200, source: 'agent:test-agent', resetsInMinutes: 9 * 24 * 60, tier: 'behind' });
+    expect(answer.data.meter).toMatchObject({ used: 1300, remaining: 1200, source: 'agent:test-agent', resetsInMinutes: 9 * 24 * 60 });
+    expect(answer.data.meter.projectedUnusedPercent).toBeGreaterThan(0);
     expect(answer.text.split('\n')).toEqual([
       STAMP,
       'Recorded, reported by agent "test-agent".',
-      `Suno Pro · Credits: ${headline(view, NOW)}`,
+      statusLine(view, NOW),
       explain(view, NOW)
     ]);
-    expect(answer.text).toContain('Behind pace');
     expect(answer.text).toContain('resets in 9d');
   });
 
@@ -707,10 +766,10 @@ describe('report_usage', () => {
   it('scenario "Ambiguous account": changes nothing and lists the candidates with their ids', async () => {
     const harness = await connect();
     const answer = await refused(harness, 'report_usage', { account: 'team', usedPercent: 50 });
-    expect(answer.text).toContain('matches more than one meter');
     expect(answer.text).toContain('Nothing was changed.');
-    expect(answer.text).toContain('- Team Alpha · Weekly (account id: team-alpha, meter id: team-alpha:weekly)');
-    expect(answer.text).toContain('- Team Beta · Weekly (account id: team-beta, meter id: team-beta:weekly)');
+    expect(answer.text).toContain('Candidates (name one by its id):');
+    expect(answer.text).toMatch(/^- Team Alpha.* \(account id: team-alpha, meter id: team-alpha:weekly\)$/m);
+    expect(answer.text).toMatch(/^- Team Beta.* \(account id: team-beta, meter id: team-beta:weekly\)$/m);
 
     // Naming one of the candidates by its id goes through.
     const retry = await call(harness, 'report_usage', { account: 'team-beta', usedPercent: 50 });
@@ -722,8 +781,8 @@ describe('report_usage', () => {
     const harness = await connect();
     const answer = await refused(harness, 'report_usage', { account: 'claude', meter: 'bogus', usedPercent: 50 });
     expect(answer.text).toContain('No meter of Claude Max matches "bogus". Nothing was changed.');
-    expect(answer.text).toContain('- Claude Max · Weekly limit (account id: claude-max, meter id: claude-max:weekly)');
-    expect(answer.text).toContain('- Claude Max · 5-hour session (account id: claude-max, meter id: claude-max:session)');
+    expect(answer.text).toMatch(/^- Claude Max.*Weekly limit \(account id: claude-max, meter id: claude-max:weekly\)$/m);
+    expect(answer.text).toMatch(/^- Claude Max.*5-hour session \(account id: claude-max, meter id: claude-max:session\)$/m);
     // Only that account's meters: the others are not candidates for a meter name.
     expect(answer.text).not.toContain('Suno');
   });
@@ -744,11 +803,11 @@ describe('report_usage', () => {
     [{ account: 'suno' }, ['Give an amount', 'resetsInMinutes']],
     [{ account: 'suno', limit: 3000 }, ['Give an amount']],
     [{ account: 'suno', used: 1, resetsAt: iso(NOW + DAY), resetsInMinutes: 5 }, ['resetsInMinutes', 'not both']],
-    [{ account: 'suno', used: 1, resetsAt: 'tomorrow 9am' }, ['resetsAt', 'ISO 8601 instant with a time zone', 'It is now 12:00 UTC']],
+    [{ account: 'suno', used: 1, resetsAt: 'tomorrow 9am' }, ['Invalid input (resetsAt)', 'ISO 8601 instant with a time zone', `It is now ${stamp(NOW, TZ)}.`]],
     [{ account: 'suno', used: 1, resetsAt: '2026-11-21T09:00:00' }, ['resetsAt', 'time zone']],
-    [{ account: 'suno', used: 1, resetsAt: '2026-11-01T00:00:00Z' }, ['resetsAt', 'in the past', 'It is now 12:00 UTC (2026-11-19T12:00:00.000Z)']],
+    [{ account: 'suno', used: 1, resetsAt: '2026-11-01T00:00:00Z' }, ['Invalid input (resetsAt)', `It is now ${stamp(NOW, TZ)}.`]],
     [{ account: 'suno', used: -1 }, ['used', '0 or more']],
-    [{ account: 'suno', usedPercent: '62' }, ['usedPercent', 'expected number']],
+    [{ account: 'suno', usedPercent: '62' }, ['usedPercent']],
     [{ account: 'suno', percent: 62 }, ['percent']],
     [{ usedPercent: 62 }, ['account']],
     [{ account: '   ', usedPercent: 62 }, ['account']]
@@ -772,16 +831,21 @@ describe('report_usage', () => {
 describe('quick_update', () => {
   it('saves a quick-entry line and returns how it was understood with the new forecast', async () => {
     const harness = await connect();
-    const answer = await call(harness, 'quick_update', { text: 'claude weekly 62% resets in 9h' });
+    const line = 'claude weekly 62% resets in 9h';
+    // The same reading of the line the dashboard shows before saving.
+    const parsed = await harness.service.previewQuick(line);
+    if (!parsed.ok) throw new Error(parsed.error);
+
+    const answer = await call(harness, 'quick_update', { text: line });
     expect(answer.isError).toBe(false);
-    expect(answer.data.preview).toBe('Claude Max, Weekly limit: 62% used, 38% left · resets today 21:00 (in 9h)');
+    expect(answer.data.preview).toBe(parsed.preview);
+    expect(answer.data.preview).toContain('62% used');
     expect(answer.data).toMatchObject({ accountId: 'claude-max', meterId: 'claude-max:weekly' });
-    expect(answer.data.meter).toMatchObject({ usedPercent: 62, resetsAt: iso(NOW + 9 * HOUR), source: 'agent:test-agent', tier: 'use-now' });
-    expect(answer.text.split('\n').slice(0, 3)).toEqual([
-      STAMP,
-      'Saved: Claude Max, Weekly limit: 62% used, 38% left · resets today 21:00 (in 9h)',
-      'Claude Max · Weekly limit: Use now: 38% left, resets in 9h'
-    ]);
+    expect(answer.data.meter).toMatchObject({ usedPercent: 62, resetsAt: iso(NOW + 9 * HOUR), source: 'agent:test-agent' });
+    const account = (await harness.service.state()).accounts[0]!;
+    const view = viewAccount(account, NOW)[0]!;
+    expect(answer.text.split('\n')).toEqual([STAMP, `Saved: ${parsed.preview}`, statusLine(view, NOW), explain(view, NOW)]);
+    expect(statusLine(view, NOW)).toContain(headline(view, NOW));
     expect(await meterOf(harness, 'claude-max:weekly')).toMatchObject({ used: 62, source: { kind: 'agent', id: 'test-agent' } });
   });
 
@@ -791,8 +855,8 @@ describe('quick_update', () => {
     expect(ambiguous.text).toContain('meter id: team-alpha:weekly');
     expect(ambiguous.text).toContain('meter id: team-beta:weekly');
 
-    expect((await refused(harness, 'quick_update', { text: 'claude weekly 162%' })).text).toContain('A percentage must be between 0 and 100. Nothing was changed.');
-    expect((await refused(harness, 'quick_update', { text: 'claude weekly 20% resets whenever' })).text).toContain('Did not understand the reset time');
+    expect((await refused(harness, 'quick_update', { text: 'claude weekly 162%' })).text).toContain('Nothing was changed.');
+    expect((await refused(harness, 'quick_update', { text: 'claude weekly 20% resets whenever' })).text).toContain('Nothing was changed.');
     expect((await refused(harness, 'quick_update', { text: '' })).text).toContain('text');
     expect((await refused(harness, 'quick_update', {})).text).toContain('text');
   });
@@ -853,16 +917,16 @@ describe('managing accounts', () => {
   it.each([
     [{}, ['provider', 'custom']],
     [{ provider: 'fakeai', custom: { label: 'Both', meters: [{ label: 'M', reset: { kind: 'none' } }] } }, ['custom', 'not both']],
-    [{ provider: 'nosuch' }, ['provider', 'Unknown provider "nosuch"', 'fakeai']],
-    [{ provider: 'fakeai', plan: 'platinum' }, ['plan', 'Unknown plan "platinum"', 'pro']],
-    [{ custom: { label: 'No limit', meters: [{ label: 'Chars', unit: 'characters', reset: { kind: 'none' } }] } }, ['custom.meters[0].limit', 'limit is required']],
-    [{ custom: { label: 'No hours', meters: [{ label: 'Week', reset: { kind: 'rolling' } }] } }, ['custom.meters[0].reset.hours', 'hours must be a number greater than 0']],
+    [{ provider: 'nosuch' }, ['Invalid input (provider)', 'nosuch', 'fakeai']],
+    [{ provider: 'fakeai', plan: 'platinum' }, ['Invalid input (plan)', 'platinum', 'pro']],
+    [{ custom: { label: 'No limit', meters: [{ label: 'Chars', unit: 'characters', reset: { kind: 'none' } }] } }, ['Invalid input (custom.meters[0].limit)']],
+    [{ custom: { label: 'No hours', meters: [{ label: 'Week', reset: { kind: 'rolling' } }] } }, ['Invalid input (custom.meters[0].reset.hours)']],
     [{ custom: { label: 'Bad kind', meters: [{ label: 'Week', reset: { kind: 'fortnightly' } }] } }, ['reset.kind']],
-    [{ custom: { label: 'Bad zone', meters: [{ label: 'Day', reset: { kind: 'daily', tz: 'Mars/Olympus' } }] } }, ['custom.meters[0].reset.tz', 'Mars/Olympus']],
-    [{ custom: { label: 'Bad time', meters: [{ label: 'Day', reset: { kind: 'none' }, resetsAt: 'friday' }] } }, ['custom.meters[0].resetsAt', 'time zone']],
-    [{ custom: { label: 'Bad page', usageUrl: 'ftp://example', meters: [{ label: 'M', reset: { kind: 'none' } }] } }, ['custom.usageUrl', 'http://']],
+    [{ custom: { label: 'Bad zone', meters: [{ label: 'Day', reset: { kind: 'daily', tz: 'Mars/Olympus' } }] } }, ['Invalid input (custom.meters[0].reset.tz)']],
+    [{ custom: { label: 'Bad time', meters: [{ label: 'Day', reset: { kind: 'none' }, resetsAt: 'friday' }] } }, ['Invalid input (custom.meters[0].resetsAt)', 'time zone']],
+    [{ custom: { label: 'Bad page', usageUrl: 'ftp://example', meters: [{ label: 'M', reset: { kind: 'none' } }] } }, ['Invalid input (custom.usageUrl)']],
     [{ custom: { label: 'Empty', meters: [] } }, ['custom.meters']],
-    [{ provider: 'fakeai', price: { amount: 5, currency: 'dollars', period: 'month' } }, ['price.currency', 'three-letter']],
+    [{ provider: 'fakeai', price: { amount: 5, currency: 'dollars', period: 'month' } }, ['price.currency', 'three-letter currency code']],
     [{ provider: 'fakeai', billingDay: 3 }, ['billingDay']]
   ])('add_account refuses %j and names the field', async (args, expected) => {
     const harness = await connect({ state: emptyState() });
@@ -907,7 +971,7 @@ describe('managing accounts', () => {
     expect(answer.data.meters[0]).toMatchObject({ id: 'copilot-pro:premium', meter: 'Premium', limit: 1500, used: 185, snoozed: true });
     expect(await meterOf(harness, 'copilot-pro:premium')).toMatchObject({ limit: 1500, valueShare: 0.5, rollover: 'carries' });
     expect(answer.text).toContain('Updated Copilot Work (id: copilot-pro): label, plan, price');
-    expect(answer.text).toContain('Snoozed until 12:00 UTC (2026-11-20T12:00:00.000Z).');
+    expect(answer.text).toContain(`Snoozed until ${stamp(NOW + 24 * HOUR, TZ)}.`);
 
     // null wakes it up and clears what can be cleared.
     const cleared = await call(harness, 'update_account', { account: 'copilot-pro', snoozeHours: null, plan: null, price: null, usageUrl: null, notes: null });
@@ -937,18 +1001,41 @@ describe('managing accounts', () => {
     [{ account: 'claude', meter: 'weekly' }, ['meterPatch']],
     [{ account: 'claude', meter: 'weekly', meterPatch: {} }, ['meterPatch is empty']],
     [{ account: 'claude', meter: 'monthly', meterPatch: { limit: 5 } }, ['No meter of Claude Max matches "monthly"', 'meter id: claude-max:weekly']],
-    [{ account: 'copilot', usageUrl: 'ftp://example' }, ['usageUrl', 'http://']],
+    [{ account: 'copilot', usageUrl: 'ftp://example' }, ['Invalid input (usageUrl)']],
     [{ account: 'copilot', snoozeHours: -2 }, ['snoozeHours']],
     [{ account: 'copilot', meterPatch: { valueShare: 2 } }, ['meterPatch.valueShare']],
     [{ account: 'copilot', meterPatch: { resetsAt: 'next week' } }, ['meterPatch.resetsAt', 'time zone']],
     [{ account: 'copilot', colour: 'blue' }, ['colour']],
     // A valid account change next to a meter change the core rejects: neither may be saved.
-    [{ account: 'copilot', label: 'Renamed', meterPatch: { reset: { kind: 'rolling' } } }, ['meterPatch.reset.hours']],
-    [{ account: 'copilot', label: 'Renamed', usageUrl: 'nope', meterPatch: { limit: 10 } }, ['usageUrl']]
+    [{ account: 'copilot', label: 'Renamed', meterPatch: { reset: { kind: 'rolling' } } }, ['Invalid input (meterPatch.reset.hours)']],
+    [{ account: 'copilot', label: 'Renamed', usageUrl: 'nope', meterPatch: { limit: 10 } }, ['Invalid input (usageUrl)']]
   ])('update_account refuses %j and leaves everything as it was', async (args, expected) => {
     const harness = await connect();
     const answer = await refused(harness, 'update_account', args);
     for (const part of expected) expect(answer.text).toContain(part);
+  });
+
+  it('says so when a failure between two saves left half of an update in place', async () => {
+    // The rehearsal cannot foresee a lock that another process takes between the two saves.
+    class StallingService extends TokengatorService {
+      override updateMeter(): Promise<never> {
+        return Promise.reject(new LockTimeoutError('state.json'));
+      }
+    }
+    const service = new StallingService(new MemoryStateStore(fixture()), { now: () => NOW, timeZone: TZ });
+    const harness = await connect({ service });
+
+    const half = await call(harness, 'update_account', { account: 'copilot', label: 'Renamed', meterPatch: { limit: 10 } });
+    expect(half.isError).toBe(true);
+    expect(half.text).toContain('Another Tokengator process is writing the state.');
+    expect(half.text).toContain('Part of the change had already been saved');
+    expect(half.text).not.toContain('Nothing was changed');
+    const account = (await service.state()).accounts.find((candidate) => candidate.id === 'copilot-pro');
+    expect(account).toMatchObject({ label: 'Renamed', meters: [{ limit: 300 }] });
+
+    // With a single save there is nothing half done.
+    const none = await refused(harness, 'update_account', { account: 'copilot-pro', meterPatch: { limit: 10 } });
+    expect(none.text).toContain('Nothing was changed.');
   });
 
   it('scenario "Remove without confirmation": removes nothing and names the account and its meters', async () => {
@@ -987,7 +1074,8 @@ describe('managing accounts', () => {
     expect(state.cycles.filter((entry) => entry.accountId === 'claude-max')).toHaveLength(3);
 
     const again = await refused(harness, 'remove_account', { account: 'claude-max', confirm: true });
-    expect(again.text).toContain('No account matches "claude-max"');
+    expect(again.text).toContain('claude-max');
+    expect(again.text).toContain('Nothing was changed.');
     expect((await refused(harness, 'remove_account', { account: 'team', confirm: true })).text).toContain('account id: team-beta');
     expect((await refused(harness, 'remove_account', { account: 'suno', confirm: 'yes' })).text).toContain('confirm');
   });
@@ -1026,7 +1114,7 @@ describe('refresh_usage', () => {
       STAMP,
       'Ran 3 collectors.',
       '- fake-source (Fake source): ok, updated 2 meters: claude-max:weekly, claude-max:session.',
-      '- fake-api (Fake API): the credential was rejected. FAKE_API_KEY was rejected (sent [redacted])',
+      '- fake-api (Fake API): the credential was rejected. FAKE_API_KEY was rejected (sent [redacted]).',
       '- fake-logs (Fake logs): nothing to read. Nothing to read right now.'
     ]);
     expect(JSON.stringify(answer)).not.toContain('sk-live');
@@ -1130,7 +1218,7 @@ describe('record_spend', () => {
     state = addSpendSource(state, { label: 'OpenRouter batch' }, NOW).state;
     const harness = await connect({ state });
     const answer = await refused(harness, 'record_spend', { source: 'router', amount: 1, create: { label: 'Router' } });
-    expect(answer.text).toContain('matches several spend sources: openrouter, openrouter-batch');
+    expect(answer.text).toContain('openrouter, openrouter-batch');
   });
 });
 
@@ -1150,8 +1238,7 @@ describe('resources and prompt', () => {
     const expected = briefMarkdown(await harness.service.state(), NOW, TZ);
     const { contents } = await harness.client.readResource({ uri: 'tokengator://brief' });
     expect(contents).toEqual([{ uri: 'tokengator://brief', mimeType: 'text/markdown', text: expected }]);
-    expect(expected).toContain('# AI quota brief');
-    expect(expected).toContain('| Claude Max | Weekly limit | 60% |');
+    expect(expected).toContain('Claude Max');
 
     // It follows the state: after a report the brief is the brief of the new state.
     await call(harness, 'report_usage', { account: 'claude', usedPercent: 97 });
@@ -1194,6 +1281,60 @@ describe('resources and prompt', () => {
     expect(openMessage.content.text).toContain('I have not decided what to work on yet.');
     expect(openMessage.content.text).toContain('wait for my choice');
   });
+});
+
+describe('docs/MCP.md', () => {
+  const doc = readFileSync(new URL('../docs/MCP.md', import.meta.url), 'utf8');
+
+  interface Example {
+    tool: string;
+    fails: boolean;
+    args: Record<string, unknown>;
+    /** The fields the document shows of the structured content, when it shows any. */
+    shown: Record<string, unknown> | null;
+  }
+
+  // An example is a marker comment, a JSON block with the arguments and, for calls that succeed, a
+  // second JSON block with some of the structured content. The text blocks are quotations.
+  const examples: Example[] = [];
+  const parts = doc.split(/<!-- example: ([a-z_]+)( error)? -->/);
+  for (let index = 1; index < parts.length; index += 3) {
+    const blocks = [...(parts[index + 2] ?? '').matchAll(/```json\n([\s\S]*?)```/g)].map((match) => JSON.parse(match[1] ?? '') as Record<string, unknown>);
+    const fails = parts[index + 1] !== undefined;
+    examples.push({ tool: parts[index] ?? '', fails, args: blocks[0] ?? {}, shown: fails ? null : (blocks[1] ?? null) });
+  }
+
+  it('has a tool table that agrees with what the server lists', async () => {
+    const { client } = await connect();
+    const { tools } = await client.listTools();
+    const rows = [...doc.matchAll(/^\| `([a-z_]+)` \| (yes|no) \|/gm)].map((match) => [match[1], match[2]]);
+    expect(rows.map(([name]) => name).sort()).toEqual([...TOOL_NAMES].sort());
+    for (const [name, readOnly] of rows) {
+      expect(readOnly, name).toBe(tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint ? 'yes' : 'no');
+    }
+    expect(doc).toContain(`${tools.length} tools, 2 resources, 1 prompt`);
+  });
+
+  it('has an example call for every tool', () => {
+    const covered = new Set(examples.filter((example) => !example.fails).map((example) => example.tool));
+    expect([...covered].sort()).toEqual([...TOOL_NAMES].sort());
+    for (const example of examples) expect(example.fails || example.shown !== null, example.tool).toBe(true);
+  });
+
+  it.each(examples.map((example) => [example.tool, example.fails ? 'refused' : 'answered', example] as const))(
+    'example %s (%s) behaves as the document says',
+    async (tool, _outcome, example) => {
+      catalog.providers.push(catalog.elevenlabs);
+      const collectors = fakeCollectors([
+        { id: 'claude-statusline', providerId: 'claude', title: 'Claude Code status line', sourceKind: 'push', lastRunAt: iso(NOW), lastOutcome: 'ok', lastUpdated: ['claude-max:weekly', 'claude-max:session'] },
+        { id: 'elevenlabs', providerId: 'elevenlabs', title: 'ElevenLabs API', lastRunAt: iso(NOW), lastOutcome: 'auth', lastMessage: 'ELEVENLABS_API_KEY was rejected.' }
+      ]);
+      const harness = await connect({ clientName: 'claude-code', collectors });
+      const answer = example.fails ? await refused(harness, tool, example.args) : await call(harness, tool, example.args);
+      expect(answer.isError).toBe(example.fails);
+      if (example.shown) expect(answer.data).toMatchObject(example.shown);
+    }
+  );
 });
 
 describe('what never leaves the machine', () => {
@@ -1367,6 +1508,57 @@ describe('Streamable HTTP', () => {
     expect(response.status).toBe(400);
     expect(((await response.json()) as { error: { code: number } }).error.code).toBe(-32700);
     expect(JSON.stringify(await service.state())).toBe(before);
+  });
+});
+
+describe('mounted in the local service', () => {
+  const TOKEN = 'test-token-0123456789abcdef';
+  const HEADERS = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' };
+  const LIST = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+
+  /** A POST with a Host header of the caller's choosing, which fetch does not allow. */
+  function post(port: number, headers: Record<string, string>): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const req = request({ host: '127.0.0.1', port, method: 'POST', path: '/mcp', headers, agent: false }, (res) => {
+        res.resume();
+        res.on('end', () => resolve(res.statusCode ?? 0));
+      });
+      req.on('error', reject);
+      req.end(LIST);
+    });
+  }
+
+  it('answers at /mcp behind the Host and token checks of the service', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'tokengator-mcp-'));
+    cleanups.push(() => rm(home, { recursive: true, force: true }));
+    const service = serviceOn(new MemoryStateStore(fixture()));
+    const config: ServiceConfig = { host: '127.0.0.1', port: 0, token: TOKEN, home, demo: false };
+    const server = new TokengatorHttpServer({ service, config, publicDir: home, mcpHandler: createMcpHttpHandler({ service }) });
+    cleanups.push(() => server.close());
+    const { url, port } = await server.listen();
+    const endpoint = new URL('/mcp', url);
+    const authorised = { ...HEADERS, Authorization: `Bearer ${TOKEN}` };
+
+    // Without the token, and under another name, the handler is never reached.
+    expect((await fetch(endpoint, { method: 'POST', headers: HEADERS, body: LIST })).status).toBe(401);
+    expect(await post(port, { ...authorised, Host: `rebound.example:${port}` })).toBe(403);
+    expect(await post(port, { ...authorised, Host: `127.0.0.1:${port}` })).toBe(200);
+
+    const client = new Client({ name: 'http-agent', version: '1.0.0' });
+    await client.connect(new StreamableHTTPClientTransport(endpoint, { requestInit: { headers: { Authorization: `Bearer ${TOKEN}` } } }));
+    cleanups.push(() => client.close());
+    const reported = await call(client, 'report_usage', { account: 'suno', remaining: 1200, resetsInMinutes: 60 });
+    expect(reported.isError).toBe(false);
+    expect((await service.state()).accounts[1]?.meters[0]).toMatchObject({ used: 1300, source: { kind: 'agent', id: 'mcp' } });
+
+    const listed = await fetch(endpoint, { method: 'POST', headers: authorised, body: LIST });
+    expect(listed.status).toBe(200);
+    expect(listed.headers.get('cache-control')).toBe('no-store');
+    expect(((await listed.json()) as { result: { tools: unknown[] } }).result.tools).toHaveLength(TOOL_NAMES.length);
+
+    const stream = await fetch(endpoint, { method: 'GET', headers: { Accept: 'text/event-stream', Authorization: `Bearer ${TOKEN}` } });
+    expect(stream.status).toBe(405);
+    expect(((await stream.json()) as { error: { code: number } }).error.code).toBe(-32000);
   });
 });
 

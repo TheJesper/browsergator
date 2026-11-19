@@ -134,7 +134,7 @@ export function resolveTarget(
       candidates: [...unique.values()].map((entry) => ({
         accountId: entry.account.id,
         meterId: entry.meter.id,
-        label: `${entry.account.label} · ${entry.meter.label}`
+        label: `${entry.account.label}, ${entry.meter.label}`
       }))
     };
   }
@@ -189,7 +189,8 @@ function parseClockLoose(text: string): { hour: number; minute: number } | null 
  * strictly in the future, or null when the text is not understood.
  */
 export function parseWhen(text: string, nowMs: number, tz: string = localZone()): number | null {
-  const source = text.trim().toLowerCase().replace(/^(in|at|on)\s+/, '');
+  const stripped = text.trim().replace(/^(in|at|on)\s+/i, '');
+  const source = stripped.toLowerCase();
   if (!source) return null;
 
   const duration = parseDuration(source);
@@ -197,7 +198,7 @@ export function parseWhen(text: string, nowMs: number, tz: string = localZone())
 
   // Full ISO instants with an offset are unambiguous; let the platform read them.
   if (/^\d{4}-\d{2}-\d{2}t\d{2}:\d{2}(:\d{2}(\.\d+)?)?(z|[+-]\d{2}:?\d{2})$/.test(source)) {
-    const ms = Date.parse(text.trim());
+    const ms = Date.parse(stripped);
     return Number.isFinite(ms) && ms > nowMs ? ms : null;
   }
 
@@ -362,6 +363,7 @@ export function parseQuick(text: string, state: State, nowMs: number, tz: string
     if (ratio) {
       const value = scale(ratio[1] as string, ratio[2] as string);
       reading.limit = scale(ratio[3] as string, ratio[4] as string);
+      if (!(reading.limit > 0)) return { ok: false, error: 'The limit after the slash must be greater than 0.', candidates: [] };
       if (left) reading.remaining = value;
       else reading.used = value;
     } else {
@@ -418,7 +420,9 @@ export function previewReading(account: Account, meter: Meter, reading: Reading,
   if (used !== null && limit > 0) {
     const usedFraction = Math.min(1, used / limit);
     if (meter.unit === 'percent') {
-      parts.push(`${formatPercent(usedFraction)} used, ${formatPercent(1 - usedFraction)} left`);
+      // Round once and derive the other side, so "77.5%" never previews as "78% used, 23% left".
+      const usedPct = Math.round(usedFraction * 100);
+      parts.push(`${usedPct}% used, ${100 - usedPct}% left`);
     } else {
       const probe = { unit: meter.unit, unitLabel: meter.unitLabel };
       parts.push(
@@ -430,5 +434,5 @@ export function previewReading(account: Account, meter: Meter, reading: Reading,
     const at = Date.parse(reading.resetsAt);
     parts.push(`resets ${formatMoment(at, nowMs, tz)} (in ${formatDuration(at - nowMs)})`);
   }
-  return `${account.label}, ${meter.label}: ${parts.join(' · ')}`;
+  return `${account.label}, ${meter.label}: ${parts.join(', ')}`;
 }

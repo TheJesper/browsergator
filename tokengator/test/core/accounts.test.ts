@@ -562,6 +562,16 @@ describe('updateMeter', () => {
     expect(view?.tier).toBe('behind');
   });
 
+  it('keeps a one-off pack on the clock when its expiry is edited', () => {
+    let state = addAccount(emptyState(), base({ meters: [{ label: 'Weekly', unit: 'credits', limit: 100, used: 10, reset: { kind: 'once' } }] }), NOW).state;
+    expect(meterOf(state)).toMatchObject({ resetsAt: null, windowStartedAt: null });
+    expect(viewState(state, NOW)[0]?.needsReset).toBe(true);
+    state = updateMeter(state, 'claude-max:weekly', { resetsAt: iso(NOW + 30 * DAY) }, NOW);
+    expect(meterOf(state)).toMatchObject({ resetsAt: iso(NOW + 30 * DAY), windowStartedAt: iso(NOW) });
+    expect(viewState(state, NOW + DAY)[0]).toMatchObject({ needsReset: false, msLeft: 29 * DAY });
+    expect(viewState(state, NOW + 10 * DAY)[0]?.tier).not.toBe('idle');
+  });
+
   it('revives an expired one-off meter when it gets a new expiry', () => {
     let state = addAccount(emptyState(), base({ meters: [{ label: 'Weekly', unit: 'credits', limit: 100, used: 10, reset: { kind: 'once' }, resetsAt: iso(NOW + HOUR) }] }), NOW).state;
     state = rollState(state, NOW + 2 * HOUR);
@@ -738,6 +748,7 @@ function richState(): State {
       label: 'Credit pack',
       meters: [
         { label: 'Credits', unit: 'usd', limit: 25, used: 5, reset: { kind: 'once' }, resetsAt: '2026-11-10T00:00:00Z' },
+        { label: 'Live pack', unit: 'credits', limit: 500, used: 100, reset: { kind: 'once' }, resetsAt: '2026-12-24T00:00:00Z' },
         { label: 'Balance', unit: 'tokens', limit: 1_000_000, reset: { kind: 'none' } },
         { label: 'Unanchored', reset: { kind: 'interval', hours: 168 } }
       ]

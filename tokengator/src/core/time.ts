@@ -95,9 +95,21 @@ export function zonedTimeToUtc(
 ): number {
   const wall = Date.UTC(year, month - 1, day, hour, minute, 0);
   // Two passes: the offset at the guess can differ from the offset at the answer across a DST change.
-  let guess = wall - zoneOffset(wall, tz);
-  guess = wall - zoneOffset(guess, tz);
-  return guess;
+  const first = wall - zoneOffset(wall, tz);
+  const second = wall - zoneOffset(first, tz);
+  if (first === second) return first;
+  const reads = (ms: number): boolean => {
+    const p = zonedParts(ms, tz);
+    return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, 0) === wall;
+  };
+  // Around a change the two candidates differ. A wall time that exists is whichever candidate reads back
+  // as it (the earlier one when the clock shows it twice). One that was skipped is read as if the clock
+  // had not jumped yet, which lands just after the jump, on either side of Greenwich.
+  const earlier = Math.min(first, second);
+  const later = Math.max(first, second);
+  if (reads(earlier)) return earlier;
+  if (reads(later)) return later;
+  return later;
 }
 
 export function daysInMonth(year: number, month: number): number {

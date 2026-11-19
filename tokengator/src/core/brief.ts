@@ -59,7 +59,7 @@ export function briefMarkdown(state: State, nowMs: number, tz: string = localZon
     for (const view of group) {
       const flags = [view.stale ? 'stale' : '', view.blockedBy ? 'blocked' : ''].filter(Boolean).join(', ');
       lines.push(
-        `| ${escapeCell(view.account.label)} | ${escapeCell(view.meter.label)}${flags ? ` (${flags})` : ''} | ${leftText(view).replace(' left', '')} | ${resetCell(view, nowMs, tz)} | ${view.projectedUnused >= 0.005 ? formatPercent(view.projectedUnused) : ''} | ${riskCell(view)} |`
+        `| ${escapeCell(view.account.label)} | ${escapeCell(view.meter.label)}${flags ? ` (${flags})` : ''} | ${leftText(view).replace(' left', '')} | ${resetCell(view, nowMs, tz)} | ${hasForecast(view) && view.projectedUnused >= 0.005 ? formatPercent(view.projectedUnused) : ''} | ${riskCell(view)} |`
       );
     }
   }
@@ -73,9 +73,14 @@ export function briefMarkdown(state: State, nowMs: number, tz: string = localZon
   const first = queue.find((view) => !view.snoozed && (view.tier === 'use-now' || view.tier === 'behind'));
   if (first) {
     lines.push('');
-    lines.push(`**Next:** ${recommend(first, nowMs)}`);
+    lines.push(`**Next:** ${recommend(first, nowMs, tz)}`);
   }
   return lines.join('\n');
+}
+
+/** A window has a forecast once it has a clock, is past its first few percent, and is not used up. */
+function hasForecast(view: MeterView): boolean {
+  return view.projectedFraction !== null && view.tier !== 'fresh' && view.tier !== 'spent' && view.tier !== 'idle' && view.tier !== 'expired';
 }
 
 function escapeCell(text: string): string {
@@ -85,16 +90,16 @@ function escapeCell(text: string): string {
 /** One meter as Markdown. */
 export function meterMarkdown(view: MeterView, nowMs: number, tz: string = localZone()): string {
   const lines: string[] = [];
-  lines.push(`### ${view.account.label} · ${view.meter.label}`);
+  lines.push(`### ${view.account.label}, ${view.meter.label}`);
   lines.push('');
-  lines.push(`**${headline(view, nowMs)}**`);
+  lines.push(`**${headline(view, nowMs, tz)}**`);
   lines.push('');
-  lines.push(`- Used: ${usedText(view)}`);
+  lines.push(`- Used: ${usedText(view).replace(/ used$/, '')}`);
   if (view.tier !== null) lines.push(`- Left: ${leftText(view).replace(' left', '')}`);
   if (view.resetsAtMs !== null && view.msLeft !== null && view.msLeft > 0) {
     lines.push(`- Resets: ${formatMoment(view.resetsAtMs, nowMs, tz)} (in ${formatDuration(view.msLeft)})`);
   }
-  if (view.projectedFraction !== null && view.tier !== null) {
+  if (view.tier !== null && hasForecast(view) && view.projectedFraction !== null) {
     lines.push(`- Forecast: ${formatPercent(view.projectedFraction)} used by the reset, ${formatPercent(view.projectedUnused)} expires`);
   }
   const risk = riskCell(view);
@@ -102,7 +107,7 @@ export function meterMarkdown(view: MeterView, nowMs: number, tz: string = local
   if (view.account.plan) lines.push(`- Plan: ${view.account.plan}`);
   lines.push(`- Updated: ${view.ageMs === null ? 'never' : formatAge(view.ageMs)}${view.stale ? ' (stale)' : ''}`);
   lines.push('');
-  lines.push(explain(view, nowMs));
+  lines.push(explain(view, nowMs, tz));
   return lines.join('\n');
 }
 
@@ -110,8 +115,8 @@ export function meterMarkdown(view: MeterView, nowMs: number, tz: string = local
 export function agentPrompt(view: MeterView, nowMs: number, tz: string = localZone()): string {
   const lines: string[] = [];
   lines.push(`It is ${stamp(nowMs, tz)}.`);
-  lines.push(`${statusLine(view, nowMs)}.`);
-  lines.push(explain(view, nowMs));
+  lines.push(`${statusLine(view, nowMs, tz)}.`);
+  lines.push(explain(view, nowMs, tz));
   lines.push('');
   lines.push(
     `I would rather use this ${view.account.label} quota than let it expire. Suggest three concrete, worthwhile things from my current projects that fit in the time left, ordered by value. Do not start any of them until I pick one.`
@@ -160,7 +165,7 @@ const round = (value: number, digits = 1): number => {
   return Math.round(value * factor) / factor;
 };
 
-export function meterRecord(view: MeterView, nowMs: number): MeterRecord {
+export function meterRecord(view: MeterView, nowMs: number, tz?: string): MeterRecord {
   return {
     id: view.meter.id,
     account: view.account.label,
@@ -192,8 +197,8 @@ export function meterRecord(view: MeterView, nowMs: number): MeterRecord {
     source: view.meter.source.id ? `${view.meter.source.kind}:${view.meter.source.id}` : view.meter.source.kind,
     estimated: view.meter.estimated,
     snoozed: view.snoozed,
-    headline: headline(view, nowMs),
-    recommendation: recommend(view, nowMs)
+    headline: headline(view, nowMs, tz),
+    recommendation: recommend(view, nowMs, tz)
   };
 }
 
@@ -208,6 +213,8 @@ export interface Snapshot {
     stale: number;
     atRisk: Summary['atRisk'];
     lost30: Summary['lost30'];
+    /** True when part of `lost30` comes from windows with no reading near their end. */
+    lost30IsEstimate: boolean;
     utilisation30Percent: number | null;
     nextReset: { meter: string; account: string; resetsAt: string } | null;
   };
@@ -221,8 +228,8 @@ export interface Snapshot {
 export function snapshot(state: State, nowMs: number, tz: string = localZone()): Snapshot {
   const summary = summarise(state, nowMs);
   const all = viewState(state, nowMs);
-  const queue = allowanceQueue(state, nowMs).map((view) => meterRecord(view, nowMs));
-  const throttles = all.filter((view) => view.tier === null).map((view) => meterRecord(view, nowMs));
+  const queue = allowanceQueue(state, nowMs).map((view) => meterRecord(view, nowMs, tz));
+  const throttles = all.filter((view) => view.tier === null).map((view) => meterRecord(view, nowMs, tz));
   const next = summary.nextReset;
   return {
     generatedAt: iso(nowMs),
@@ -235,6 +242,7 @@ export function snapshot(state: State, nowMs: number, tz: string = localZone()):
       stale: summary.stale,
       atRisk: summary.atRisk,
       lost30: summary.lost30,
+      lost30IsEstimate: summary.lostIsEstimate,
       utilisation30Percent: summary.utilisation30 === null ? null : round(summary.utilisation30 * 100),
       nextReset:
         next && next.resetsAtMs !== null
@@ -253,8 +261,8 @@ export function queueText(state: State, nowMs: number, tz: string = localZone(),
   const lines = [`As of ${stamp(nowMs, tz)}.`, summaryLine(summary, state.settings.currency), ''];
   if (queue.length === 0) lines.push('No subscriptions are tracked yet. Add one with add_account.');
   queue.slice(0, limit).forEach((view, index) => {
-    lines.push(`${index + 1}. ${statusLine(view, nowMs)}`);
-    if (view.tier === 'use-now' || view.tier === 'behind' || view.tier === 'hot') lines.push(`   ${recommend(view, nowMs)}`);
+    lines.push(`${index + 1}. ${statusLine(view, nowMs, tz)}`);
+    if (view.tier === 'use-now' || view.tier === 'behind' || view.tier === 'hot') lines.push(`   ${recommend(view, nowMs, tz)}`);
   });
   if (queue.length > limit) lines.push(`(${queue.length - limit} more not shown)`);
   return lines.join('\n');

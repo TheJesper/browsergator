@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { AccountInput } from '../src/core/accounts.js';
+import { CATALOG } from '../src/core/catalog.js';
 import { DAY, HOUR, MINUTE, iso } from '../src/core/time.js';
 import { emptyState, type Account, type Meter, type State } from '../src/core/types.js';
 import {
@@ -114,8 +115,8 @@ describe('TokengatorService', () => {
       const error = await failure(service.report({ account: 'claude' }, { usedPercent: 40 }));
       expect(error).toBeInstanceOf(AmbiguousTargetError);
       expect((error as AmbiguousTargetError).candidates).toEqual([
-        { accountId: 'claude-max', meterId: 'claude-max:weekly', label: 'Claude Max · Weekly' },
-        { accountId: 'claude-pro', meterId: 'claude-pro:weekly', label: 'Claude Pro · Weekly' }
+        { accountId: 'claude-max', meterId: 'claude-max:weekly', label: 'Claude Max, Weekly' },
+        { accountId: 'claude-pro', meterId: 'claude-pro:weekly', label: 'Claude Pro, Weekly' }
       ]);
       expect((error as Error).message).toMatch(/more than one/);
       // Nothing was stored.
@@ -196,7 +197,7 @@ describe('TokengatorService', () => {
 
     it('stores an amount left together with a new reset time', async () => {
       const outcome = await service.quick('suno 1200 left resets in 9d', { kind: 'agent', id: 'codex' });
-      expect(outcome.preview).toBe('Suno Pro, Monthly credits: 1,300 credits used, 1,200 credits left (48%) · resets Sat 28 Nov 10:00 (in 9d)');
+      expect(outcome.preview).toBe('Suno Pro, Monthly credits: 1,300 credits used, 1,200 credits left (48%), resets Sat 28 Nov 10:00 (in 9d)');
       expect(outcome.meter).toMatchObject({ used: 1300, resetsAt: iso(NOW + 9 * DAY), source: { kind: 'agent', id: 'codex' } });
     });
 
@@ -528,6 +529,51 @@ describe('TokengatorService', () => {
       expect(meterOf(state, 'my-acme-seat:notes')).toBe(untouched);
     });
 
+    // Whatever the catalog holds: no entry is named here, the first one with meters stands in for all.
+    const known = CATALOG.find((provider) => (provider.plans[0]?.meters.length ?? 0) > 0);
+
+    it.skipIf(!known)('creates the account from the catalog preset when the provider is a known one', async () => {
+      const provider = known as (typeof CATALOG)[number];
+      const plan = provider.plans[0] as (typeof provider.plans)[number];
+      const fed = plan.meters[0] as (typeof plan.meters)[number];
+      const changed = await service.applyCollected('some-collector', [{ providerId: provider.id, planId: plan.id, meters: [{ key: fed.key, reading: { usedPercent: 10 } }] }], []);
+
+      const state = await store.read();
+      expect(state.accounts).toHaveLength(1);
+      const account = state.accounts[0] as Account;
+      expect(account.providerId).toBe(provider.id);
+      expect(account.plan).toBe(plan.name);
+      expect(account.price).toEqual(plan.price && plan.price.amount > 0 ? plan.price : null);
+      // Every meter of the plan is there, not just the one that was reported.
+      expect(account.meters.map((meter) => meter.key)).toEqual(plan.meters.map((meter) => meter.key));
+      expect(changed).toEqual([`${account.id}:${fed.key}`]);
+      const meter = meterOf(state, `${account.id}:${fed.key}`);
+      expect(meter.used).toBeCloseTo(meter.limit * 0.1, 9);
+      expect(meter.source).toEqual({ kind: 'collector', id: 'some-collector' });
+      expect(meter.label).toBe(fed.label);
+
+      // A second run feeds the same account.
+      clock += HOUR;
+      await service.applyCollected('some-collector', [{ providerId: provider.id, meters: [{ key: fed.key, reading: { usedPercent: 20 } }] }], []);
+      expect((await store.read()).accounts).toHaveLength(1);
+    });
+
+    it.skipIf(!known)('adds an account from a preset, with the label and price the user chose', async () => {
+      const provider = known as (typeof CATALOG)[number];
+      const plan = provider.plans[0] as (typeof provider.plans)[number];
+      const plain = await service.addFromPreset(provider.id, plan.id);
+      expect(plain).toMatchObject({ providerId: provider.id, plan: plan.name, usageUrl: provider.usageUrl });
+      expect(plain.meters.map((meter) => meter.key)).toEqual(plan.meters.map((meter) => meter.key));
+
+      const custom = await service.addFromPreset(provider.id, plan.id, { label: 'Work seat', price: { amount: 42, currency: 'SEK', period: 'month' } });
+      expect(custom).toMatchObject({ id: 'work-seat', label: 'Work seat', price: { amount: 42, currency: 'SEK', period: 'month' } });
+      expect(custom.id).not.toBe(plain.id);
+
+      const unknownPlan = await failure(service.addFromPreset(provider.id, 'no-such-plan-xyz'));
+      expect(unknownPlan).toBeInstanceOf(ValidationError);
+      expect((unknownPlan as ValidationError).field).toBe('plan');
+    });
+
     it('marks status line readings as such', async () => {
       await service.applyCollected('claude-statusline', [{ providerId: PROVIDER, meters: [{ key: 'weekly', reading: { usedPercent: 40 } }] }], []);
       expect(meterOf(await store.read(), `${PROVIDER}:weekly`).source).toEqual({ kind: 'statusline', id: 'claude-statusline' });
@@ -719,5 +765,54 @@ describe('TokengatorService', () => {
       expect(late).toBe(1);
       expect(events).toBe(4);
     });
+  });
+});
+
+describe('findings from the core review', () => {
+  const NOW_MS = Date.parse('2026-11-19T10:00:00Z');
+  const make = (): TokengatorService => new TokengatorService(new MemoryStateStore(emptyState()), { now: () => NOW_MS, timeZone: 'UTC' });
+
+  it('treats an unparseable quick line as invalid input and an unclear name as ambiguous', async () => {
+    const service = make();
+    await service.addAccount({ label: 'Claude Max', meters: [{ label: 'Weekly', unit: 'percent', reset: { kind: 'interval', hours: 168 } }] });
+    await expect(service.quick('claude 140%')).rejects.toMatchObject({ name: 'ValidationError', field: 'text' });
+    await expect(service.quick('claude 40% resets blursday')).rejects.toMatchObject({ name: 'ValidationError', field: 'text' });
+    await expect(service.quick('nobody 40%')).rejects.toMatchObject({ name: 'AmbiguousTargetError' });
+    expect((await service.state()).accounts[0]?.meters[0]?.used).toBe(0);
+  });
+
+  it('feeds the account a collector fed before, compares provider ids as slugs, and survives a bad spend day', async () => {
+    const service = make();
+    await service.applyCollected('fake', [{ providerId: 'Acme Cloud', meters: [{ key: 'credits', reading: { usedPercent: 10 } }] }], []);
+    await service.applyCollected('fake', [{ providerId: 'Acme Cloud', meters: [{ key: 'credits', reading: { usedPercent: 20 } }] }], []);
+    let state = await service.state();
+    expect(state.accounts).toHaveLength(1);
+    expect(state.accounts[0]?.providerId).toBe('acme-cloud');
+    expect(state.accounts[0]?.meters[0]?.used).toBe(20);
+
+    // A second, hand-made account of the same provider must not steal the collector's readings.
+    await service.addAccount({ providerId: 'acme-cloud', label: 'Acme personal', meters: [{ key: 'credits', label: 'Credits', unit: 'percent', reset: { kind: 'none' } }] });
+    await service.applyCollected('fake', [{ providerId: 'acme-cloud', meters: [{ key: 'credits', reading: { usedPercent: 30 } }] }], []);
+    state = await service.state();
+    expect(state.accounts.map((account) => account.meters[0]?.used)).toEqual([30, 0]);
+
+    await service.applyCollected('fake', [], [{ providerId: 'acme-cloud', label: 'Acme API', currency: 'USD', days: [{ date: '2026-11-31', amount: 5 }, { date: '2026-11-18', amount: 2 }] }]);
+    expect((await service.state()).spend[0]?.entries).toEqual([{ date: '2026-11-18', amount: 2 }]);
+  });
+
+  it('gives a meter it has to invent the cadence the collector reports, or a single deadline', async () => {
+    const service = make();
+    const resetsAt = new Date(NOW_MS + 3 * 3_600_000).toISOString();
+    await service.applyCollected('fake', [{ providerId: 'acme', meters: [
+      { key: 'session', label: 'Session', role: 'throttle', reset: { kind: 'rolling', hours: 5 }, reading: { usedPercent: 40, resetsAt } },
+      { key: 'pack', reading: { usedPercent: 10, resetsAt } },
+      { key: 'balance', reading: { usedPercent: 5 } }
+    ] }], []);
+    const meters = (await service.state()).accounts[0]?.meters ?? [];
+    expect(meters.map((meter) => [meter.key, meter.role, meter.reset.kind])).toEqual([
+      ['session', 'throttle', 'rolling'],
+      ['pack', 'allowance', 'once'],
+      ['balance', 'allowance', 'none']
+    ]);
   });
 });

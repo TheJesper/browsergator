@@ -95,7 +95,7 @@ describe('amount wording', () => {
 
   it('speaks in the unit of counted meters', () => {
     const v = view({ label: 'Premium requests', unit: 'requests', limit: 300, used: 120, reset: { kind: 'monthly', day: 1, time: '00:00', tz: 'UTC' } });
-    expect(usedText(v)).toBe('120 requests of 300 requests used');
+    expect(usedText(v)).toBe('120 of 300 requests used');
     expect(leftText(v)).toBe('180 requests left');
     expect(resetText(v)).toBe('resets in 11d');
   });
@@ -103,12 +103,12 @@ describe('amount wording', () => {
   it('uses a custom noun wherever the unit is shown', () => {
     // Scenario: Custom noun.
     const v = view({ label: 'Daily', unit: 'count', unitLabel: 'songs', limit: 500, used: 210, reset: { kind: 'daily', time: '00:00', tz: 'UTC' } });
-    expect(usedText(v)).toBe('210 songs of 500 songs used');
+    expect(usedText(v)).toBe('210 of 500 songs used');
     expect(leftText(v)).toBe('290 songs left');
     expect(headline(v, NOW)).toBe('On pace: 290 songs left, resets in 14h');
-    expect(statusLine(v, NOW)).toBe('Claude Max · Daily: On pace: 290 songs left, resets in 14h');
-    expect(explain(v, NOW)).toContain('210 songs of 500 songs used');
-    expect(meterMarkdown(v, NOW, 'UTC')).toContain('- Used: 210 songs of 500 songs used');
+    expect(statusLine(v, NOW)).toBe('Claude Max, Daily: On pace: 290 songs left, resets in 14h');
+    expect(explain(v, NOW)).toContain('210 of 500 songs used');
+    expect(meterMarkdown(v, NOW, 'UTC')).toContain('- Used: 210 of 500 songs');
     expect(meterMarkdown(v, NOW, 'UTC')).toContain('- Left: 290 songs');
     expect(formatAmount(v.meter, 1)).toBe('1 songs');
   });
@@ -189,7 +189,7 @@ describe('wording per tier', () => {
     const v = view(weeklyResettingIn(14, 62), { price: USD_100 });
     expect(v.tier).toBe('use-now');
     expect(headline(v, NOW)).toBe('Use now: 38% left, resets in 14h');
-    expect(statusLine(v, NOW)).toBe('Claude Max · Weekly: Use now: 38% left, resets in 14h ($7.41 at risk)');
+    expect(statusLine(v, NOW)).toBe('Claude Max, Weekly: Use now: 38% left, resets in 14h ($7.41 at risk)');
     expect(explain(v, NOW)).toBe(
       '62% used with 8% of the window left. At this pace about 32% expires unused, worth $7.41. Finishing it takes 6.7× the pace so far.'
     );
@@ -200,7 +200,7 @@ describe('wording per tier', () => {
 
   it('use-now without a price says nothing about money', () => {
     const v = view(weeklyResettingIn(14, 62));
-    expect(statusLine(v, NOW)).toBe('Claude Max · Weekly: Use now: 38% left, resets in 14h');
+    expect(statusLine(v, NOW)).toBe('Claude Max, Weekly: Use now: 38% left, resets in 14h');
     expect(explain(v, NOW)).toBe('62% used with 8% of the window left. At this pace about 32% expires unused. Finishing it takes 6.7× the pace so far.');
     expect(recommend(v, NOW)).toBe('Prefer Claude Max for work the user wants done now: 38% left and it resets in 14h.');
   });
@@ -216,7 +216,7 @@ describe('wording per tier', () => {
     const v = view(weekly(0.6, 30), { price: USD_100 });
     expect(v.tier).toBe('behind');
     expect(headline(v, NOW)).toBe('Behind pace: about 48% will expire, resets in 2d 19h');
-    expect(statusLine(v, NOW)).toBe('Claude Max · Weekly: Behind pace: about 48% will expire, resets in 2d 19h ($11.15 at risk)');
+    expect(statusLine(v, NOW)).toBe('Claude Max, Weekly: Behind pace: about 48% will expire, resets in 2d 19h ($11.15 at risk)');
     expect(explain(v, NOW)).toBe(
       '30% used with 40% of the window left. At this pace about 48% expires unused, worth $11.15. Finishing it takes 3.5× the pace so far.'
     );
@@ -235,7 +235,7 @@ describe('wording per tier', () => {
     const v = viewState(state, halfway)[0] as MeterView;
     expect(headline(v, halfway)).toBe('Behind pace: about 95% will expire, resets in 15d');
     expect(explain(v, halfway)).toBe(
-      '0 requests of 300 requests used with 50% of the window left. At this pace about 95% expires unused. Finishing it takes about 20 requests a day.'
+      '0 of 300 requests used with 50% of the window left. At this pace about 95% expires unused. Finishing it takes about 20 requests a day.'
     );
   });
 
@@ -245,7 +245,7 @@ describe('wording per tier', () => {
     const runsOut = formatMoment(v.runsOutAtMs as number, NOW);
     expect(runsOut).toMatch(/^(today|tomorrow) \d\d:\d\d$/);
     expect(headline(v, NOW)).toBe(`Running hot: runs out ${runsOut}, resets in 4d 21h`);
-    expect(statusLine(v, NOW)).toBe(`Claude Max · Weekly: Running hot: runs out ${runsOut}, resets in 4d 21h`);
+    expect(statusLine(v, NOW)).toBe(`Claude Max, Weekly: Running hot: runs out ${runsOut}, resets in 4d 21h`);
     expect(explain(v, NOW)).toBe(
       `75% used with 70% of the window left. At this pace it runs out ${runsOut}, 4d 4h before the reset. Nothing will be wasted, but it may need rationing.`
     );
@@ -256,7 +256,7 @@ describe('wording per tier', () => {
     const v = view(weeklyResettingIn(20, 88), { price: USD_100 });
     expect(v.tier).toBe('on-pace');
     expect(headline(v, NOW)).toBe('On pace: 12% left, resets in 20h');
-    expect(statusLine(v, NOW)).toBe('Claude Max · Weekly: On pace: 12% left, resets in 20h');
+    expect(statusLine(v, NOW)).toBe('Claude Max, Weekly: On pace: 12% left, resets in 20h');
     expect(explain(v, NOW)).toBe('88% used with 12% of the window left. On track to be used up around the reset.');
     expect(recommend(v, NOW)).toBe('Claude Max needs no action.');
   });
@@ -267,14 +267,14 @@ describe('wording per tier', () => {
     expect(headline(v, NOW)).toBe('New window: 100% left, resets in 6d 20h');
     expect(explain(v, NOW)).toBe('0% used with 98% of the window left. The window has only just started, so there is no forecast yet.');
     expect(recommend(v, NOW)).toBe('Claude Max needs no action.');
-    expect(statusLine(v, NOW)).toBe('Claude Max · Weekly: New window: 100% left, resets in 6d 20h');
+    expect(statusLine(v, NOW)).toBe('Claude Max, Weekly: New window: 100% left, resets in 6d 20h');
   });
 
   it('spent', () => {
     const v = view(weeklyResettingIn(48, 99), { price: USD_100 });
     expect(v.tier).toBe('spent');
     expect(headline(v, NOW)).toBe('Used up: resets in 2d');
-    expect(statusLine(v, NOW)).toBe('Claude Max · Weekly: Used up: resets in 2d');
+    expect(statusLine(v, NOW)).toBe('Claude Max, Weekly: Used up: resets in 2d');
     expect(explain(v, NOW)).toBe('99% used with 29% of the window left. Fully used, so nothing expires.');
     expect(recommend(v, NOW)).toBe('Claude Max is used up until its reset; use something else.');
   });
@@ -285,7 +285,7 @@ describe('wording per tier', () => {
     expect(headline(v, NOW)).toBe('Reset time unknown: 100% left');
     expect(explain(v, NOW)).toBe('0% used. Set the reset time to get a forecast. No reading yet.');
     expect(recommend(v, NOW)).toBe('ChatGPT Plus has no reset time on record; ask the user or read its usage page.');
-    expect(statusLine(v, NOW)).toBe('ChatGPT Plus · Weekly: Reset time unknown: 100% left');
+    expect(statusLine(v, NOW)).toBe('ChatGPT Plus, Weekly: Reset time unknown: 100% left (no reading yet)');
   });
 
   it('idle because a rolling window has not started', () => {
@@ -300,27 +300,29 @@ describe('wording per tier', () => {
     const v = view({ label: 'Balance', unit: 'credits', limit: 500, used: 100, reset: { kind: 'none' } }, {}, 'OpenRouter');
     expect(v.tier).toBe('balance');
     expect(headline(v, NOW)).toBe('Balance: 400 credits left');
-    expect(explain(v, NOW)).toBe('100 credits of 500 credits used.');
+    expect(explain(v, NOW)).toBe('100 of 500 credits used.');
     expect(recommend(v, NOW)).toBe('OpenRouter needs no action.');
-    expect(statusLine(v, NOW)).toBe('OpenRouter · Balance: Balance: 400 credits left');
+    expect(statusLine(v, NOW)).toBe('OpenRouter, Balance: Balance: 400 credits left');
   });
 
   it('expired', () => {
+    // A pack bought twenty days ago, last read two hours ago, that ran out an hour ago.
     const expired = (used: number): MeterView => {
-      const state = add(
+      let state = add(
         emptyState(),
         'Credit pack',
-        [{ label: 'Credits', unit: 'credits', limit: 1000, used, reset: { kind: 'once' }, resetsAt: iso(NOW - HOUR) }],
+        [{ label: 'Credits', unit: 'credits', limit: 1000, reset: { kind: 'once' }, resetsAt: iso(NOW - HOUR) }],
         { price: { amount: 50, currency: 'USD', period: 'month' } },
-        NOW - 3 * HOUR
+        NOW - 20 * DAY
       );
+      state = applyReadingToState(state, 'credit-pack', 'credit-pack:credits', { used }, NOW - 2 * HOUR);
       return viewState(rollState(state, NOW), NOW)[0] as MeterView;
     };
     const v = expired(600);
     expect(v.tier).toBe('expired');
     expect(headline(v, NOW)).toBe('Expired with 40% unused');
-    expect(statusLine(v, NOW)).toBe('Credit pack · Credits: Expired with 40% unused');
-    expect(explain(v, NOW)).toBe('600 credits of 1,000 credits used.');
+    expect(statusLine(v, NOW)).toBe('Credit pack, Credits: Expired with 40% unused');
+    expect(explain(v, NOW)).toBe('600 of 1,000 credits used.');
     expect(recommend(v, NOW)).toBe('Credit pack has expired.');
     expect(headline(expired(1000), NOW)).toBe('Expired, fully used');
   });
@@ -337,7 +339,7 @@ describe('wording per tier', () => {
     expect(explain(blocked, NOW)).toBe(
       `Session is at its limit, so this account cannot be used right now. It reopens ${formatMoment(NOW + 70 * MINUTE, NOW)}.`
     );
-    expect(statusLine(blocked, NOW)).toBe('Claude Max · Session: Blocked: reopens in 1h 10m');
+    expect(statusLine(blocked, NOW)).toBe('Claude Max, Session: Blocked: reopens in 1h 10m');
     expect(stateLabel(blocked)).toBe('Blocked');
 
     const open = view(session(40, 120));
@@ -371,7 +373,7 @@ describe('the forecast in words', () => {
   it('states the same three figures the forecast bar draws', () => {
     const v = view(weekly(0.6, 42));
     const markdown = meterMarkdown(v, NOW, 'UTC');
-    expect(markdown).toContain('- Used: 42% used');
+    expect(markdown).toContain('- Used: 42%');
     expect(markdown).toContain('- Forecast: 71% used by the reset, 29% expires');
     expect(headline(v, NOW)).toBe('Behind pace: about 29% will expire, resets in 2d 19h');
     expect(explain(v, NOW)).toContain('At this pace about 29% expires unused.');
@@ -389,7 +391,7 @@ describe('markers carried into every summary', () => {
     // Scenario: Old weekly reading.
     const { state, v } = staleWeekly();
     expect(v.stale).toBe(true);
-    expect(statusLine(v, NOW)).toBe('Claude Max · Weekly: Use now: 38% left, resets in 14h ($7.41 at risk, updated 3d ago)');
+    expect(statusLine(v, NOW)).toBe('Claude Max, Weekly: Use now: 38% left, resets in 14h ($7.41 at risk, updated 3d ago)');
     expect(explain(v, NOW)).toMatch(/Last updated 3d ago; refresh before acting on it\.$/);
     expect(recommend(v, NOW)).toMatch(/The reading is stale, so check the usage page first\.$/);
     expect(meterMarkdown(v, NOW, 'UTC')).toContain('- Updated: 3d ago (stale)');
@@ -397,6 +399,23 @@ describe('markers carried into every summary', () => {
     expect(queueText(state, NOW, 'UTC')).toContain('updated 3d ago');
     expect(snapshot(state, NOW, 'UTC').queue[0]).toMatchObject({ stale: true, updatedAt: iso(NOW - 3 * DAY) });
     expect(agentPrompt(v, NOW, 'UTC')).toContain('updated 3d ago');
+  });
+
+  it('says in every summary that a meter has never been read', () => {
+    // Requirement: a meter that never had a reading is stale, and every summary carries the marker.
+    const state = add(emptyState(), 'ChatGPT Plus', [{ label: 'Weekly', reset: { kind: 'interval', hours: 168 }, resetsAt: iso(NOW + 3 * DAY) }]);
+    const v = viewState(state, NOW)[0] as MeterView;
+    expect(v.stale).toBe(true);
+    expect(v.ageMs).toBeNull();
+    expect(v.tier).toBe('behind'); // 0% used is an assumption here, not a fact
+    expect(statusLine(v, NOW)).toBe('ChatGPT Plus, Weekly: Behind pace: about 97% will expire, resets in 3d (no reading yet)');
+    expect(explain(v, NOW)).toMatch(/No reading yet\.$/);
+    expect(recommend(v, NOW)).toMatch(/check the usage page first\.$/);
+    expect(meterMarkdown(v, NOW, 'UTC')).toContain('- Updated: never (stale)');
+    expect(briefMarkdown(state, NOW, 'UTC')).toContain('| ChatGPT Plus | Weekly (stale) |');
+    expect(queueText(state, NOW, 'UTC')).toContain('(no reading yet)');
+    expect(agentPrompt(v, NOW, 'UTC')).toContain('(no reading yet)');
+    expect(snapshot(state, NOW, 'UTC').queue[0]).toMatchObject({ stale: true, updatedAt: null });
   });
 
   it('says so when the numbers are assumed after a roll-over', () => {
@@ -411,7 +430,8 @@ describe('markers carried into every summary', () => {
     let state = add(emptyState(), 'Claude Max', [weekly(0.6, 30, { rollover: 'carries' })]);
     state = updateAccount(state, 'claude-max', { snoozedUntil: iso(NOW + DAY) }, NOW);
     const v = viewState(state, NOW)[0] as MeterView;
-    expect(explain(v, NOW)).toContain('Unused quota carries over, so it is not counted as waste.');
+    expect(explain(v, NOW)).toContain('Unused quota carries over to the next window, so nothing is lost at the reset.');
+    expect(explain(v, NOW)).not.toContain('On track to be used up');
     expect(explain(v, NOW)).toMatch(/Snoozed\.$/);
     expect(snapshot(state, NOW, 'UTC').queue[0]?.snoozed).toBe(true);
   });
@@ -495,10 +515,10 @@ describe('one wording everywhere', () => {
     expect(snap.queue[0]).toMatchObject({ id: 'claude-max:weekly', headline: sentence, tier: 'use-now', state: 'Use now' });
 
     const text = queueText(state, NOW, 'UTC'); // tool text and CLI status
-    expect(text.split('\n')).toContain(`1. Claude Max · Weekly: ${sentence} ($7.41 at risk)`);
+    expect(text.split('\n')).toContain(`1. Claude Max, Weekly: ${sentence} ($7.41 at risk)`);
 
     expect(meterMarkdown(v, NOW, 'UTC')).toContain(`**${sentence}**`); // copy as Markdown
-    expect(agentPrompt(v, NOW, 'UTC')).toContain(`Claude Max · Weekly: ${sentence}`); // copy as agent prompt
+    expect(agentPrompt(v, NOW, 'UTC')).toContain(`Claude Max, Weekly: ${sentence}`); // copy as agent prompt
 
     // The brief is a table, so it carries the same two figures rather than the sentence.
     const brief = briefMarkdown(state, NOW, 'UTC');
@@ -549,7 +569,7 @@ describe('one wording everywhere', () => {
     const later = NOW + HOUR;
     const sentence = 'Use now: 38% left, resets in 13h';
     expect(snapshot(state, later, 'UTC').queue[0]?.headline).toBe(sentence);
-    expect(queueText(state, later, 'UTC')).toContain(`1. Claude Max · Weekly: ${sentence}`);
+    expect(queueText(state, later, 'UTC')).toContain(`1. Claude Max, Weekly: ${sentence}`);
     expect(headline(allowanceQueue(state, later)[0] as MeterView, later)).toBe(sentence);
   });
 

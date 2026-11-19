@@ -300,6 +300,32 @@ describe('urgency tiers', () => {
     expect(v.needsReset).toBe(true);
   });
 
+  it('a one-off pack with a known expiry is on the clock from the moment it is added', () => {
+    // Its reset time is known and it is counting down, so neither reason for "idle" applies.
+    const state = add(
+      emptyState(),
+      'Credit pack',
+      [{ label: 'Credits', unit: 'credits', limit: 1000, used: 400, reset: { kind: 'once' }, resetsAt: iso(NOW + 5 * HOUR) }],
+      { price: { amount: 50, currency: 'USD', period: 'month' } },
+      NOW - 20 * DAY
+    );
+    const v = viewState(state, NOW)[0] as MeterView;
+    expect(v.windowStartMs).toBe(NOW - 20 * DAY);
+    expect(v.msLeft).toBe(5 * HOUR);
+    expect(v.needsReset).toBe(false);
+    expect(v.tier).toBe('use-now');
+    // 60% of a 50 USD pack is about to expire.
+    expect(v.valueAtRisk as number).toBeGreaterThan(25);
+    expect(v.valueAtRisk as number).toBeLessThanOrEqual(30);
+    expect(summarise(state, NOW).useNow).toBe(1);
+
+    // The same holds for a pack that was added without an amount: it is assumed untouched, and says so.
+    const unread = view({ label: 'Credits', unit: 'credits', limit: 1000, reset: { kind: 'once' }, resetsAt: iso(NOW + 30 * DAY) });
+    expect(unread.tier).not.toBe('idle');
+    expect(unread.windowStartMs).toBe(NOW);
+    expect(unread.stale).toBe(true);
+  });
+
   it('balance: no clock', () => {
     const v = view({ label: 'Balance', unit: 'credits', limit: 500, used: 100, reset: { kind: 'none' } });
     expect(v.tier).toBe('balance');

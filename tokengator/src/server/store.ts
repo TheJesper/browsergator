@@ -27,17 +27,52 @@ export class LockTimeoutError extends Error {
   }
 }
 
+const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+const isText = (value: unknown): value is string => typeof value === 'string';
+const isAmount = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+const isOptionalText = (value: unknown): boolean => value === null || value === undefined || isText(value);
+
+/**
+ * Checks the parts of a stored document that the rest of the code dereferences without asking. The service
+ * writes this file itself, so this is a guard against a hand edit or a half-copied file, not a validator:
+ * anything that fails is set aside as corrupt instead of making every read throw.
+ */
 function looksLikeState(value: unknown): value is State {
-  if (typeof value !== 'object' || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return (
-    v['version'] === STATE_VERSION &&
-    Array.isArray(v['accounts']) &&
-    Array.isArray(v['spend']) &&
-    Array.isArray(v['cycles']) &&
-    typeof v['settings'] === 'object' &&
-    v['settings'] !== null
-  );
+  if (!isObject(value)) return false;
+  if (value['version'] !== STATE_VERSION) return false;
+  const { accounts, spend, cycles, settings } = value;
+  if (!Array.isArray(accounts) || !Array.isArray(spend) || !Array.isArray(cycles) || !isObject(settings)) return false;
+  if (!isText(settings['currency']) || !Array.isArray(settings['enabledCollectors'])) return false;
+  for (const account of accounts) {
+    if (!isObject(account) || !isText(account['id']) || !isText(account['label']) || !isText(account['providerId'])) return false;
+    if (!isOptionalText(account['snoozedUntil']) || !Array.isArray(account['meters'])) return false;
+    const price = account['price'];
+    if (price !== null && price !== undefined && (!isObject(price) || !isAmount(price['amount']) || !isText(price['currency']))) return false;
+    for (const meter of account['meters']) {
+      if (!isObject(meter) || !isText(meter['id']) || !isText(meter['key']) || !isText(meter['label'])) return false;
+      if (!isAmount(meter['limit']) || !isAmount(meter['used']) || !isAmount(meter['valueShare'])) return false;
+      if (!isObject(meter['reset']) || !isText(meter['reset']['kind']) || !isObject(meter['source'])) return false;
+      if (!isOptionalText(meter['resetsAt']) || !isOptionalText(meter['windowStartedAt']) || !isOptionalText(meter['updatedAt'])) return false;
+      if (!Array.isArray(meter['samples']) || meter['samples'].some((sample) => !isObject(sample) || !isText(sample['t']) || !isAmount(sample['used']))) return false;
+    }
+  }
+  for (const source of spend) {
+    if (!isObject(source) || !isText(source['id']) || !isText(source['label']) || !isText(source['currency'])) return false;
+    if (!Array.isArray(source['entries']) || !isObject(source['source'])) return false;
+    if (source['entries'].some((entry) => !isObject(entry) || !isText(entry['date']) || !isAmount(entry['amount']))) return false;
+  }
+  for (const cycle of cycles) {
+    if (!isObject(cycle) || !isText(cycle['meterId']) || !isText(cycle['endedAt']) || !isAmount(cycle['wastedFraction'])) return false;
+  }
+  return true;
+}
+
+/** Raised for a state file written by a newer Tokengator. It is left untouched. */
+export class NewerStateError extends Error {
+  constructor(location: string, version: unknown) {
+    super(`${location} was written by a newer Tokengator (state version ${String(version)}). Upgrade Tokengator, or point TOKENGATOR_HOME at another directory.`);
+    this.name = 'NewerStateError';
+  }
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -124,13 +159,25 @@ export class FileStateStore implements StateStore {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       }
-      // A lock older than ten seconds was left behind by a process that died mid-write.
-      const age = await stat(this.lockDir).then(
-        (info) => Date.now() - info.mtimeMs,
-        () => 0
+      // A lock older than ten seconds was left behind by a process that died mid-write. Breaking it goes
+      // through a rename: only one waiter can win it, and the mtime is re-checked right before, so a lock
+      // another waiter has just taken is not the one that gets removed.
+      const seen = await stat(this.lockDir).then(
+        (info) => info.mtimeMs,
+        () => null
       );
-      if (age > 10_000) {
-        await rm(this.lockDir, { recursive: true, force: true }).catch(() => undefined);
+      if (seen !== null && Date.now() - seen > 10_000) {
+        const tomb = `${this.lockDir}.stale-${process.pid}-${randomBytes(3).toString('hex')}`;
+        const again = await stat(this.lockDir).then(
+          (info) => info.mtimeMs,
+          () => null
+        );
+        if (again === seen) {
+          await rename(this.lockDir, tomb).then(
+            () => rm(tomb, { recursive: true, force: true }),
+            () => undefined
+          );
+        }
         continue;
       }
       if (Date.now() >= deadline) throw new LockTimeoutError(this.location);
@@ -146,11 +193,16 @@ export class FileStateStore implements StateStore {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyState();
       throw error;
     }
+    let parsed: unknown = null;
     try {
-      const parsed: unknown = JSON.parse(raw);
-      if (looksLikeState(parsed)) return parsed;
+      parsed = JSON.parse(raw);
     } catch {
       // fall through to the corrupt-file path
+    }
+    if (looksLikeState(parsed)) return parsed;
+    // A newer version is somebody's good data, not a corrupt file: refuse to touch it.
+    if (isObject(parsed) && typeof parsed['version'] === 'number' && parsed['version'] > STATE_VERSION) {
+      throw new NewerStateError(this.location, parsed['version']);
     }
     // Never overwrite something we could not read: set it aside and say where it went.
     const aside = join(this.home, `state.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);

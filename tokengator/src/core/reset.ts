@@ -2,7 +2,10 @@
 // when a reset time passes with nobody watching. Everything here is pure: (state, now) -> state.
 
 import type { Account, ClosedCycle, Meter, Reading, ResetRule, State } from './types.js';
-import { DAY, HOUR, MONTH, clamp, daysInMonth, iso, parseClock, toMs, zonedParts, zonedTimeToUtc } from './time.js';
+import { DAY, HOUR, MONTH, clamp, daysInMonth, iso, localZone, parseClock, toMs, zonedParts, zonedTimeToUtc } from './time.js';
+
+/** A month, in hours: the cadence of a billing-cycle meter whose renewal day is not known yet. */
+export const BILLING_MONTH_HOURS = 730.5;
 
 /** Finished cycles kept in the ledger. */
 export const MAX_CYCLES = 2000;
@@ -119,7 +122,7 @@ export function staleAfterMs(meter: Meter): number {
 
 /**
  * Gives a meter its reset time when the rule alone determines one (daily, monthly), and fills in a missing
- * window start. Meters whose anchor only the provider knows (rolling, interval, once) are left as they are.
+ * window start. Meters whose reset time only the provider knows (rolling, interval, once) keep waiting for it.
  */
 export function anchorMeter(meter: Meter, nowMs: number): Meter {
   let { resetsAt, windowStartedAt } = meter;
@@ -131,6 +134,9 @@ export function anchorMeter(meter: Meter, nowMs: number): Meter {
   if (end !== null && windowStartedAt === null) {
     const start = windowStartFor(meter.reset, end);
     if (start !== null) windowStartedAt = iso(start);
+    // A one-off expiry has no rule to derive a start from. Its window runs from the moment it is tracked;
+    // without one a pack that expires in five hours would sit in the queue as "no active window".
+    else if (meter.reset.kind === 'once' && end > nowMs && !meter.expired) windowStartedAt = iso(nowMs);
   }
   if (resetsAt === meter.resetsAt && windowStartedAt === meter.windowStartedAt) return meter;
   return { ...meter, resetsAt, windowStartedAt };
@@ -403,7 +409,9 @@ export function applyReading(meter: Meter, reading: Reading, nowMs: number): { m
       // An earlier reset than we believed: the anchor was wrong. Keep the usage, drop the stale start.
       current = { ...current, windowStartedAt: null };
     }
-    current = { ...current, resetsAt: iso(newEnd), expired: false };
+    // A reported reset says something about the schedule, not only about this window: without this a
+    // monthly meter set up with the wrong day would snap back to it at the next reset.
+    current = { ...current, reset: adoptSchedule(current.reset, newEnd), resetsAt: iso(newEnd), expired: false };
     const start = newStart ?? windowStartFor(current.reset, newEnd) ?? toMs(current.windowStartedAt);
     current = { ...current, windowStartedAt: start === null ? current.windowStartedAt : iso(start) };
   } else if (newEnd !== null && newEnd <= nowMs && current.reset.kind !== 'once') {
@@ -438,6 +446,32 @@ export function applyReading(meter: Meter, reading: Reading, nowMs: number): { m
     source: reading.source ?? current.source
   };
   return { meter: current, closed };
+}
+
+const two = (n: number): string => String(n).padStart(2, '0');
+
+/**
+ * The rule a meter should follow once its provider has said when the current window ends. Wall-clock
+ * rules take the reported day and time; a billing-cycle placeholder becomes a monthly rule on that day.
+ * Rules with no calendar (rolling, interval, once) are anchored by the reset time itself and stay as they are.
+ */
+export function adoptSchedule(rule: ResetRule, resetMs: number): ResetRule {
+  if (rule.kind === 'daily') {
+    const p = zonedParts(resetMs, rule.tz);
+    return { ...rule, time: `${two(p.hour)}:${two(p.minute)}` };
+  }
+  if (rule.kind === 'monthly') {
+    const p = zonedParts(resetMs, rule.tz);
+    // The 31st clamps to shorter months: a reset on the last day of one says nothing against day 31.
+    const clamped = rule.day > p.day && p.day === daysInMonth(p.year, p.month);
+    return { ...rule, day: clamped ? rule.day : p.day, time: `${two(p.hour)}:${two(p.minute)}` };
+  }
+  if (rule.kind === 'interval' && rule.hours === BILLING_MONTH_HOURS) {
+    const tz = localZone();
+    const p = zonedParts(resetMs, tz);
+    return { kind: 'monthly', day: p.day, time: `${two(p.hour)}:${two(p.minute)}`, tz };
+  }
+  return rule;
 }
 
 /** Applies a reading to a meter inside the state, recording a finished cycle when one results. */

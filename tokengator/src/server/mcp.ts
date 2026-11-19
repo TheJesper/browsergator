@@ -25,11 +25,11 @@ import { costsMarkdown, meterMarkdown, meterRecord, queueText, snapshot, stamp, 
 import { CATALOG, CATALOG_CHECKED } from '../core/catalog.js';
 import { findProvider, type PresetMeter, type ProviderPreset } from '../core/catalog-types.js';
 import { cyclesOf, ledgerTotals, viewAccount, type MeterView, type Money } from '../core/forecast.js';
-import { formatMoney, formatMoneyTotals, formatPercent } from '../core/format.js';
+import { formatAmount, formatMoney, formatMoneyTotals, formatPercent } from '../core/format.js';
 import { addSpendSource, recordSpend, summariseSpend } from '../core/spend.js';
 import { DAY, HOUR, MINUTE, dateKey, iso, toMs } from '../core/time.js';
 import type { Account, ClosedCycle, Meter, MeterSource, Price, Reading, ResetRule, SpendSource, State, Unit } from '../core/types.js';
-import { explain, headline } from '../core/wording.js';
+import { explain, headline, statusLine } from '../core/wording.js';
 import { CollectorError, type CollectorHost, type CollectorStatus } from './collectors/types.js';
 import { MAX_BODY_BYTES, VERSION } from './config.js';
 import { log, redact } from './logger.js';
@@ -68,8 +68,9 @@ const COLLECTS: ToolAnnotations = { readOnlyHint: false, destructiveHint: false,
 // Input schemas
 //
 // Objects are strict: a misspelt argument is answered with its name instead of being dropped, which would
-// let a tool report success for a change it never made. Unions are avoided where a flat object will do,
-// because several model providers reject them in tool parameters.
+// let a tool report success for a change it never made. The only unions are "or null" on fields that can
+// be cleared; a reset rule is one flat object, because several model providers reject richer unions in
+// tool parameters. The core checks which of its fields a given kind needs.
 // ---------------------------------------------------------------------------
 
 const PERCENT_RANGE = 'must be a percentage from 0 to 100';
@@ -92,9 +93,7 @@ const instantArg = (subject: string): z.ZodString =>
   z
     .string()
     .max(40)
-    .describe(
-      `${subject}, as an ISO 8601 instant with a time zone: 2026-11-21T09:00:00Z or 2026-11-21T10:00:00+01:00. Results name the user's time zone for converting a local time.`
-    );
+    .describe(`${subject}: an ISO 8601 instant with a time zone, such as 2026-11-21T09:00:00Z or 2026-11-21T10:00:00+01:00.`);
 
 const priceArg = z
   .strictObject({
@@ -456,6 +455,8 @@ const round = (value: number, digits = 1): number => {
   return Math.round(value * factor) / factor;
 };
 
+const roundMoney = (totals: Money): Money => Object.fromEntries(Object.entries(totals).map(([currency, amount]) => [currency, round(amount, 2)]));
+
 const escapeCell = (value: string): string => value.replace(/\|/g, '\\|');
 
 /** Splits a name the way quick entry does, so "weekly", "Weekly limit" and "weekly-limit" all match. */
@@ -602,7 +603,7 @@ function collectorSummary(status: CollectorStatus, ran: boolean): Record<string,
     ran,
     outcome: ran ? status.lastOutcome : null,
     // Collectors keep credentials out of their messages; this is the second line of defence.
-    message: sentence(status.lastMessage ?? status.reason).trim() || null,
+    message: redact(status.lastMessage ?? status.reason ?? '').trim() || null,
     updatedMeters: ran && status.lastOutcome === 'ok' ? status.lastUpdated : [],
     lastRunAt: status.lastRunAt,
     nextRunAt: status.nextRunAt
@@ -684,11 +685,17 @@ export function createMcpServer(deps: McpDeps): McpServer {
   };
 
   /**
-   * Turns the failures a caller can fix into results a model can read. Nothing a tool throws on these
-   * paths has been saved: single changes are atomic and the two-step tools rehearse on a copy first.
+   * Turns a failure into a result a model can read, and says truthfully what it left behind. A single
+   * change is atomic, and the two-step tools rehearse on a copy first, so "partly" is only ever a failure
+   * of the moment between two saves (a lock held by another process, say).
    */
-  const failure = (error: unknown, writes: boolean): CallToolResult => {
-    const unchanged = writes ? ' Nothing was changed.' : '';
+  const failure = (error: unknown, effect: 'read' | 'nothing' | 'partly'): CallToolResult => {
+    const unchanged =
+      effect === 'nothing'
+        ? ' Nothing was changed.'
+        : effect === 'partly'
+          ? ' Part of the change had already been saved: look at the current state before trying again.'
+          : '';
     let message: string;
     if (error instanceof AmbiguousTargetError) {
       const lines = [`${error.message}${unchanged}`];
@@ -712,28 +719,38 @@ export function createMcpServer(deps: McpDeps): McpServer {
     } else if (error instanceof NotFoundError) {
       message = `${error.message}${unchanged}`;
     } else if (error instanceof CollectorError) {
-      // Written for the user by the collector layer: it names what is missing, never a value.
+      // Written for the user by the collector layer: it names what is missing, never a value. A run that
+      // stopped half way may have stored readings already, so no claim is made about that.
       message = redact(error.message);
     } else if (error instanceof LockTimeoutError) {
       message = `Another Tokengator process is writing the state. Try again in a moment.${unchanged}`;
     } else {
       // The real message may quote paths or upstream text; it goes to the log, not to the model.
       log('error', 'MCP tool failed', { error: error instanceof Error ? error.message : String(error) });
-      message = 'Something went wrong inside Tokengator. The service log has the details.';
+      message = `Something went wrong inside Tokengator. The service log has the details.${effect === 'partly' ? unchanged : ''}`;
     }
     return { content: [{ type: 'text', text: message }], isError: true };
   };
 
-  const guarded = async (writes: boolean, run: () => Promise<CallToolResult>): Promise<CallToolResult> => {
+  const reading = async (run: () => Promise<CallToolResult>): Promise<CallToolResult> => {
     try {
       return await run();
     } catch (error) {
-      return failure(error, writes);
+      return failure(error, 'read');
     }
   };
 
-  const reading = (run: () => Promise<CallToolResult>): Promise<CallToolResult> => guarded(false, run);
-  const writing = (run: () => Promise<CallToolResult>): Promise<CallToolResult> => guarded(true, run);
+  /** `saved` is for tools that save twice: called after the first save, it keeps a later failure honest. */
+  const writing = async (run: (saved: () => void) => Promise<CallToolResult>): Promise<CallToolResult> => {
+    let partly = false;
+    try {
+      return await run(() => {
+        partly = true;
+      });
+    } catch (error) {
+      return failure(error, partly ? 'partly' : 'nothing');
+    }
+  };
 
   const resolveAccount = (state: State, name: string): Account => service.resolve(state, { account: name }).account;
 
@@ -767,7 +784,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       (several ? loose : account.meters).map((meter) => ({
         accountId: account.id,
         meterId: meter.id,
-        label: `${account.label} · ${meter.label}`
+        label: `${account.label}, ${meter.label}`
       }))
     );
   };
@@ -779,13 +796,13 @@ export function createMcpServer(deps: McpDeps): McpServer {
     return `- ${view.meter.label} [${view.meter.key}]: ${headline(view, nowMs)}${freshness}`;
   };
 
-  /** The answer of every tool that changed one meter: its new headline and the reasoning behind it. */
+  /** The answer of every tool that changed one meter: its new headline, as the shared status line, and the reasoning behind it. */
   const meterResult = (lead: string, outcome: { account: Account; meter: Meter }, extra: Record<string, unknown> = {}): CallToolResult => {
     const now = service.nowMs();
     const view = viewsOf(outcome.account, now).find((candidate) => candidate.id === outcome.meter.id);
     if (!view) throw new NotFoundError(`No meter with id "${outcome.meter.id}".`);
     const explanation = explain(view, now);
-    return done([asOf(now), lead, `${view.account.label} · ${view.meter.label}: ${headline(view, now)}`, explanation], {
+    return done([asOf(now), lead, statusLine(view, now), explanation], {
       accountId: outcome.account.id,
       meterId: outcome.meter.id,
       meter: meterRecord(view, now),
@@ -947,7 +964,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           for (const plan of preset.plans) {
             lines.push(`- ${plan.id} (${plan.name}, ${priceText(plan.price)})${plan.note ? `: ${plan.note}` : ''}`);
             for (const meter of plan.meters) {
-              const size = meter.unit === 'percent' ? 'percent only' : `${meter.limit ?? '?'} ${meter.unitLabel ?? meter.unit}`;
+              const size = meter.unit === 'percent' || meter.limit === undefined ? 'percent only' : formatAmount(meter, meter.limit);
               lines.push(`  - ${meter.label} [${meter.key}]: ${meter.role}, ${size}, ${resetText(meter.reset, meter.anchor)}`);
             }
           }
@@ -1040,7 +1057,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           days,
           windows: inWindow.length,
           utilisationPercent: totals.utilisation30 === null ? null : round(totals.utilisation30 * 100),
-          lost: totals.lost30,
+          lost: roundMoney(totals.lost30),
           lostIsEstimate: totals.lostIsEstimate,
           meters
         });
@@ -1140,7 +1157,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       annotations: RECORDS
     },
     (args) =>
-      writing(async () => {
+      writing(async (saved) => {
         const { state, now } = await read();
         const wanted = args.source.trim().toLowerCase();
         const mode = args.mode ?? 'set';
@@ -1153,28 +1170,26 @@ export function createMcpServer(deps: McpDeps): McpServer {
         const matches = state.spend.some(
           (candidate) => candidate.id === wanted || candidate.providerId === wanted || candidate.label.toLowerCase().includes(wanted)
         );
-        let created = false;
+        const create = args.create;
         let sourceId: string;
-        if (!matches && args.create === undefined) {
+        if (matches) {
+          sourceId = (await service.findSpendSource(args.source)).id;
+        } else if (create === undefined) {
           const known = state.spend.map((candidate) => candidate.id).join(', ') || 'none';
           throw new NotFoundError(
             `No spend source matches "${args.source.trim().slice(0, 60)}". Known: ${known}. Pass create with a label to add it.`
           );
-        }
-        if (matches) {
-          sourceId = (await service.findSpendSource(args.source)).id;
-        } else if (args.create !== undefined) {
-          const input: { label: string; currency?: string; monthlyBudget?: number } = { label: args.create.label };
-          if (args.create.currency !== undefined) input.currency = args.create.currency;
-          if (args.create.monthlyBudget !== undefined) input.monthlyBudget = args.create.monthlyBudget;
+        } else {
+          const input: { label: string; currency?: string; monthlyBudget?: number } = { label: create.label };
+          if (create.currency !== undefined) input.currency = create.currency;
+          if (create.monthlyBudget !== undefined) input.monthlyBudget = create.monthlyBudget;
           // Rehearsed on a copy first, so an entry the core rejects does not leave an empty source behind.
           const trial = addSpendSource(state, input, now);
           recordSpend(trial.state, trial.source.id, entry, now, tz);
           sourceId = (await service.addSpendSource(input)).id;
-          created = true;
-        } else {
-          throw new NotFoundError('No spend source matches.');
+          saved();
         }
+        const created = !matches;
         const updated = await service.recordSpend(sourceId, entry, source);
         const after = service.nowMs();
         const date = entry.date ?? dateKey(after, tz);
@@ -1276,7 +1291,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       annotations: OVERWRITES
     },
     (args) =>
-      writing(async () => {
+      writing(async (saved) => {
         const { state, now } = await read();
         const account = resolveAccount(state, args.account);
 
@@ -1343,7 +1358,10 @@ export function createMcpServer(deps: McpDeps): McpServer {
         }
 
         let updated = account;
-        if (hasAccountPatch) updated = await service.updateAccount(account.id, patch);
+        if (hasAccountPatch) {
+          updated = await service.updateAccount(account.id, patch);
+          saved();
+        }
         if (meter) {
           await service.updateMeter(meter.id, meterPatch);
           updated = (await service.state()).accounts.find((candidate) => candidate.id === account.id) ?? updated;

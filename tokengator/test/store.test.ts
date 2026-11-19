@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { addAccount } from '../src/core/accounts.js';
+import { applyReadingToState } from '../src/core/reset.js';
 import { emptyState, type State } from '../src/core/types.js';
 import { FileStateStore, LockTimeoutError, MemoryStateStore, type StateStore } from '../src/server/store.js';
 
@@ -137,6 +138,34 @@ describe('FileStateStore', () => {
     expect(await readdir(home)).toEqual(['state.json']);
   }, 30_000);
 
+  it('keeps both updates when two processes change different meters at the same moment', async () => {
+    // Scenario: Two writers. One instance stands in for the service, the other for a CLI command.
+    const seed = addAccount(
+      emptyState(),
+      {
+        label: 'Claude Max',
+        meters: [
+          { label: 'Weekly', reset: { kind: 'interval', hours: 168 } },
+          { label: 'Session', role: 'throttle', reset: { kind: 'rolling', hours: 5 } }
+        ]
+      },
+      NOW
+    ).state;
+    const service = open();
+    const cli = open();
+    await service.update(() => ({ state: seed, result: null }));
+
+    const reading = (meterId: string, usedPercent: number) => (state: State): { state: State; result: null } => ({
+      state: applyReadingToState(state, 'claude-max', meterId, { usedPercent }, NOW),
+      result: null
+    });
+    for (let round = 1; round <= 5; round += 1) {
+      await Promise.all([service.update(reading('claude-max:weekly', 10 * round)), cli.update(reading('claude-max:session', 7 * round))]);
+      const meters = (await open().read()).accounts[0]?.meters ?? [];
+      expect(meters.map((meter) => meter.used)).toEqual([10 * round, 7 * round]);
+    }
+  });
+
   it('serialises concurrent updates made through one instance', async () => {
     const store = open();
     const counting = (state: State): { state: State; result: number } => {
@@ -172,7 +201,14 @@ describe('FileStateStore', () => {
       ['JSON that is not a state', '{"hello":"world"}'],
       ['a JSON list', '[]'],
       ['a state without its lists', '{"version":1,"accounts":[]}'],
-      ['a state of an unknown version', JSON.stringify({ ...emptyState(), version: 99 })]
+      ['a state of an older, unknown version', JSON.stringify({ ...emptyState(), version: 0 })],
+      [
+        'a state with a hand-edited meter that has no reset rule',
+        JSON.stringify({
+          ...emptyState(),
+          accounts: [{ id: 'a', providerId: 'custom', label: 'A', meters: [{ id: 'a:m', key: 'm', label: 'M', limit: 100, used: 1, valueShare: 1, source: { kind: 'manual' }, samples: [] }] }]
+        })
+      ]
     ])('sets %s aside, reports it and starts empty', async (_name, content) => {
       await writeFile(join(home, 'state.json'), content, 'utf8');
       const store = open();
@@ -188,6 +224,17 @@ describe('FileStateStore', () => {
       expect(store.warnings).toHaveLength(1);
       expect(store.warnings[0]).toContain(join(home, aside));
       expect(store.warnings[0]).toMatch(/could not be read/);
+    });
+
+    it('refuses to touch a file written by a newer version', async () => {
+      const content = JSON.stringify({ ...emptyState(), version: 99 });
+      await writeFile(join(home, 'state.json'), content, 'utf8');
+      const store = open();
+      await expect(store.read()).rejects.toThrow(/newer Tokengator/);
+      await expect(store.update((state) => ({ state: { ...state }, result: null }))).rejects.toThrow(/newer Tokengator/);
+      // The file is somebody's good data: still there, byte for byte, and nothing was set aside.
+      expect(await readdir(home)).toEqual(['state.json']);
+      expect(await readFile(join(home, 'state.json'), 'utf8')).toBe(content);
     });
 
     it('keeps working afterwards and warns once', async () => {
@@ -247,6 +294,19 @@ describe('FileStateStore', () => {
       await writer.update(adding('Second'));
       await waitFor(() => events > seen);
     });
+
+    it('tells an instance with the default settings within five seconds', async () => {
+      // Scenario: Change made by another process.
+      const watcher = new FileStateStore(home);
+      opened.push(watcher);
+      await watcher.read();
+      let events = 0;
+      watcher.onChange(() => (events += 1));
+      const started = Date.now();
+      await open().update(adding('From the CLI'));
+      await waitFor(() => events >= 1, 5000);
+      expect(Date.now() - started).toBeLessThan(5000);
+    }, 10_000);
 
     it('stops telling a listener that unsubscribed, and everyone after close', async () => {
       const store = open();

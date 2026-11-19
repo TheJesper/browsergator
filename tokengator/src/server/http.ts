@@ -26,6 +26,7 @@ import {
 } from './security.js';
 import {
   AmbiguousTargetError,
+  quickError,
   NotFoundError,
   ReadingError,
   ValidationError,
@@ -804,7 +805,7 @@ export class TokengatorHttpServer {
         if (typeof dryRun !== 'boolean') throw new ValidationError('dryRun', 'dryRun must be true or false.');
         if (dryRun) {
           const parsed = await service.previewQuick(text);
-          if (!parsed.ok) throw new AmbiguousTargetError(parsed.error, parsed.candidates);
+          if (!parsed.ok) throw quickError(parsed);
           sendJson(res, 200, {
             preview: parsed.preview,
             accountId: parsed.account.id,

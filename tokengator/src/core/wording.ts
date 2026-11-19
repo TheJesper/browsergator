@@ -2,7 +2,7 @@
 // which is what keeps a person and an agent reading the same sentence about the same quota.
 
 import type { MeterView, Summary, Tier, ThrottleState } from './forecast.js';
-import { formatAmount, formatMoney, formatMoneyTotals, formatMultiple, formatPercent } from './format.js';
+import { formatAmount, formatMoney, formatMoneyTotals, formatMultiple, formatNumber, formatPercent } from './format.js';
 import { formatAge, formatDuration, formatMoment } from './time.js';
 
 export const TIER_LABEL: Record<Tier, string> = {
@@ -49,7 +49,9 @@ export function leftText(view: MeterView): string {
 
 export function usedText(view: MeterView): string {
   if (view.meter.unit === 'percent') return `${formatPercent(view.usedFraction)} used`;
-  return `${formatAmount(view.meter, view.used)} of ${formatAmount(view.meter, view.limit)} used`;
+  // Dollars keep their sign on both figures; counted units name the unit once: "120 of 300 requests used".
+  if (view.meter.unit === 'usd') return `${formatAmount(view.meter, view.used)} of ${formatAmount(view.meter, view.limit)} used`;
+  return `${formatNumber(view.used)} of ${formatAmount(view.meter, view.limit)} used`;
 }
 
 export function resetText(view: MeterView): string {
@@ -64,7 +66,7 @@ function riskMoney(view: MeterView): string {
 }
 
 /** One short line: the state and the two numbers that matter for it. */
-export function headline(view: MeterView, nowMs: number): string {
+export function headline(view: MeterView, nowMs: number, tz?: string): string {
   if (view.tier === null) {
     switch (view.throttle) {
       case 'blocked':
@@ -86,7 +88,7 @@ export function headline(view: MeterView, nowMs: number): string {
       return `Behind pace: about ${formatPercent(view.projectedUnused)} will expire, ${resetText(view)}`;
     case 'hot':
       return view.runsOutAtMs !== null
-        ? `Running hot: runs out ${formatMoment(view.runsOutAtMs, nowMs)}, ${resetText(view)}`
+        ? `Running hot: runs out ${formatMoment(view.runsOutAtMs, nowMs, tz)}, ${resetText(view)}`
         : `Running hot: ${leftText(view)}, ${resetText(view)}`;
     case 'on-pace':
       return `On pace: ${leftText(view)}, ${resetText(view)}`;
@@ -119,14 +121,14 @@ function formatWindow(view: MeterView): string {
 }
 
 /** Two or three plain sentences explaining the forecast and what would fix it. */
-export function explain(view: MeterView, nowMs: number): string {
+export function explain(view: MeterView, nowMs: number, tz?: string): string {
   const parts: string[] = [];
   const m = view.meter;
 
   if (view.tier === null) {
     if (view.throttle === 'blocked') {
       parts.push(`${m.label} is at its limit, so this account cannot be used right now.`);
-      if (view.resetsAtMs !== null) parts.push(`It reopens ${formatMoment(view.resetsAtMs, nowMs)}.`);
+      if (view.resetsAtMs !== null) parts.push(`It reopens ${formatMoment(view.resetsAtMs, nowMs, tz)}.`);
     } else if (view.throttle === 'open') {
       parts.push(`${usedText(view)} in the current window. This is a rate limit, not an allowance: nothing is lost when it resets.`);
     } else {
@@ -154,9 +156,9 @@ export function explain(view: MeterView, nowMs: number): string {
       }
     } else if (view.tier === 'hot' && view.runsOutAtMs !== null && view.resetsAtMs !== null) {
       parts.push(
-        `At this pace it runs out ${formatMoment(view.runsOutAtMs, nowMs)}, ${formatDuration(view.resetsAtMs - view.runsOutAtMs)} before the reset. Nothing will be wasted, but it may need rationing.`
+        `At this pace it runs out ${formatMoment(view.runsOutAtMs, nowMs, tz)}, ${formatDuration(view.resetsAtMs - view.runsOutAtMs)} before the reset. Nothing will be wasted, but it may need rationing.`
       );
-    } else if (view.tier === 'on-pace') {
+    } else if (view.tier === 'on-pace' && m.rollover !== 'carries') {
       parts.push('On track to be used up around the reset.');
     } else if (view.tier === 'spent') {
       parts.push('Fully used, so nothing expires.');
@@ -165,7 +167,7 @@ export function explain(view: MeterView, nowMs: number): string {
     } else if (view.tier === 'idle' && view.needsReset) {
       parts.push('Set the reset time to get a forecast.');
     }
-    if (m.rollover === 'carries') parts.push('Unused quota carries over, so it is not counted as waste.');
+    if (m.rollover === 'carries') parts.push('Unused quota carries over to the next window, so nothing is lost at the reset.');
     if (view.blockedBy !== null && (view.tier === 'use-now' || view.tier === 'behind')) {
       parts.push(
         view.blockedUntilMs !== null && view.blockedUntilMs > nowMs
@@ -183,17 +185,19 @@ export function explain(view: MeterView, nowMs: number): string {
 }
 
 /** One line for clipboards, status bars and logs. */
-export function statusLine(view: MeterView, nowMs: number): string {
-  const name = `${view.account.label} · ${view.meter.label}`;
+export function statusLine(view: MeterView, nowMs: number, tz?: string): string {
+  const name = `${view.account.label}, ${view.meter.label}`;
   const money = riskMoney(view);
   const tail: string[] = [];
   if (money && (view.tier === 'use-now' || view.tier === 'behind')) tail.push(`${money} at risk`);
-  if (view.stale && view.ageMs !== null) tail.push(`updated ${formatAge(view.ageMs)}`);
-  return `${name}: ${headline(view, nowMs)}${tail.length ? ` (${tail.join(', ')})` : ''}`;
+  // A meter that was never read is stale too, and its numbers are assumptions: say so, or "0% used" on an
+  // untouched preset reads as a fact.
+  if (view.stale) tail.push(view.ageMs !== null ? `updated ${formatAge(view.ageMs)}` : 'no reading yet');
+  return `${name}: ${headline(view, nowMs, tz)}${tail.length ? ` (${tail.join(', ')})` : ''}`;
 }
 
 /** What an agent or a person should do about it, in one sentence. */
-export function recommend(view: MeterView, nowMs: number): string {
+export function recommend(view: MeterView, nowMs: number, _tz?: string): string {
   const name = view.account.label;
   const blocked =
     view.blockedBy !== null

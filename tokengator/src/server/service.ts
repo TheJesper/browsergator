@@ -10,6 +10,7 @@ import {
   parseState,
   removeAccount,
   removeMeter,
+  slugify,
   updateAccount,
   updateMeter,
   updateSettings,
@@ -46,6 +47,14 @@ export class AmbiguousTargetError extends Error {
     super(message);
     this.name = 'AmbiguousTargetError';
   }
+}
+
+/**
+ * The error for a quick-entry line that did not parse. With candidates it is a naming problem the caller
+ * can resolve by picking one; without, the line itself is invalid.
+ */
+export function quickError(parsed: { error: string; candidates: { accountId: string; meterId: string | null; label: string }[] }): Error {
+  return parsed.candidates.length > 0 ? new AmbiguousTargetError(parsed.error, parsed.candidates) : new ValidationError('text', parsed.error);
 }
 
 export interface ReportTarget {
@@ -214,7 +223,7 @@ export class TokengatorService {
   quick(text: string, source: MeterSource = { kind: 'manual' }): Promise<ReportOutcome & { preview: string }> {
     return this.mutate((state, nowMs) => {
       const parsed = parseQuick(text, state, nowMs, this.timeZone);
-      if (!parsed.ok) throw new AmbiguousTargetError(parsed.error, parsed.candidates);
+      if (!parsed.ok) throw quickError(parsed);
       const next = applyReadingToState(state, parsed.account.id, parsed.meter.id, { ...parsed.reading, source }, nowMs);
       return { state: next, result: { ...findMeter(next, parsed.meter.id), preview: parsed.preview } };
     });
@@ -301,7 +310,23 @@ export class TokengatorService {
       for (const collected of accounts) {
         if (collected.meters.length === 0) continue;
         const provider = findProvider(CATALOG, collected.providerId);
-        let account = state.accounts.find((candidate) => candidate.providerId === collected.providerId);
+        // Stored provider ids are slugs, so compare in that form or a non-slug id makes a new account each run.
+        const providerId = slugify(collected.providerId);
+        const candidates = state.accounts.filter((candidate) => candidate.providerId === providerId);
+        // With two accounts of one provider, keep feeding the one this collector fed before.
+        let account =
+          candidates.find((candidate) => candidate.meters.some((meter) => meter.source.id === collectorId)) ?? candidates[0];
+        const fallbackMeter = (meter: CollectedAccount['meters'][number]): MeterInput => {
+          const input: MeterInput = {
+            key: meter.key,
+            label: meter.label ?? meter.key,
+            unit: 'percent',
+            // Without a known cadence, a reported reset is treated as a single deadline rather than ignored.
+            reset: meter.reset ?? (meter.reading.resetsAt && Date.parse(meter.reading.resetsAt) > nowMs ? { kind: 'once' } : { kind: 'none' })
+          };
+          if (meter.role) input.role = meter.role;
+          return input;
+        };
         if (!account) {
           const plan = provider ? findPlan(provider, collected.planId) ?? provider.plans[0] : null;
           const input: AccountInput =
@@ -310,12 +335,7 @@ export class TokengatorService {
               : {
                   providerId: collected.providerId,
                   label: collected.providerId,
-                  meters: collected.meters.map((meter) => ({
-                    key: meter.key,
-                    label: meter.label ?? meter.key,
-                    unit: 'percent',
-                    reset: { kind: 'none' }
-                  }))
+                  meters: collected.meters.map(fallbackMeter)
                 };
           const added = addAccount(state, input, nowMs, source);
           state = added.state;
@@ -327,9 +347,7 @@ export class TokengatorService {
             // The account predates this meter (an older preset, or a custom account): add it from the
             // preset when the catalog knows the key, otherwise as a plain percent meter.
             const preset = provider?.plans.flatMap((plan) => plan.meters).find((entry) => entry.key === collectedMeter.key);
-            const input: MeterInput = preset
-              ? presetMeterInput(preset)
-              : { key: collectedMeter.key, label: collectedMeter.label ?? collectedMeter.key, unit: 'percent', reset: { kind: 'none' } };
+            const input: MeterInput = preset ? presetMeterInput(preset) : fallbackMeter(collectedMeter);
             const added = addMeter(state, account.id, input, nowMs);
             state = added.state;
             meter = added.meter;
@@ -348,7 +366,7 @@ export class TokengatorService {
 
       for (const collected of spend) {
         let target = state.spend.find(
-          (candidate) => candidate.providerId === collected.providerId && candidate.source.id === collectorId
+          (candidate) => candidate.providerId === slugify(collected.providerId) && candidate.source.id === collectorId
         );
         if (!target) {
           const added = addSpendSource(
@@ -361,7 +379,12 @@ export class TokengatorService {
           target = added.source;
         }
         for (const day of collected.days) {
-          state = recordSpend(state, target.id, { date: day.date, amount: day.amount, mode: 'set' }, nowMs, this.timeZone, source);
+          try {
+            state = recordSpend(state, target.id, { date: day.date, amount: day.amount, mode: 'set' }, nowMs, this.timeZone, source);
+          } catch (error) {
+            // One malformed day in a provider's report must not discard the other thirty.
+            if (!(error instanceof ValidationError)) throw error;
+          }
         }
       }
       return { state, result: changed };

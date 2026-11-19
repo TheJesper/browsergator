@@ -2,6 +2,7 @@
 // in catalog.ts so it can be reviewed and updated on its own.
 
 import type { AccountInput, MeterInput } from './accounts.js';
+import { BILLING_MONTH_HOURS } from './reset.js';
 import { localZone } from './time.js';
 import type { MeterRole, Price, ResetRule, Unit } from './types.js';
 
@@ -84,8 +85,7 @@ export function findPlan(provider: ProviderPreset, planId?: string | null): Pres
   );
 }
 
-/** A month, for meters whose billing day is not known yet. */
-export const BILLING_MONTH_HOURS = 730.5;
+export { BILLING_MONTH_HOURS };
 
 export function presetMeterInput(meter: PresetMeter, billingDay?: number | null): MeterInput {
   let reset = meter.reset;
