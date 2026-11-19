@@ -492,7 +492,9 @@ button.link:hover { color: var(--ink); }
 .card-meter .c { grid-column: 1 / -1; font-size: 12px; color: var(--ink-3); display: flex; justify-content: space-between; gap: 10px; }
 .card-meter .c .exp { color: var(--expiring-ink); font-weight: 500; }
 .card-foot { display: flex; align-items: center; gap: 6px; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-3); }
-.card-foot .sp { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Two short facts (what is at risk, how old the reading is) on two lines at most, never cut off mid-number. */
+.card-foot .sp { flex: 1; min-width: 0; display: grid; gap: 1px; line-height: 1.35; }
+.card-foot .sp span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- timeline ------------------------------------------------------------- */
 .tl { padding: 8px var(--gutter-r) 24px var(--gutter); }

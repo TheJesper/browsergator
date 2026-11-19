@@ -5,7 +5,7 @@ import { TIER_ORDER, type MeterView, type Money, type SortOrder, type Tier } fro
 import { formatAmount, formatMoney, formatPercent } from '../core/format.js';
 import { nextBoundary } from '../core/reset.js';
 import { DAY, HOUR, formatDuration, formatMoment, zonedParts, localZone, weekdayNames, monthNames } from '../core/time.js';
-import { CREDIT_VALUE_NOTE, PLAN_VALUE_NOTE, TIER_HINT, TIER_LABEL, leftText, moneyPair } from '../core/wording.js';
+import { CREDIT_VALUE_NOTE, PLAN_VALUE_NOTE, TIER_HINT, TIER_LABEL, leftText, moneyPair, riskMoney } from '../core/wording.js';
 import { SORT_ORDERS } from '../core/forecast.js';
 import type { Ctx } from './ctx.js';
 import { h, icon, isolated, type Child } from './dom.js';
@@ -231,7 +231,7 @@ export function boardView(ctx: Ctx, queue: MeterView[], all: MeterView[]): HTMLE
       h(
         'div',
         { class: 'card-foot' },
-        h('span', { class: 'sp' }, risk ? `${risk}, ` : '', ageText(lead)),
+        h('span', { class: 'sp' }, risk ? h('span', null, risk) : null, h('span', null, ageText(lead))),
         h('button', { class: 'icon-btn', type: 'button', title: 'Update usage', 'aria-label': `Update ${account.label}`, onclick: () => ctx.actions.quick(`${lead.meter.id} `) }, icon('edit')),
         copyMenuButton(copyFormats(lead, now), `Copy ${account.label}`),
         moreButton(ctx, lead)
@@ -322,7 +322,7 @@ export function timelineView(ctx: Ctx, queue: MeterView[]): HTMLElement {
       'div',
       { class: flip ? 'tl-end flip' : 'tl-end', style: { left: `${fraction * 100}%` } },
       h('b', null, leftText(view)),
-      expiring ? h('span', { class: 'exp' }, risk ? `${risk} expires` : `${formatPercent(view.projectedUnused)} expires`) : null,
+      expiring ? h('span', { class: 'exp' }, risk ? `${riskMoney(view)} expires` : `${formatPercent(view.projectedUnused)} expires`) : null,
       h('span', null, formatMoment(view.resetsAtMs as number, now))
     );
     grid.appendChild(
@@ -463,8 +463,8 @@ function tableColumns(ctx: Ctx): Column[] {
       label: 'At risk',
       right: true,
       sort: 'value',
-      cell: (view) => (riskText(view) ? h('span', { class: view.tier === 'use-now' || view.tier === 'behind' ? 'risk' : '' }, riskText(view)) : '—'),
-      text: (view) => riskText(view)
+      cell: (view) => (riskMoney(view) ? h('span', { class: view.tier === 'use-now' || view.tier === 'behind' ? 'risk' : '' }, riskMoney(view)) : '—'),
+      text: (view) => riskMoney(view)
     },
     { id: 'updated', label: 'Updated', sort: 'updated', cell: (view) => ageText(view).replace('updated ', ''), text: (view) => ageText(view).replace('updated ', '') },
     { id: 'source', label: 'Source', cell: (view) => sourceText(view), text: (view) => sourceText(view) }
