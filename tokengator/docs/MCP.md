@@ -50,7 +50,7 @@ Details of the HTTP endpoint:
 | `list_accounts` | yes | Every account with all of its meters, plan, price and usage-page address. Optional `provider` filter. |
 | `get_account` | yes | One account in full: meters with forecasts and explanations, the readings of the current window, recently finished windows, notes. |
 | `list_catalog` | yes | Provider presets. With a `provider`: its plans and meters, the address of its usage page and which figures to read there. |
-| `waste_report` | yes | What actually expired unused in the last `days` days (default 30): totals and a per-meter breakdown. |
+| `waste_report` | yes | What actually expired unused in the last `days` days (default 30): totals, a per-meter breakdown and, with `byWeek`, week by week. |
 | `get_costs` | yes | Pay-as-you-go API spend per source: month to date, projection, budget status. |
 | `report_usage` | no | Records a reading for one meter: used or remaining, as an amount or a percentage, and optionally the reset time. |
 | `quick_update` | no | Records a reading from one quick-entry line such as `claude weekly 62%`. |
@@ -496,7 +496,7 @@ When the process serving MCP has no collectors, the result says so with `"availa
 
 ```text
 As of 12:00 UTC (2026-11-19T12:00:00.000Z).
-Last 30 days: 3 finished windows, 72% of the quota used on average, about $18.25 expired unused.
+Last 30 days: 72% used on average over 3 windows; about $18 expired unused.
 
 | Subscription | Meter | Windows | Unused on average | Expired value |
 | --- | --- | --- | --- | --- |
@@ -522,6 +522,13 @@ Last 30 days: 3 finished windows, 72% of the quota used on average, about $18.25
 (shares of plan fees); credits counted in dollars that expired are in `creditsLost`, at face value, and
 are never part of `lost`. Each meter says which it is in `valueBasis`, and also has `recent`, its last
 finished windows inside the period.
+
+With `byWeek: true` the answer also carries `weeks`, one entry per Monday-to-Monday week in the user's
+time zone (at most 26, enough to cover `days`), oldest first: `start`, `windows` closed, how many of those
+were `estimatedWindows`, plan money `lost` with its estimated part in `lostEstimated`, `creditsLost`, and
+`utilisationPercentTrailing30`, the share used over the 30 days ending with that week. A week with no
+closed window has `windows: 0` rather than a zero amount. The text adds the same weeks as a table under
+"Week by week:". It is the record behind the dashboard Overview's "Finished windows" tile.
 
 ### `record_spend`
 

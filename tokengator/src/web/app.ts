@@ -6,18 +6,32 @@ import { categoryFor, type ProviderCategory } from '../core/catalog-types.js';
 import { compareViews, summarise, viewState, type MeterView, type SortOrder, type Summary } from '../core/forecast.js';
 import { digestReminders, dueReminders } from '../core/reminders.js';
 import { rollState } from '../core/reset.js';
-import { emptyState, type State } from '../core/types.js';
+import { emptyState, type ClosedCycle, type State } from '../core/types.js';
 import { REMINDERS_OFF, type Backend, type CollectorInfo, type Loaded, type ReminderInfo } from './backend.js';
 
-export type ViewId = 'queue' | 'board' | 'timeline' | 'table' | 'costs' | 'history';
+export type ViewId = 'overview' | 'queue' | 'board' | 'timeline' | 'table' | 'costs' | 'history';
 
 export const VIEWS: readonly { id: ViewId; label: string; key: string }[] = [
+  { id: 'overview', label: 'Overview', key: '0' },
   { id: 'queue', label: 'Queue', key: '1' },
   { id: 'board', label: 'Board', key: '2' },
   { id: 'timeline', label: 'Timeline', key: '3' },
   { id: 'table', label: 'Table', key: '4' },
   { id: 'costs', label: 'Costs', key: '5' },
   { id: 'history', label: 'History', key: '6' }
+];
+
+/** The tiles of the Overview, in the order they are laid out and read. */
+export type OverviewTileId = 'lead' | 'expiry' | 'windows' | 'attention' | 'pace' | 'fit' | 'spend';
+
+export const OVERVIEW_TILES: readonly { id: OverviewTileId; title: string; hideable: boolean }[] = [
+  { id: 'lead', title: 'Use before the reset', hideable: false },
+  { id: 'expiry', title: 'What expires, and when', hideable: false },
+  { id: 'windows', title: 'Finished windows', hideable: true },
+  { id: 'attention', title: 'Needs attention', hideable: true },
+  { id: 'pace', title: 'Every quota against an even pace', hideable: true },
+  { id: 'fit', title: 'Plan fit, last 90 days', hideable: true },
+  { id: 'spend', title: 'API spend this month', hideable: true }
 ];
 
 export interface Prefs {
@@ -37,10 +51,12 @@ export interface Prefs {
   /** Meter windows already announced, so a notification fires once per window. */
   notified: string[];
   /**
-   * Whether single keys act as shortcuts (1 to 6, U, A, C, J, K, S, T, /, ?). Someone who dictates text or
+   * Whether single keys act as shortcuts (0 to 6, U, A, C, J, K, S, T, /, ?). Someone who dictates text or
    * drives the page by voice switches them off, so that a spoken word is never taken for six commands.
    */
   shortcuts: boolean;
+  /** Overview tiles the viewer has hidden. Only the hideable ones are ever kept. */
+  overviewHidden: OverviewTileId[];
 }
 
 const DEFAULT_PREFS: Prefs = {
@@ -55,6 +71,7 @@ const DEFAULT_PREFS: Prefs = {
   privacy: false,
   horizon: 168,
   shortcuts: true,
+  overviewHidden: [],
   notify: false,
   notified: []
 };
@@ -70,6 +87,9 @@ function loadPrefs(): Prefs {
     if (!VIEWS.some((view) => view.id === prefs.view)) prefs.view = 'queue';
     if (![24, 168, 720].includes(prefs.horizon)) prefs.horizon = 168;
     if (!Array.isArray(prefs.notified)) prefs.notified = [];
+    prefs.overviewHidden = Array.isArray(prefs.overviewHidden)
+      ? prefs.overviewHidden.filter((id) => OVERVIEW_TILES.some((tile) => tile.id === id && tile.hideable))
+      : [];
     return prefs;
   } catch {
     // Storage can be blocked (private windows, embedded previews); the dashboard works without it.
@@ -253,6 +273,33 @@ export class App {
     return this.allViews()
       .filter((view) => view.tier !== null && this.matches(view))
       .sort(compareViews(this.model.prefs.sort));
+  }
+
+  /**
+   * Finished windows that the category and text filters let through, matched like current meters through the
+   * live account where it still exists, and through the names recorded on the window where it does not.
+   * "Hide used up" is about current windows, so it does not apply here.
+   */
+  cycles(): ClosedCycle[] {
+    const { prefs, filterText, state } = this.model;
+    const needle = filterText.trim().toLowerCase();
+    if (prefs.category === 'all' && !needle) return state.cycles;
+    const accounts = new Map(state.accounts.map((account) => [account.id, account]));
+    return state.cycles.filter((cycle) => {
+      if (prefs.category !== 'all' && categoryFor(CATALOG, cycle.providerId) !== prefs.category) return false;
+      if (!needle) return true;
+      const account = accounts.get(cycle.accountId);
+      const meter = account?.meters.find((candidate) => candidate.id === cycle.meterId);
+      const haystack = [account?.label ?? cycle.accountLabel, cycle.providerId, account?.plan ?? '', meter?.label ?? cycle.meterLabel, meter?.key ?? '']
+        .join(' ')
+        .toLowerCase();
+      return needle.split(/\s+/).every((word) => haystack.includes(word));
+    });
+  }
+
+  /** Whether a category or text filter narrows what the views show. */
+  filtering(): boolean {
+    return this.model.prefs.category !== 'all' || this.model.filterText.trim() !== '';
   }
 
   /** Every meter after filters (allowances and throttles), for the Board and the inspector. */

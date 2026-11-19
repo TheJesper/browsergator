@@ -11,7 +11,7 @@ import { TIER_ORDER, sortViews, summarise, viewState, type MeterView, type Tier 
 import { formatMoney, formatPercent } from '../core/format.js';
 import { formatAge, formatDuration } from '../core/time.js';
 import type { Price, State } from '../core/types.js';
-import { TIER_HINT, TIER_LABEL, moneyPair, riskMoney, stateLabel, statusLine, summaryLine } from '../core/wording.js';
+import { FIGURE_LABEL, TIER_HINT, TIER_LABEL, lostText, riskMoney, stateLabel, statusLine, summaryLine, utilisationText } from '../core/wording.js';
 
 export type ColorMode = 'none' | '256' | 'truecolor';
 
@@ -420,8 +420,11 @@ export function renderStatus(state: State, nowMs: number, options: StatusOptions
   const summary = summarise(state, nowMs);
   const currency = state.settings.currency;
   if (lines.length > 0) lines.push('');
-  const lost = moneyPair(summary.lost30, summary.creditsLost30, currency);
-  if (lost) lines.push(paint(`Expired unused in the last 30 days: ${summary.lostIsEstimate ? 'about ' : ''}${lost}.`, 'muted', mode));
+  if (summary.cycles30 > 0) {
+    const anything = Object.values(summary.lost30).some((amount) => amount > 0.004) || Object.values(summary.creditsLost30).some((amount) => amount > 0.004);
+    const lost = anything ? `${FIGURE_LABEL.lost30}: ${lostText(summary.lost30, summary.creditsLost30, currency, summary.lostIsEstimate, summary.creditsLostIsEstimate)}. ` : '';
+    lines.push(paint(`${lost}${FIGURE_LABEL.used30}: ${utilisationText(summary.utilisation30, summary.cycles30)}.`, 'muted', mode));
+  }
   // The one to act on, in the sentence the dashboard and the MCP tools use for it.
   const first = awake[0];
   if (first && (first.tier === 'use-now' || first.tier === 'behind' || first.tier === 'hot')) {

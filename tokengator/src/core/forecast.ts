@@ -391,28 +391,34 @@ export interface Summary {
   cycles30: number;
   /** True when any figure in `lost30` comes from an estimated cycle. */
   lostIsEstimate: boolean;
+  /** The same for `creditsLost30`: a measured credit window is given to the cent even beside estimated plan money. */
+  creditsLostIsEstimate: boolean;
 }
 
 export function ledgerTotals(
   cycles: readonly ClosedCycle[],
   nowMs: number,
   days = 30
-): Pick<Summary, 'lost30' | 'creditsLost30' | 'utilisation30' | 'cycles30' | 'lostIsEstimate'> {
+): Pick<Summary, 'lost30' | 'creditsLost30' | 'utilisation30' | 'cycles30' | 'lostIsEstimate' | 'creditsLostIsEstimate'> {
   const since = nowMs - days * DAY;
   const lost30: Money = {};
   const creditsLost30: Money = {};
   let count = 0;
   let utilisation = 0;
   let lostIsEstimate = false;
+  let creditsLostIsEstimate = false;
   for (const cycle of cycles) {
     const ended = toMs(cycle.endedAt);
     if (ended === null || ended < since || ended > nowMs) continue;
     count += 1;
     utilisation += 1 - cycle.wastedFraction;
     addMoney(cycle.unit === 'usd' ? creditsLost30 : lost30, cycle.currency, cycle.wastedValue);
-    if (cycle.confidence === 'estimated' && (cycle.wastedValue ?? 0) > 0) lostIsEstimate = true;
+    if (cycle.confidence === 'estimated' && (cycle.wastedValue ?? 0) > 0) {
+      if (cycle.unit === 'usd') creditsLostIsEstimate = true;
+      else lostIsEstimate = true;
+    }
   }
-  return { lost30, creditsLost30, utilisation30: count ? utilisation / count : null, cycles30: count, lostIsEstimate };
+  return { lost30, creditsLost30, utilisation30: count ? utilisation / count : null, cycles30: count, lostIsEstimate, creditsLostIsEstimate };
 }
 
 export function summarise(state: State, nowMs: number): Summary {

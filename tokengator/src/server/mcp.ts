@@ -35,15 +35,16 @@ import {
   type MeterInput,
   type MeterPatch
 } from '../core/accounts.js';
-import { costsMarkdown, meterMarkdown, meterRecord, queueText, snapshot, stamp, type MeterRecord } from '../core/brief.js';
+import { costsMarkdown, meterMarkdown, meterRecord, queueText, snapshot, stamp, weeksMarkdown, type MeterRecord } from '../core/brief.js';
 import { CATALOG, CATALOG_CHECKED } from '../core/catalog.js';
 import { automaticSources, findProvider, type PresetMeter, type ProviderPreset } from '../core/catalog-types.js';
 import { cyclesOf, ledgerTotals, viewAccount, type MeterView, type Money } from '../core/forecast.js';
+import { ledgerWeeks } from '../core/insights.js';
 import { formatAmount, formatMoney, formatMoneyTotals, formatPercent } from '../core/format.js';
 import { addSpendSource, recordSpend, summariseSpend } from '../core/spend.js';
 import { DAY, HOUR, MINUTE, dateKey, iso, toMs } from '../core/time.js';
 import type { Account, ClosedCycle, Meter, MeterSource, Price, Reading, ResetRule, SpendSource, State, Unit } from '../core/types.js';
-import { explain, headline, moneyPair, statusLine } from '../core/wording.js';
+import { explain, headline, lostText, statusLine, utilisationText } from '../core/wording.js';
 import { CollectorError, type CollectorHost, type CollectorStatus } from './collectors/types.js';
 import { MAX_BODY_BYTES, VERSION } from './config.js';
 import { log, redact } from './logger.js';
@@ -259,7 +260,11 @@ const refreshUsageInput = z.strictObject({
 });
 
 const wasteReportInput = z.strictObject({
-  days: z.number().int().min(1).max(365).default(30).describe('How far back to look. 1 to 365, default 30.')
+  days: z.number().int().min(1).max(365).default(30).describe('How far back to look. 1 to 365, default 30.'),
+  byWeek: z
+    .boolean()
+    .default(false)
+    .describe('Also return the totals week by week (Monday to Monday, at most 26 weeks): windows closed, money expired and the share used over the trailing 30 days. Use it to answer whether the user is improving.')
 });
 
 const recordSpendInput = z.strictObject({
@@ -441,6 +446,19 @@ const wasteReportOutput = z.looseObject({
   lost: moneyOut,
   creditsLost: moneyOut,
   lostIsEstimate: z.boolean(),
+  weeks: z
+    .array(
+      z.looseObject({
+        start: text,
+        windows: z.number(),
+        estimatedWindows: z.number(),
+        lost: moneyOut,
+        lostEstimated: moneyOut,
+        creditsLost: moneyOut,
+        utilisationPercentTrailing30: maybeNumber
+      })
+    )
+    .optional(),
   meters: z.array(
     z.looseObject({
       meterId: text,
@@ -1047,10 +1065,12 @@ export function createMcpServer(deps: McpDeps): McpServer {
       outputSchema: wasteReportOutput,
       annotations: READS
     },
-    ({ days }) =>
+    ({ days, byWeek }) =>
       reading(async () => {
         const { state, now } = await read();
         const totals = ledgerTotals(state.cycles, now, days);
+        // The same weekly record as the Overview's "Finished windows" tile.
+        const weeks = byWeek ? ledgerWeeks(state.cycles, now, Math.min(26, Math.ceil(days / 7)), tz) : null;
         const since = now - days * DAY;
         const inWindow = state.cycles.filter((cycle) => {
           const ended = toMs(cycle.endedAt);
@@ -1090,10 +1110,9 @@ export function createMcpServer(deps: McpDeps): McpServer {
         if (inWindow.length === 0) {
           lines.push(`No window finished in the last ${days} days, so there is nothing to report yet. The ledger fills as tracked windows reset.`);
         } else {
-          const lostText = moneyPair(totals.lost30, totals.creditsLost30, state.settings.currency);
-          const used = totals.utilisation30 === null ? '' : `, ${formatPercent(totals.utilisation30)} of the quota used on average`;
-          const money = lostText ? `, ${totals.lostIsEstimate ? 'about ' : ''}${lostText} expired unused` : '';
-          lines.push(`Last ${days} days: ${inWindow.length === 1 ? '1 finished window' : `${inWindow.length} finished windows`}${used}${money}.`, '');
+          // Worded as on the dashboard, the brief and the command line.
+          const lost = lostText(totals.lost30, totals.creditsLost30, state.settings.currency, totals.lostIsEstimate, totals.creditsLostIsEstimate);
+          lines.push(`Last ${days} days: ${utilisationText(totals.utilisation30, totals.cycles30)}; ${lost} expired unused.`, '');
           lines.push('| Subscription | Meter | Windows | Unused on average | Expired value |', '| --- | --- | --- | --- | --- |');
           for (const row of meters.slice(0, 20)) {
             lines.push(
@@ -1102,6 +1121,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           }
           if (meters.length > 20) lines.push('', `(${meters.length - 20} more meters in the structured result)`);
         }
+        if (weeks) lines.push('', 'Week by week:', weeksMarkdown(weeks, state.settings.currency, tz));
         return done(lines, {
           generatedAt: iso(now),
           timeZone: tz,
@@ -1111,6 +1131,19 @@ export function createMcpServer(deps: McpDeps): McpServer {
           lost: roundMoney(totals.lost30),
           creditsLost: roundMoney(totals.creditsLost30),
           lostIsEstimate: totals.lostIsEstimate,
+          ...(weeks
+            ? {
+                weeks: weeks.map((week) => ({
+                  start: iso(week.startMs),
+                  windows: week.windows,
+                  estimatedWindows: week.estimatedWindows,
+                  lost: roundMoney(week.lost),
+                  lostEstimated: roundMoney(week.lostEstimated),
+                  creditsLost: roundMoney(week.creditsLost),
+                  utilisationPercentTrailing30: week.trailingUtilisation === null ? null : round(week.trailingUtilisation * 100)
+                }))
+              }
+            : {}),
           meters
         });
       })

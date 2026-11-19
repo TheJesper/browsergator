@@ -20,7 +20,13 @@ import {
   stateLabel,
   statusLine,
   summaryLine,
-  usedText
+  usedText,
+  finishLine,
+  lostText,
+  paceCaption,
+  readingAge,
+  trendText,
+  utilisationText
 } from '../../src/core/wording.js';
 
 const utc = (y: number, mo: number, d: number, h = 0, mi = 0): number => Date.UTC(y, mo - 1, d, h, mi, 0);
@@ -686,5 +692,56 @@ describe('one wording everywhere', () => {
       blockedBy: null,
       blockedUntil: null
     });
+  });
+});
+
+describe('figures shared by the Overview, the brief, the command line and the MCP server', () => {
+  it('words money that expired, credits apart, estimates as "about" whole amounts', () => {
+    expect(lostText({ USD: 39.02 }, { USD: 52 }, 'USD', true, false)).toBe('about $39, plus $52.00 in credits');
+    expect(lostText({ USD: 39.02 }, {}, 'USD', false)).toBe('$39.02');
+    expect(lostText({}, { USD: 52 }, 'USD', true)).toBe('about $52 in credits');
+    expect(lostText({}, {}, 'USD', false)).toBe('$0.00');
+  });
+
+  it('words the share used, singular and plural, and its absence', () => {
+    expect(utilisationText(0.8, 15)).toBe('80% used on average over 15 windows');
+    expect(utilisationText(1, 1)).toBe('100% used on average over 1 window');
+    expect(utilisationText(null, 0)).toBe('No finished windows yet');
+  });
+
+  it('compares the last 30 days with the 30 before', () => {
+    expect(trendText({ USD: 39 }, { USD: 38.6 }, 'USD', true, 12)).toEqual({ text: 'About the same as the 30 days before.', trend: 'flat' });
+    expect(trendText({ USD: 20 }, { USD: 31 }, 'USD', true, 12)).toEqual({ text: 'Down about $11 on the 30 days before.', trend: 'down' });
+    expect(trendText({ USD: 31 }, { USD: 20 }, 'USD', false, 12)).toEqual({ text: 'Up $11 on the 30 days before.', trend: 'up' });
+    expect(trendText({ USD: 31 }, {}, 'USD', false, 0)).toEqual({ text: 'No windows closed in the 30 days before.', trend: null });
+  });
+
+  it('says how hard a quota must be used to finish it, an hour or a day, allowing for a closed session', () => {
+    const tonight = view(weeklyResettingIn(14, 62), { price: USD_100 });
+    expect(tonight.tier).toBe('use-now');
+    expect(finishLine(tonight, NOW, 'UTC')).toBe('About 2.7% an hour uses it up by tomorrow 00:00.');
+    const days = view({ label: 'Credits', unit: 'credits', limit: 2500, used: 500, reset: { kind: 'interval', hours: 720 }, resetsAt: iso(NOW + 10 * DAY) }, { price: USD_100 });
+    expect(days.tier).toBe('behind');
+    expect(finishLine(days, NOW, 'UTC')).toBe('About 200 credits a day uses it up by Sun 29 Nov 10:00.');
+    expect(finishLine(view(weekly(0.5, 50)), NOW)).toBeNull();
+    const [allowance] = views(
+      [weeklyResettingIn(14, 62), { label: 'Session', role: 'throttle', reset: { kind: 'rolling', hours: 5 }, used: 100, resetsAt: iso(NOW + 4 * HOUR) }],
+      { price: USD_100 }
+    );
+    // Four of the fourteen hours are closed, so the rate is over ten hours, and the line says when it reopens.
+    expect(finishLine(allowance as MeterView, NOW, 'UTC')).toBe('About 3.8% an hour once it reopens today 14:00 uses it up by tomorrow 00:00.');
+  });
+
+  it('says how old a reading is', () => {
+    expect(readingAge(view(weekly(0.5, 50, { updatedAt: iso(NOW - 4 * DAY) } as Partial<MeterInput>)))).toMatch(/^updated |^no reading yet$/);
+    expect(readingAge(view({ label: 'Weekly', reset: { kind: 'interval', hours: 168 } }))).toBe('no reading yet');
+  });
+
+  it('describes the even-pace chart in words', () => {
+    const counts = { tiers: { 'use-now': 2, behind: 5, hot: 1, 'on-pace': 2, fresh: 1, spent: 1 }, plotted: 12, unplotted: 0, snoozed: 1 } as const;
+    expect(paceCaption({ ...counts, tiers: { ...counts.tiers } }, 4)).toBe(
+      'Of 12 quotas with a running window: 2 use now, 5 behind pace, 1 running hot, 2 on pace, 1 new window, 1 used up. Across: share of the window gone, not time; up: share used. Not shown: 1 snoozed quota, 4 rate limits.'
+    );
+    expect(paceCaption({ tiers: {}, plotted: 0, unplotted: 2, snoozed: 0 }, 0)).toBe('No quota has a running window. Across: share of the window gone, not time; up: share used. Not shown: 2 quotas without a running window.');
   });
 });

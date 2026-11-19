@@ -1063,7 +1063,8 @@ describe('summarise', () => {
       creditsLost30: {},
       utilisation30: null,
       cycles30: 0,
-      lostIsEstimate: false
+      lostIsEstimate: false,
+      creditsLostIsEstimate: false
     });
   });
 

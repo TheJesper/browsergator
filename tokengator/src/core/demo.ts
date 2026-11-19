@@ -230,7 +230,9 @@ export function demoState(nowMs: number): State {
     ...history(state, 'github-copilot-pro:ai-credits', nowMs, [0.41, 0.63, 0.52], 9),
     ...history(state, 'google-ai-pro:weekly', nowMs, [0.77, 0.9, 0.84, 0.95, 0.7, 0.88], 13),
     ...history(state, 'suno-pro:credits', nowMs, [0.44, 0.83, 0.38], 15),
-    ...history(state, 'midjourney-standard:fast', nowMs, [1, 0.96, 1], 17)
+    ...history(state, 'midjourney-standard:fast', nowMs, [1, 0.96, 1], 17),
+    // Bundled API credits that went partly unused, so the credits figures have something to show.
+    ...history(state, 'claude-max:api-credits', nowMs, [0.35, 0.6, 0.48], 19)
   ].sort((a, b) => (a.endedAt < b.endedAt ? -1 : 1));
   state = { ...state, cycles };
 

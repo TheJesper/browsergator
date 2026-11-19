@@ -85,7 +85,7 @@ function moreButton(ctx: Ctx, view: MeterView): HTMLButtonElement {
 // Queue
 // ---------------------------------------------------------------------------
 
-function queueRow(ctx: Ctx, view: MeterView): HTMLElement {
+export function queueRow(ctx: Ctx, view: MeterView): HTMLElement {
   const { now, prefs, selectedId } = ctx.app.model;
   const figure = amountFigure(view, prefs);
   const risk = riskText(view);

@@ -8,7 +8,7 @@ import { formatMoney, formatMoneyTotals, formatPercent } from '../core/format.js
 import { rememberReminders } from '../core/reminders.js';
 import { formatAge, formatDuration } from '../core/time.js';
 import { CREDIT_VALUE_NOTE, PLAN_VALUE_NOTE, leftText, lostMoney, summaryLine } from '../core/wording.js';
-import { App, VIEWS, type ViewId } from './app.js';
+import { App, OVERVIEW_TILES, VIEWS, type ViewId } from './app.js';
 import { HttpBackend, MemoryBackend, type Backend } from './backend.js';
 import type { Actions, Ctx } from './ctx.js';
 import { addDialog, connectDialog, editDialog, logSpendDialog, quickDialog, remindersDialog, shortcutsDialog, sourcesDialog, spendDialog } from './dialogs.js';
@@ -16,7 +16,8 @@ import { brandMark, h, icon, mount } from './dom.js';
 import { inspector } from './inspector.js';
 import { costsView, historyView } from './ledger-views.js';
 import { barLegend, refreshCountdowns } from './parts.js';
-import { DIALOG_SCOPES, closeMenu, confirmDialog, copyText, isDialogOpen, isMenuOpen, markFocus, onMenuClosed, restoreFocus, showMenu, toast, type MenuEntry } from './ui.js';
+import { DIALOG_SCOPES, closeMenu, confirmDialog, copyText, hideTip, isDialogOpen, isMenuOpen, markFocus, onMenuClosed, restoreFocus, showMenu, toast, type FocusMark, type MenuEntry } from './ui.js';
+import { drawOverviewCharts, figuresInTiles, overviewView } from './overview.js';
 import { boardView, queueView, tableTools, tableView, timelineView } from './views.js';
 
 declare global {
@@ -133,6 +134,7 @@ function start(app: App, fellBack: boolean): void {
       else if (httpBackend) void app.use(httpBackend).catch(() => toast('The local service is not reachable.', 'err'));
     },
     copyBrief: () => void copyText(briefMarkdown(app.model.state, app.model.now), 'Brief copied'),
+    view: (id) => setView(id),
     run: async (work, done) => {
       try {
         await work;
@@ -197,12 +199,12 @@ function start(app: App, fellBack: boolean): void {
       { label: 'Light', icon: 'sun', checked: prefs.theme === 'light', onSelect: () => app.setPrefs({ theme: 'light' }) },
       { label: 'Dark', icon: 'snooze', checked: prefs.theme === 'dark', onSelect: () => app.setPrefs({ theme: 'dark' }) },
       { kind: 'sep' },
-      { label: 'Compact rows', icon: 'rows', checked: prefs.density === 'compact', onSelect: () => app.setPrefs({ density: prefs.density === 'compact' ? 'comfortable' : 'compact' }) },
-      { label: 'Hide names (screen sharing)', icon: 'eye', checked: prefs.privacy, onSelect: () => app.setPrefs({ privacy: !prefs.privacy }) },
-      { label: 'Single-key shortcuts', icon: 'keyboard', checked: prefs.shortcuts, onSelect: () => app.setPrefs({ shortcuts: !prefs.shortcuts }) },
+      { label: 'Compact rows', icon: 'rows', check: true, checked: prefs.density === 'compact', onSelect: () => app.setPrefs({ density: prefs.density === 'compact' ? 'comfortable' : 'compact' }) },
+      { label: 'Hide names (screen sharing)', icon: 'eye', check: true, checked: prefs.privacy, onSelect: () => app.setPrefs({ privacy: !prefs.privacy }) },
+      { label: 'Single-key shortcuts', icon: 'keyboard', check: true, checked: prefs.shortcuts, onSelect: () => app.setPrefs({ shortcuts: !prefs.shortcuts }) },
       // What the two figures on every row show.
-      { label: 'Show what is used, not what is left', icon: 'sort', checked: prefs.amounts === 'used', onSelect: () => app.setPrefs({ amounts: prefs.amounts === 'used' ? 'left' : 'used' }) },
-      { label: 'Show reset times, not countdowns', icon: 'clock', checked: prefs.times === 'clock', onSelect: () => app.setPrefs({ times: prefs.times === 'clock' ? 'countdown' : 'clock' }) },
+      { label: 'Show what is used, not what is left', icon: 'sort', check: true, checked: prefs.amounts === 'used', onSelect: () => app.setPrefs({ amounts: prefs.amounts === 'used' ? 'left' : 'used' }) },
+      { label: 'Show reset times, not countdowns', icon: 'clock', check: true, checked: prefs.times === 'clock', onSelect: () => app.setPrefs({ times: prefs.times === 'clock' ? 'countdown' : 'clock' }) },
       { kind: 'sep' },
       { label: 'Copy everything as JSON', icon: 'copy', onSelect: () => void copyText(JSON.stringify(app.model.state, null, 2), 'State copied as JSON') },
       { label: 'Import from JSON…', icon: 'upload', onSelect: importState },
@@ -287,6 +289,16 @@ function start(app: App, fellBack: boolean): void {
   /** True while the details pane covers the page instead of docking beside it. */
   const narrow = matchMedia('(max-width: 1039px)');
 
+  // With seven tabs a phone cannot show them all. The current one is kept in view, and each edge fades
+  // while tabs are hidden beyond it.
+  let tabsShown: ViewId | null = null;
+  function tabEdges(): void {
+    tabs.classList.toggle('more-right', tabs.scrollLeft + tabs.clientWidth < tabs.scrollWidth - 1);
+    tabs.classList.toggle('more-left', tabs.scrollLeft > 1);
+  }
+  tabs.addEventListener('scroll', tabEdges, { passive: true });
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(tabEdges).observe(tabs);
+
   function renderTabs(useNow: number): void {
     const current = app.model.prefs.view;
     mount(
@@ -300,6 +312,12 @@ function start(app: App, fellBack: boolean): void {
         )
       )
     );
+    // Only when the view changes: the 30-second rebuild must not scroll a strip the viewer scrolled.
+    if (tabsShown !== current) {
+      tabsShown = current;
+      tabs.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+    }
+    tabEdges();
   }
 
   function renderBanners(): void {
@@ -347,6 +365,9 @@ function start(app: App, fellBack: boolean): void {
       // Starts with a space, so the figure before it and this one are read and copied as two.
       return text ? h('small', { title: CREDIT_VALUE_NOTE }, ` + ${text} in credits`) : null;
     };
+    // On the Overview a figure that a tile states is not repeated here; hiding the tile brings it back.
+    const overview = app.model.prefs.view === 'overview';
+    const inTiles = overview ? figuresInTiles(app.model.prefs.overviewHidden) : { atRisk: false, lost: false, stale: false };
     const liveClass = demo ? 'live sample' : online ? 'live' : 'live off';
     const liveText = demo ? 'Sample data' : online ? `Live${lastSync ? `, synced ${formatAge(now - lastSync)}` : ''}` : 'Offline';
     mount(
@@ -370,37 +391,44 @@ function start(app: App, fellBack: boolean): void {
                 ` (${leftText(next)}).`
               )
             : null,
-          s.stale > 0 ? h('span', null, `${s.stale} reading${s.stale === 1 ? ' is' : 's are'} stale.`) : null
+          s.stale > 0 && !inTiles.stale ? h('span', null, `${s.stale} reading${s.stale === 1 ? ' is' : 's are'} stale.`) : null
         )
       ),
       h(
         'dl',
         { class: 'stats' },
-        h(
-          'div',
-          { class: 'stat risk' },
-          h('dt', { class: 'label' }, 'At risk now'),
-          h('dd', { title: PLAN_VALUE_NOTE }, formatMoneyTotals(s.atRiskNow, currency, formatMoney(0, currency)), credits(s.creditsAtRiskNow))
-        ),
-        h(
-          'div',
-          { class: 'stat' },
-          h('dt', { class: 'label' }, 'At risk, all windows'),
-          h('dd', { title: PLAN_VALUE_NOTE }, formatMoneyTotals(s.atRisk, currency, formatMoney(0, currency)), credits(s.creditsAtRisk))
-        ),
-        h(
-          'div',
-          { class: 'stat' },
-          h('dt', { class: 'label' }, 'Expired, last 30 days'),
-          h(
-            'dd',
-            { title: PLAN_VALUE_NOTE },
-            lostMoney(s.lost30, currency, s.lostIsEstimate),
-            credits(s.creditsLost30),
-            // The space is text, so the two figures are read and copied as two.
-            s.utilisation30 !== null ? [' ', h('small', null, `${formatPercent(s.utilisation30)} used`)] : null
-          )
-        )
+        // The money at risk now is in the sentence; on the Overview the lead tile gives it per quota.
+        overview
+          ? null
+          : h(
+              'div',
+              { class: 'stat risk' },
+              h('dt', { class: 'label' }, 'At risk now'),
+              h('dd', { title: PLAN_VALUE_NOTE }, formatMoneyTotals(s.atRiskNow, currency, formatMoney(0, currency)), credits(s.creditsAtRiskNow))
+            ),
+        inTiles.atRisk
+          ? null
+          : h(
+              'div',
+              { class: 'stat' },
+              h('dt', { class: 'label' }, 'At risk, all windows'),
+              h('dd', { title: PLAN_VALUE_NOTE }, formatMoneyTotals(s.atRisk, currency, formatMoney(0, currency)), credits(s.creditsAtRisk))
+            ),
+        inTiles.lost
+          ? null
+          : h(
+              'div',
+              { class: 'stat' },
+              h('dt', { class: 'label' }, 'Expired, last 30 days'),
+              h(
+                'dd',
+                { title: PLAN_VALUE_NOTE },
+                lostMoney(s.lost30, currency, s.lostIsEstimate),
+                credits(s.creditsLost30),
+                // The space is text, so the two figures are read and copied as two.
+                s.utilisation30 !== null ? [' ', h('small', null, `${formatPercent(s.utilisation30)} used`)] : null
+              )
+            )
       )
     );
   }
@@ -408,7 +436,7 @@ function start(app: App, fellBack: boolean): void {
   function renderToolbar(queue: MeterView[]): void {
     const { prefs, state } = app.model;
     const view = prefs.view;
-    const meterView = view === 'queue' || view === 'board' || view === 'timeline' || view === 'table';
+    const meterView = view === 'overview' || view === 'queue' || view === 'board' || view === 'timeline' || view === 'table';
     toolbar.hidden = !meterView || state.accounts.length === 0;
     if (toolbar.hidden) return;
     const categories = app.categoriesInUse();
@@ -430,9 +458,34 @@ function start(app: App, fellBack: boolean): void {
       SORT_ORDERS.find((order) => order.id === prefs.sort)?.label ?? '',
       icon('chevron')
     );
+    // On the Overview every tile has its own order, which carries its meaning, so there is no Sort; the
+    // Tiles menu takes its place.
+    const hidden = prefs.overviewHidden;
+    const tilesButton = h(
+      'button',
+      {
+        class: 'select-btn',
+        id: 'tiles-button',
+        type: 'button',
+        onclick: () =>
+          showMenu(
+            tilesButton,
+            OVERVIEW_TILES.filter((entry) => entry.hideable).map((entry) => ({
+              label: entry.title,
+              check: true,
+              checked: !hidden.includes(entry.id),
+              onSelect: () => app.setPrefs({ overviewHidden: hidden.includes(entry.id) ? hidden.filter((id) => id !== entry.id) : [...hidden, entry.id] })
+            }))
+          )
+      },
+      icon('rows'),
+      h('span', null, 'Tiles'),
+      hidden.length > 0 ? `${hidden.length} hidden` : 'All shown',
+      icon('chevron')
+    );
     mount(
       toolbar,
-      sortButton,
+      view === 'overview' ? tilesButton : sortButton,
       categories.length > 1
         ? h(
             'div',
@@ -454,7 +507,7 @@ function start(app: App, fellBack: boolean): void {
         : null,
       h('span', { class: 'spacer' }),
       view === 'table' ? tableTools(ctx, queue) : null,
-      view === 'queue' || view === 'board' || view === 'table' || view === 'timeline' ? barLegend(view === 'timeline') : null
+      view === 'overview' || view === 'queue' || view === 'board' || view === 'table' || view === 'timeline' ? barLegend(view === 'timeline') : null
     );
   }
 
@@ -486,6 +539,8 @@ function start(app: App, fellBack: boolean): void {
   function render(): void {
     const { prefs, state, loaded } = app.model;
     if (!loaded) return;
+    // A tooltip belongs to a mark this rebuild is about to replace.
+    hideTip();
 
     const theme = prefs.theme;
     if (theme !== lastTheme) {
@@ -516,9 +571,10 @@ function start(app: App, fellBack: boolean): void {
     if (view === 'costs') content = costsView(ctx);
     else if (view === 'history') content = historyView(ctx);
     else if (state.accounts.length === 0) content = emptyState();
-    else if (view === 'board' ? app.filtered().length === 0 : queue.length === 0) {
+    else if (view === 'overview' ? app.filtered().length === 0 && app.cycles().length === 0 : view === 'board' ? app.filtered().length === 0 : queue.length === 0) {
       content = h('div', { class: 'empty' }, h('h2', null, 'Nothing matches'), h('p', null, 'No quota matches the current filter. Clear the filter or the category to see everything.'));
-    } else if (view === 'board') content = boardView(ctx, queue, app.filtered());
+    } else if (view === 'overview') content = overviewView(ctx);
+    else if (view === 'board') content = boardView(ctx, queue, app.filtered());
     else if (view === 'timeline') content = timelineView(ctx, queue);
     else if (view === 'table') content = tableView(ctx, queue);
     else content = queueView(ctx, queue);
@@ -537,6 +593,10 @@ function start(app: App, fellBack: boolean): void {
     const overlay = selected !== null && narrow.matches;
     for (const region of [header, banners, summary, toolbar, pane]) region.inert = overlay;
 
+    // The Overview's charts are drawn now that the inspector has taken its share of the width.
+    if (view === 'overview') drawOverviewCharts(pane, true);
+    if (shownBefore === null && selected !== null) openedFrom = focusMark;
+
     const insp = layout.querySelector<HTMLElement>('.insp');
     if (insp && overlay) {
       insp.setAttribute('role', 'dialog');
@@ -549,11 +609,33 @@ function start(app: App, fellBack: boolean): void {
     // Looking for "the same control elsewhere" would pick some other row's button.
     const paneClosed = insp === null && shownBefore !== null && (focusMark === null || focusMark.scope === '.insp');
     const row = shownBefore ? pane.querySelector<HTMLElement>(`[data-nav="row"][data-id="${CSS.escape(shownBefore)}"]`) : null;
-    if (paneClosed && row) row.focus({ preventScroll: true });
+    // Back to the control that opened the pane (a mark on a chart, a row in a tile), if it was opened for
+    // the quota it is closing on; otherwise to that quota's first row.
+    const opener = paneClosed && openedFrom?.within === shownBefore ? openedFrom : null;
+    if (paneClosed) openedFrom = null;
+    if (paneClosed && opener && restoreFocus(root, opener)) {
+      // restored
+    } else if (paneClosed && row) row.focus({ preventScroll: true });
     else if (!restoreFocus(root, focusMark) && focusMark?.scope === '.insp') row?.focus({ preventScroll: true });
     if (insp && overlay && !insp.contains(document.activeElement)) insp.querySelector<HTMLElement>('.insp-close')?.focus({ preventScroll: true });
     if (window.scrollY !== scrollY) window.scrollTo({ top: scrollY });
     notify();
+  }
+
+  /** What had focus when the inspector opened, so closing it can return there. */
+  let openedFrom: FocusMark | null = null;
+  // A tile's width changes without a rebuild (the window is resized, a scrollbar comes or goes); only the
+  // charts are drawn again.
+  if (typeof ResizeObserver !== 'undefined') {
+    let queued = false;
+    new ResizeObserver(() => {
+      if (queued || app.model.prefs.view !== 'overview') return;
+      queued = true;
+      requestAnimationFrame(() => {
+        queued = false;
+        drawOverviewCharts(pane);
+      });
+    }).observe(pane);
   }
 
   // The pane docks or covers depending on the width, so crossing that width redraws it.
@@ -618,10 +700,18 @@ function start(app: App, fellBack: boolean): void {
 
   // -- keyboard ----------------------------------------------------------------
   function moveSelection(delta: number): void {
-    const rows = [...pane.querySelectorAll<HTMLElement>('[data-nav="row"]')];
+    // A quota can appear in several places (the Overview's tiles); J and K visit it once, at its first.
+    const seen = new Set<string>();
+    const rows = [...pane.querySelectorAll<HTMLElement>('[data-nav="row"]')].filter((row) => {
+      const id = row.dataset['id'] ?? '';
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return row.offsetParent !== null;
+    });
     if (rows.length === 0) return;
     const active = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>('[data-nav="row"]');
-    const index = active ? rows.indexOf(active) : rows.findIndex((row) => row.dataset['id'] === app.model.selectedId);
+    const activeId = active?.dataset['id'];
+    const index = activeId ? rows.findIndex((row) => row.dataset['id'] === activeId) : rows.findIndex((row) => row.dataset['id'] === app.model.selectedId);
     const next = rows[Math.min(rows.length - 1, Math.max(0, index + delta))] ?? rows[0];
     next?.focus();
     next?.scrollIntoView({ block: 'nearest' });

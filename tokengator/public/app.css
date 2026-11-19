@@ -42,6 +42,8 @@
   --focus: #13618d;
   /* Boundaries of inputs: 3:1 against the surfaces they sit on. */
   --control: #808d90;
+  /* Marks that mean "nothing expected to expire" beside orange ones: neutral, and apart from orange for every reader. */
+  --quiet-mark: var(--ink-2);
   /* Washes: the selected row, and the band behind something urgent. */
   --select: #d6edfe;
   --risk-wash: #fee4d5;
@@ -89,6 +91,7 @@
     --on-stop: #192529;
     --focus: #8dccf9;
     --control: #738488;
+    --quiet-mark: var(--control);
     --select: #263947;
     --risk-wash: #453226;
     --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 16px 40px rgb(0 0 0 / 0.45);
@@ -121,6 +124,7 @@
   --on-stop: #192529;
   --focus: #8dccf9;
   --control: #738488;
+  --quiet-mark: var(--control);
   --select: #263947;
   --risk-wash: #453226;
   --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 16px 40px rgb(0 0 0 / 0.45);
@@ -640,6 +644,129 @@ button.link:hover { color: var(--ink); }
 .hist-row .tot span { font-size: 12px; color: var(--ink-3); }
 @media (max-width: 720px) { .hist-row { grid-template-columns: minmax(0, 1fr); } .hist-row .tot { text-align: left; } }
 
+/* ---- overview -------------------------------------------------------------- */
+/* Tiles that cut across subscriptions, two columns where the pane has room and one where it has not. Each
+   tile takes one cell; an odd last tile takes the row, so no cell is left empty. */
+.ov { padding: 16px var(--gutter-r) 28px var(--gutter); }
+.ov-scope { margin: 0 0 12px; color: var(--ink-2); font-size: 13px; }
+.ov-grid { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+@container (min-width: 720px) {
+  .ov-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ov-grid > .tile:last-child:nth-child(odd) { grid-column: 1 / -1; }
+}
+.tile {
+  container-type: inline-size; min-width: 0;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px 16px 16px; border: 1px solid var(--line); border-radius: var(--r-3); background: var(--surface);
+}
+.tile-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; min-height: 28px; }
+.tile-head h2 { font-size: 13.5px; font-weight: 600; letter-spacing: -0.005em; }
+.tile-aside { font-size: 12.5px; color: var(--ink-3); }
+.tile-tools { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.ov-stat { display: flex; flex-direction: column; gap: 2px; margin: 0; min-width: 0; }
+.ov-stat .label { font-size: 12px; color: var(--ink-3); }
+.ov-stat .big { font: 500 22px/1.25 var(--font-ui); letter-spacing: -0.015em; overflow-wrap: anywhere; }
+.ov-stat .big.risk { color: var(--expiring-ink); }
+.ov-stat .big .also { display: block; font-size: 14px; font-weight: 400; letter-spacing: 0; color: var(--ink-2); }
+.ov-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 20px; }
+@container (max-width: 380px) { .ov-pair { grid-template-columns: minmax(0, 1fr); } }
+.ov-sub { font-size: 12.5px; color: var(--ink-3); }
+.ov-trend { font-size: 12.5px; color: var(--ink-2); }
+.ov-trend.up { color: var(--expiring-ink); }
+.ov-note, .ov-empty { margin: 0; font-size: 13px; color: var(--ink-2); }
+.ov-empty { padding: 6px 0 2px; }
+.ov-finish { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 13px; color: var(--ink-2); }
+.ov-finish .btn { margin-left: auto; }
+.ov-more { align-self: flex-start; display: inline-flex; align-items: center; gap: 2px; font-size: 13px; text-decoration: none; }
+.ov-more .ico { transform: rotate(-90deg); width: 14px; height: 14px; }
+/* Queue rows inside a tile: the tile is the gutter. */
+.tile .rows { margin: 0 -16px; }
+.tile .row { padding-left: 16px; padding-right: 16px; }
+@container (max-width: 860px) and (min-width: 521px) {
+  .tile .row { grid-template-columns: 30px minmax(0, 1fr) auto auto auto auto; grid-template-areas: "mono name left reset value act" "bar bar bar bar bar bar"; }
+  .tile .row-act { display: flex; }
+}
+/* In a narrow tile the name gets the whole first line and the figures go under the bar. */
+@container (max-width: 420px) {
+  .tile .row { grid-template-columns: 30px minmax(0, 1fr) auto auto; grid-template-areas: "mono name name name" "bar bar bar bar" "left left reset value"; row-gap: 6px; }
+  .tile .row-left, .tile .row-reset, .tile .row-value { min-width: 0; align-self: start; }
+  .tile .row-value { min-width: 64px; }
+}
+.ov-quota .ov-name { display: block; overflow-wrap: anywhere; }
+.ov-quota { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; padding: 0; border: 0; background: none; text-align: left; font: inherit; font-weight: 500; color: var(--ink); cursor: pointer; }
+.ov-quota .ov-sub { font-weight: 400; }
+.ov-list { display: grid; }
+.ov-item { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); }
+.ov-item:first-child { border-top: 0; padding-top: 2px; }
+.ov-item > .btn, .ov-item > .state { margin-left: auto; flex: none; }
+.ov-figure { margin: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ov-figure figcaption { font-size: 12.5px; color: var(--ink-3); line-height: 1.45; }
+.ov-figure .ov-table { margin: 0 -16px; }
+.ov-table .tbl th:first-child, .ov-table .tbl td:first-child { padding-left: 16px; }
+.ov-table .tbl th:last-child, .ov-table .tbl td:last-child { padding-right: 16px; }
+.ov-table .tbl thead th { position: static; background: var(--surface); }
+.tbl .r { text-align: right; }
+.tile-chart { min-width: 0; }
+/* Drawn one unit to one pixel, so never stretched. */
+.tile-chart .chart > svg, .pm > svg { width: auto; max-width: 100%; }
+/* Plan fit and spend: one row per subscription. */
+.fit-list { display: grid; }
+.fit-list > li { border-top: 1px solid var(--line); }
+.fit-list > li:first-child { border-top: 0; }
+.fit-row, .spend-row {
+  display: grid; width: 100%; padding: 10px 0; border: 0; background: none; text-align: left; font: inherit; color: inherit;
+  grid-template-columns: minmax(0, 11rem) minmax(0, 1fr) auto; grid-template-areas: "name track fig" "name sub sub"; gap: 4px 14px; align-items: center;
+}
+button.fit-row { cursor: pointer; }
+.fit-name { grid-area: name; font-weight: 500; overflow-wrap: anywhere; align-self: start; }
+.fit-track { grid-area: track; display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; background: var(--track); }
+.fit-used { background: var(--used); }
+.fit-lost { background: var(--expiring); }
+.fit-fig { grid-area: fig; font-weight: 500; white-space: nowrap; text-align: right; }
+.fit-sub { grid-area: sub; font-size: 12.5px; color: var(--ink-3); }
+.fit-sub .heading { color: var(--hot-ink); font-weight: 500; }
+.spend-row .budget-bar { grid-area: track; margin-top: 0; }
+@container (max-width: 440px) {
+  .fit-row, .spend-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name fig" "track track" "sub sub"; }
+}
+/* Overview charts. */
+.chart .bracket { fill: var(--ink-2); font-size: 12px; }
+.chart .bracket .fig { fill: var(--ink); font-weight: 600; }
+.chart .peak { fill: var(--ink-2); font-weight: 500; }
+.chart .panel, .chart .lane, .chart .axis-title { fill: var(--ink-2); }
+.chart .guide-label { fill: var(--ink-3); font-style: italic; }
+.chart .week { stroke-dasharray: none; }
+.chart .hatch-ground { fill: var(--expiring-soft); }
+.chart .hatch-stripe { fill: var(--expiring); }
+.chart .exp-col { stroke: var(--expiring); stroke-width: 1.25; }
+.chart .exp-col.uncertain, .pm-mark.uncertain .mark { filter: saturate(0.55); }
+.chart .reset-tick { stroke: var(--quiet-mark); stroke-width: 1.5; stroke-linecap: round; }
+.chart .zero-tick { fill: var(--quiet-mark); }
+.chart .lost-col { fill: var(--expiring); }
+.chart .lost-col.est { fill: none; stroke: var(--expiring); stroke-width: 1.5; }
+.chart .util-line { stroke: var(--used); stroke-width: 2; fill: none; stroke-linejoin: round; stroke-linecap: round; }
+.chart .pm-end { fill: var(--surface); stroke: var(--used); stroke-width: 1.5; }
+.chart .hit.pick { cursor: pointer; }
+.chart .hit:hover { fill: var(--ink); fill-opacity: 0.04; }
+/* The even-pace chart: buttons laid over the drawing, so each mark takes focus and keeps it. */
+.pm { position: relative; max-width: 100%; }
+.pm-mark { position: absolute; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--quiet-mark); cursor: pointer; }
+.pm-mark.risk { color: var(--expiring); }
+.pm-mark::before { content: ""; position: absolute; inset: 4px; border-radius: 50%; background: var(--surface); }
+.pm-mark .mark { position: relative; width: 12px; height: 12px; }
+.pm-mark:hover, .pm-mark:focus-visible { z-index: 3; }
+.pm-mark:hover::before { box-shadow: 0 0 0 1.5px var(--ink-3); }
+.pm-mark.selected { z-index: 2; }
+.pm-mark.selected::before { background: var(--select); box-shadow: 0 0 0 1.5px var(--used); }
+.ov-legend .pm-key { display: inline-grid; place-items: center; width: 12px; height: 12px; color: var(--ink-2); }
+.ov-legend .pm-key .mark { width: 12px; height: 12px; }
+.legend .l-risk { background: var(--expiring); border-radius: 50%; }
+.legend .l-quiet { background: var(--quiet-mark); border-radius: 50%; }
+/* Seven tabs do not fit on a phone: each edge fades while tabs are hidden beyond it. */
+.tabs.more-right { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+.tabs.more-left { -webkit-mask-image: linear-gradient(to right, transparent, #000 28px); mask-image: linear-gradient(to right, transparent, #000 28px); }
+.tabs.more-left.more-right { -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+
 /* ---- popover menu --------------------------------------------------------- */
 .menu {
   position: fixed; z-index: 60; min-width: 190px; max-width: min(320px, calc(100vw - 16px)); max-height: min(calc(100dvh - 60px), 640px); overflow-y: auto;
@@ -810,5 +937,22 @@ html { scroll-padding-top: calc(var(--header-h) + env(safe-area-inset-top, 0px) 
   .chip-btn[aria-pressed="true"], .seg button[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
   .row.selected, .card.selected, .tl-row.selected { outline: 2px solid Highlight; outline-offset: -2px; }
   .menu-item:focus-visible, .tab:focus-visible, .seg button:focus-visible { outline: 2px solid Highlight; outline-offset: -2px; }
+  /* Charts: author fills and strokes are kept in SVG, so every class is repainted here. */
+  .chart .hatch-ground { fill: Canvas; }
+  .chart .hatch-stripe, .chart .lost-col, .chart .waste-solid, .chart .col-ok, .chart .col-today, .chart .zero-tick { fill: CanvasText; }
+  .chart .exp-col, .chart .reset-tick, .chart .axis, .chart .guide { stroke: CanvasText; }
+  .chart .lost-col.est, .chart .est .waste-solid, .chart .est .col-used, .chart .est .col-ok { fill: Canvas; stroke: CanvasText; }
+  .chart .col-used, .chart .col-spend, .chart .dot { fill: Highlight; }
+  .chart .util-line, .chart .proj, .chart .actual, .chart .pm-end { stroke: Highlight; }
+  .chart .grid { stroke: GrayText; }
+  .chart text, .chart .bracket .fig { fill: CanvasText; }
+  .pm-mark, .pm-mark.risk, .pm-mark.quiet { forced-color-adjust: none; color: CanvasText; }
+  .pm-mark::before { background: Canvas; }
+  .pm-mark.selected, .pm-mark:focus-visible { outline: 2px solid Highlight; outline-offset: -2px; }
+  .fit-track { forced-color-adjust: none; background: Canvas; outline: 1px solid CanvasText; }
+  .fit-used { background: Highlight; }
+  .fit-lost { background: CanvasText; }
+  .legend .l-risk, .legend .l-quiet { forced-color-adjust: none; background: CanvasText; }
+  .tile { border-color: CanvasText; }
 }
 

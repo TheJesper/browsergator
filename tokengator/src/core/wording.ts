@@ -1,9 +1,10 @@
 // One place that puts a meter's state into words. The dashboard, the CLI and the MCP server all call these,
 // which is what keeps a person and an agent reading the same sentence about the same quota.
 
-import type { MeterView, Money, Summary, Tier, ThrottleState } from './forecast.js';
+import { TIER_ORDER, type MeterView, type Money, type Summary, type Tier, type ThrottleState } from './forecast.js';
+import type { ExpiryOutlook, TierCounts } from './insights.js';
 import { formatAmount, formatMoney, formatMoneyTotals, formatMultiple, formatNumber, formatPercent } from './format.js';
-import { formatAge, formatDuration, formatMoment } from './time.js';
+import { DAY, HOUR, formatAge, formatDuration, formatMoment } from './time.js';
 
 export const TIER_LABEL: Record<Tier, string> = {
   'use-now': 'Use now',
@@ -299,4 +300,120 @@ export function summaryLine(summary: Summary, preferredCurrency?: string): strin
   }
   if (summary.hot > 0) return 'Nothing is going to waste. Some quotas are running hot.';
   return 'Nothing is going to waste right now.';
+}
+
+// ---------------------------------------------------------------------------
+// Figures shared by the Overview, the brief, the command line and the MCP server
+// ---------------------------------------------------------------------------
+
+/** The names of the figures, so a person reading the dashboard and an agent reading a tool see the same label. */
+export const FIGURE_LABEL = {
+  atRiskNow: 'At risk now',
+  atRisk: 'At risk, all windows',
+  nextWeek: 'Next 7 days',
+  lost30: 'Expired unused, last 30 days',
+  used30: 'Used, last 30 days'
+} as const;
+
+/**
+ * Money that expired, plan money and dollar credits side by side and never summed, each "about" a whole
+ * amount when estimated windows contribute: "about $39, plus $52.00 in credits". "$0.00" when nothing did.
+ */
+export function lostText(lost: Money, creditsLost: Money, currency: string, estimate: boolean, creditsEstimate = estimate): string {
+  const has = (money: Money): boolean => Object.values(money).some((amount) => amount > 0.004);
+  const plan = has(lost) ? lostMoney(lost, currency, estimate) : '';
+  const credits = has(creditsLost) ? lostMoney(creditsLost, currency, creditsEstimate) : '';
+  if (plan && credits) return `${plan}, plus ${credits} in credits`;
+  if (plan) return plan;
+  if (credits) return `${credits} in credits`;
+  return formatMoney(0, currency);
+}
+
+/** The share of each window used, averaged: "80% used on average over 15 windows". */
+export function utilisationText(fraction: number | null, windows: number): string {
+  if (fraction === null || windows === 0) return 'No finished windows yet';
+  return `${formatPercent(fraction)} used on average over ${windows === 1 ? '1 window' : `${windows} windows`}`;
+}
+
+export type Trend = 'up' | 'down' | 'flat' | null;
+
+/**
+ * How the money expired in the last 30 days compares with the 30 days before, in the preferred currency:
+ * "down about $11 on the 30 days before". A change under a tenth (and under one unit) reads as the same.
+ */
+export function trendText(current: Money, previous: Money, currency: string, estimate: boolean, previousWindows: number): { text: string; trend: Trend } {
+  if (previousWindows === 0) return { text: 'No windows closed in the 30 days before.', trend: null };
+  const now = current[currency] ?? 0;
+  const before = previous[currency] ?? 0;
+  const diff = now - before;
+  if (Math.abs(diff) < Math.max(1, 0.1 * before)) return { text: 'About the same as the 30 days before.', trend: 'flat' };
+  const amount = formatMoney(Math.round(Math.abs(diff)), currency).replace(/\.00\b/, '');
+  return { text: `${diff > 0 ? 'Up' : 'Down'} ${estimate ? 'about ' : ''}${amount} on the 30 days before.`, trend: diff > 0 ? 'up' : 'down' };
+}
+
+/** A rate in a meter's unit with a decimal where it matters: "2.7%", "45 credits", "$1.20". */
+function rateAmount(view: MeterView, amount: number): string {
+  if (view.meter.unit === 'percent') return amount < 9.95 ? `${(Math.round(amount * 10) / 10).toString()}%` : `${Math.round(amount)}%`;
+  if (view.meter.unit === 'usd') return formatAmount(view.meter, amount);
+  // Counted units: a decimal only where the figure is small enough for it to matter.
+  return formatAmount(view.meter, amount >= 10 ? Math.round(amount) : Math.round(amount * 10) / 10);
+}
+
+/**
+ * How hard a quota has to be used to finish it before the reset: "About 2.7% an hour uses it up by tomorrow
+ * 07:42." The time a closed session limit keeps the account shut does not count. No name: the caller adds
+ * one, so it can be hidden on a shared screen. Null for a quota that is not short of use.
+ */
+export function finishLine(view: MeterView, nowMs: number, tz?: string): string | null {
+  if (view.tier !== 'use-now' && view.tier !== 'behind') return null;
+  if (view.resetsAtMs === null || view.resetsAtMs <= nowMs || view.remaining <= 0) return null;
+  const opens = view.blockedUntilMs !== null && view.blockedUntilMs > nowMs ? view.blockedUntilMs : nowMs;
+  const available = view.resetsAtMs - opens;
+  const left = view.meter.unit === 'percent' ? view.remainingFraction * 100 : view.remaining;
+  const blocked = opens > nowMs ? ` once it reopens ${formatMoment(opens, nowMs, tz)}` : '';
+  if (available <= 0) return `It reopens only at the reset, so what is left expires.`;
+  if (available < DAY) return `About ${rateAmount(view, left / (available / HOUR))} an hour${blocked} uses it up by ${formatMoment(view.resetsAtMs, nowMs, tz)}.`;
+  return `About ${rateAmount(view, left / (available / DAY))} a day${blocked} uses it up by ${formatMoment(view.resetsAtMs, nowMs, tz)}.`;
+}
+
+/** When a quota now behind pace will enter its "use now" stretch: "needs using from Wed 25 Nov 21:30". */
+export function nextUseNowLine(atMs: number, nowMs: number, tz?: string): string {
+  return `needs using from ${formatMoment(atMs, nowMs, tz)} if it is still behind pace`;
+}
+
+/** How old a reading is: "updated 4d ago", "no reading yet", or that the reset time is unknown. */
+export function readingAge(view: MeterView): string {
+  if (view.ageMs === null) return 'no reading yet';
+  if (view.needsReset && !view.stale) return `reset time unknown, updated ${formatAge(view.ageMs)}`;
+  return `updated ${formatAge(view.ageMs)}`;
+}
+
+/** The sentences under the expiry chart, in a fixed order. */
+export function expiryCaption(outlook: ExpiryOutlook, currency: string, nowMs: number, tz?: string, noPrices = false): string {
+  const parts: string[] = [];
+  parts.push(noPrices ? 'No prices are set, so the chart counts the quotas that lose at least 5%. Add a plan price to see what is at stake.' : 'Hatched: expected to expire at the current pace.');
+  const later = moneyPair(outlook.later.plan, outlook.later.credits, currency);
+  if (later && outlook.later.firstMs !== null) parts.push(`Resetting after ${outlook.days.length} days: ${later}, the first ${formatMoment(outlook.later.firstMs, nowMs, tz)}.`);
+  if (!noPrices && outlook.unvalued > 0) parts.push(`${outlook.unvalued === 1 ? '1 more quota expires' : `${outlook.unvalued} more quotas expire`} with no price set.`);
+  const others = Object.entries(outlook.days.reduce<Money>((sum, day) => {
+    for (const [code, amount] of Object.entries(day.plan)) if (code !== currency) sum[code] = (sum[code] ?? 0) + amount;
+    return sum;
+  }, {}));
+  if (others.length > 0) parts.push(`Plus ${formatMoneyTotals(Object.fromEntries(others))} in other currencies, listed in the table.`);
+  if (outlook.stale > 0) parts.push(`Includes ${outlook.stale === 1 ? '1 stale reading' : `${outlook.stale} stale readings`}.`);
+  if (outlook.snoozed > 0) parts.push(`${outlook.snoozed === 1 ? '1 snoozed quota is' : `${outlook.snoozed} snoozed quotas are`} not counted.`);
+  return parts.join(' ');
+}
+
+/** What the even-pace chart holds, in words: the counts per state and what it leaves out. */
+export function paceCaption(counts: TierCounts, throttles: number): string {
+  const tiers = TIER_ORDER.filter((tier) => (counts.tiers[tier] ?? 0) > 0).map((tier) => `${counts.tiers[tier]} ${TIER_LABEL[tier].toLowerCase()}`);
+  const parts = [counts.plotted === 0 ? 'No quota has a running window.' : `Of ${counts.plotted === 1 ? '1 quota' : `${counts.plotted} quotas`} with a running window: ${tiers.join(', ')}.`];
+  parts.push('Across: share of the window gone, not time; up: share used.');
+  const left: string[] = [];
+  if (counts.unplotted > 0) left.push(counts.unplotted === 1 ? '1 quota without a running window' : `${counts.unplotted} quotas without a running window`);
+  if (counts.snoozed > 0) left.push(counts.snoozed === 1 ? '1 snoozed quota' : `${counts.snoozed} snoozed quotas`);
+  if (throttles > 0) left.push(throttles === 1 ? '1 rate limit' : `${throttles} rate limits`);
+  if (left.length > 0) parts.push(`Not shown: ${left.join(', ')}.`);
+  return parts.join(' ');
 }

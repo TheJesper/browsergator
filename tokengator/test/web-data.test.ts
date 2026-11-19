@@ -1,12 +1,13 @@
 // The dashboard's data layer has no DOM in it, so its sample backend and the shared list that every view
 // is built from can be tested here.
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { demoState } from '../src/core/demo.js';
 import { emptyState } from '../src/core/types.js';
 import { App } from '../src/web/app.js';
 import { BackendError, MemoryBackend } from '../src/web/backend.js';
+import { figuresInTiles, visibleTiles } from '../src/web/overview.js';
 
 describe('in-memory backend', () => {
   it('starts on sample data and says so', async () => {
@@ -187,5 +188,69 @@ describe('the shared list behind every view', () => {
     expect(instance.selected()?.id).toBe(first.id);
     instance.select(first.id);
     expect(notified).toBe(1);
+  });
+});
+
+describe('the Overview', () => {
+  async function app(): Promise<App> {
+    const instance = new App(new MemoryBackend(demoState(Date.now())));
+    await instance.use(instance.model.backend);
+    return instance;
+  }
+
+  it('scopes finished windows by category and text, and says when a filter applies', async () => {
+    const instance = await app();
+    const all = instance.cycles();
+    expect(all.length).toBeGreaterThan(0);
+    expect(instance.filtering()).toBe(false);
+    instance.setFilter('claude');
+    expect(instance.filtering()).toBe(true);
+    const claude = instance.cycles();
+    expect(claude.length).toBeGreaterThan(0);
+    expect(claude.length).toBeLessThan(all.length);
+    expect(claude.every((cycle) => cycle.providerId === 'claude' || /claude/i.test(cycle.accountLabel))).toBe(true);
+    instance.setFilter('');
+    instance.setPrefs({ category: 'music' });
+    expect(instance.cycles().every((cycle) => cycle.providerId === 'suno')).toBe(true);
+    // "Hide used up" is about current windows and leaves finished ones alone.
+    instance.setPrefs({ category: 'all', hideSpent: true });
+    expect(instance.cycles()).toHaveLength(all.length);
+  });
+
+  it('matches a finished window through the names it recorded once its subscription is gone', async () => {
+    const instance = await app();
+    const cycle = instance.cycles()[0]!;
+    const backend = instance.model.backend;
+    await backend.removeAccount(cycle.accountId);
+    await instance.reload();
+    instance.setFilter(cycle.accountLabel);
+    expect(instance.cycles().some((candidate) => candidate.accountId === cycle.accountId)).toBe(true);
+  });
+
+  it('keeps the first two tiles, and restores a hidden tile’s figure to the summary', () => {
+    expect(visibleTiles(['lead', 'expiry', 'pace'])).toEqual(['lead', 'expiry', 'windows', 'attention', 'fit', 'spend']);
+    expect(figuresInTiles([])).toEqual({ atRisk: true, lost: true, stale: true });
+    expect(figuresInTiles(['windows', 'attention'])).toEqual({ atRisk: true, lost: false, stale: false });
+    // The expiry tile cannot be hidden, so its figure stays out of the strip.
+    expect(figuresInTiles(['expiry']).atRisk).toBe(true);
+  });
+
+  it('drops unknown and unhideable tiles from remembered settings', () => {
+    const stored = new Map<string, string>([
+      ['tokengator.prefs.v1', JSON.stringify({ view: 'overview', overviewHidden: ['pace', 'lead', 'nonsense', 4] })]
+    ]);
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => void stored.set(key, value)
+    });
+    try {
+      const instance = new App(new MemoryBackend(emptyState()));
+      expect(instance.model.prefs.view).toBe('overview');
+      expect(instance.model.prefs.overviewHidden).toEqual(['pace']);
+      stored.set('tokengator.prefs.v1', JSON.stringify({ overviewHidden: 'pace' }));
+      expect(new App(new MemoryBackend(emptyState())).model.prefs.overviewHidden).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

@@ -61,6 +61,7 @@ const dialogGone = (page) => page.waitForSelector('dialog[open]', { state: 'deta
 const mainText = (page) => page.locator('#main').innerText();
 
 const VIEWS = [
+  ['0', 'overview', '.ov-grid'],
   ['1', 'queue', '.queue'],
   ['2', 'board', '.cards'],
   ['3', 'timeline', '.tl'],
@@ -443,6 +444,158 @@ async function motion(browser) {
   });
   check('nothing animates when motion is reduced', moving === 0, `${moving} moving elements`);
   await context.close();
+}
+
+// The Overview: tiles, charts drawn at their width, tables in their place, each figure once.
+async function overview(browser) {
+  console.log('\nOverview');
+  const { context, page, errors } = await open(browser, { width: 1440, height: 900 });
+  await page.keyboard.press('0');
+  await page.waitForSelector('.ov-grid');
+  await page.waitForTimeout(200);
+  const titles = await page.locator('.ov-grid .tile h2').allInnerTexts();
+  check('the Overview shows its seven tiles on sample data, in order', JSON.stringify(titles) === JSON.stringify(['Use before the reset', 'What expires, and when', 'Finished windows', 'Needs attention', 'Every quota against an even pace', 'Plan fit, last 90 days', 'API spend this month']), JSON.stringify(titles));
+  check('key 0 shows it and the address names it', (await page.evaluate(() => location.hash)) === '#overview' && (await page.locator('.tab[aria-current="page"]').innerText()).startsWith('Overview'));
+
+  // Each figure once: the strip leaves out what a tile states, and gives it back when the tile is hidden.
+  const strip = () => page.locator('.summary').innerText();
+  check('the summary keeps its sentence and leaves the tiles\' figures to them', !/At risk, all windows|Expired, last 30 days|readings? (is|are) stale/.test(await strip()) && /quotas? need/.test(await strip()));
+  const leadRows = await page.locator('.tile[data-tile="lead"] .row').count();
+  const useNow = await page.evaluate(() => Number(document.querySelector('.tabs .count')?.textContent ?? '0'));
+  check('the lead tile lists the quotas to use now, tinted, with the rate for the first', leadRows === Math.min(4, useNow) && (await page.locator('.tile[data-tile="lead"] .row.r-use-now').count()) === leadRows && /an (hour|day) uses it up by/.test(await page.locator('.ov-finish').innerText()));
+
+  // The expiry chart is drawn one unit to one pixel, hatched, credits in their own lane.
+  const expiry = await page.evaluate(() => {
+    const slot = document.querySelector('.tile[data-tile="expiry"] .tile-chart');
+    const svg = slot?.querySelector('svg');
+    return { slot: slot?.clientWidth ?? 0, svg: svg ? Number(svg.getAttribute('width')) : 0, viewBox: svg?.getAttribute('viewBox'), columns: slot?.querySelectorAll('.exp-col').length ?? 0, lane: [...(slot?.querySelectorAll('text') ?? [])].some((text) => text.textContent === 'Credits') };
+  });
+  check('the expiry chart is drawn at its tile\'s width, with hatched columns and a credits lane', expiry.svg > 0 && Math.abs(expiry.svg - expiry.slot) < 9 && expiry.viewBox === `0 0 ${expiry.svg} ${expiry.viewBox?.split(' ')[3]}` && expiry.columns >= 3 && expiry.lane, JSON.stringify(expiry));
+  const label = await page.locator('.tile[data-tile="expiry"] .ov-stat .big').innerText();
+  check('the expiry tile states the money at risk across all windows, plan money and credits apart', /^\$[\d.,]+, plus \$[\d.,]+ in credits$/.test(label), label);
+
+  // A table in a chart's place stays after a redraw, and its quotas open the inspector.
+  await page.click('#ov-tbl-expiry');
+  await page.keyboard.press('t');
+  await page.keyboard.press('t');
+  await page.keyboard.press('t');
+  await page.waitForTimeout(200);
+  check('a table shown in place of a chart stays shown after a redraw', (await page.locator('.tile[data-tile="expiry"] .ov-table').isVisible()) && (await page.locator('.tile[data-tile="expiry"] .tile-chart').isHidden()));
+  await page.locator('.tile[data-tile="expiry"] .ov-table .ov-quota').first().click();
+  await page.waitForSelector('.insp');
+  check('a quota in the table opens the inspector', (await page.locator('.insp').count()) === 1);
+  await page.keyboard.press('Escape');
+  await page.click('#ov-tbl-expiry');
+  await page.waitForTimeout(150);
+  check('switching back draws the chart again', (await page.locator('.tile[data-tile="expiry"] .tile-chart svg').count()) === 1);
+
+  // The even-pace chart: one tab stop, arrows in queue order, focus back on the mark after the inspector.
+  const marks = await page.locator('.pm-mark').count();
+  const plotted = await page.evaluate(() => (document.querySelector('.tile[data-tile="pace"] figcaption')?.textContent ?? '').match(/Of (\d+) quotas?/)?.[1]);
+  check('every quota with a running window is a mark on the even-pace chart', marks > 3 && String(marks) === plotted, `${marks} marks, caption says ${plotted}`);
+  check('the marks are one tab stop', (await page.locator('.pm-mark[tabindex="0"]').count()) === 1);
+  check('a mark is orange only when part of it is expected to expire', await page.evaluate(() => [...document.querySelectorAll('.pm-mark')].every((mark) => mark.classList.contains('risk') !== mark.classList.contains('quiet'))));
+  await page.locator('.pm-mark[tabindex="0"]').focus();
+  const first = await page.evaluate(() => document.activeElement?.id);
+  await page.keyboard.press('ArrowRight');
+  const second = await page.evaluate(() => document.activeElement?.id);
+  check('arrow keys move between marks without moving the page\'s row selection', first !== second && /^ov-pm-/.test(second ?? ''), `${first} -> ${second}`);
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.insp');
+  const selectedProjection = await page.locator('.tile[data-tile="pace"] .proj').count();
+  check('selecting a mark draws its projection to the reset', selectedProjection === 1);
+  await page.keyboard.press('t');
+  await page.keyboard.press('t');
+  await page.keyboard.press('t');
+  await page.waitForTimeout(150);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(150);
+  check('closing the inspector after a redraw returns focus to the mark', (await page.evaluate(() => document.activeElement?.id)) === second, await page.evaluate(() => document.activeElement?.id ?? 'none'));
+
+  // J and K visit each quota once, though several tiles show it.
+  await page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement.blur() : undefined));
+  const visited = [];
+  for (let i = 0; i < 14; i += 1) {
+    await page.keyboard.press('j');
+    visited.push(await page.evaluate(() => document.activeElement?.getAttribute('data-id')));
+  }
+  const run = visited.slice(0, visited.indexOf(visited[visited.length - 1]) + 1);
+  check('J visits each quota once on the Overview', new Set(run).size === run.length, run.join(', '));
+
+  // Hiding a tile: from the Tiles menu, as a checkbox, remembered, and its figure back in the strip.
+  await page.click('#tiles-button');
+  await page.waitForSelector('.menu');
+  check('the Tiles menu offers the hideable tiles as checkboxes', (await page.locator('.menu [role="menuitemcheckbox"]').count()) === 5);
+  await menuItem(page, 'Finished windows').click();
+  await page.waitForTimeout(150);
+  check('a hidden tile is gone and its figure is back in the summary', (await page.locator('.tile[data-tile="windows"]').count()) === 0 && /Expired, last 30 days/.test(await strip()));
+  await page.reload();
+  await page.waitForSelector('.ov-grid');
+  check('the choice survives a reload', (await page.locator('.tile[data-tile="windows"]').count()) === 0);
+  await page.click('#tiles-button');
+  await menuItem(page, 'Finished windows').click();
+  await page.waitForTimeout(150);
+  check('showing it again puts it back', (await page.locator('.tile[data-tile="windows"]').count()) === 1);
+  const cells = await page.evaluate(() => {
+    const grid = document.querySelector('.ov-grid');
+    const tiles = [...grid.children];
+    const width = grid.getBoundingClientRect().width;
+    const last = tiles.at(-1).getBoundingClientRect().width;
+    return { count: tiles.length, lastSpans: last > width * 0.9 };
+  });
+  check('an odd last tile takes the whole row, so no cell is empty', cells.count % 2 === 0 || cells.lastSpans, JSON.stringify(cells));
+
+  // A category: every tile counts it, and one line says the sentence still counts everything.
+  await page.locator('.chips .chip-btn', { hasText: 'Music' }).click();
+  await page.waitForTimeout(150);
+  const scoped = await page.evaluate(() => ({
+    scope: document.querySelector('.ov-scope')?.textContent ?? '',
+    names: [...document.querySelectorAll('.ov-grid .row-name .a > span:first-child, .ov-grid .ov-quota .private, .ov-grid .fit-name')].map((el) => el.textContent),
+    spend: document.querySelectorAll('.tile[data-tile="spend"]').length
+  }));
+  check('filtered by category, every tile counts only that category and a line says so', /counts everything/.test(scoped.scope) && scoped.names.length > 0 && scoped.names.every((name) => /Suno/.test(name ?? '')) && scoped.spend === 0, JSON.stringify(scoped));
+  await page.locator('.chips .chip-btn', { hasText: 'All' }).click();
+
+  // Hidden names reach the tooltips, which live outside the page.
+  await page.click('[aria-label="Menu"]');
+  await menuItem(page, 'Hide names').click();
+  const hit = page.locator('.tile[data-tile="expiry"] .hit.pick').first();
+  await hit.hover();
+  await page.waitForTimeout(100);
+  const tip = await page.locator('.tip').innerText().catch(() => '');
+  const accounts = await page.evaluate(() => [...new Set([...document.querySelectorAll('.row-name .a > span:first-child')].map((el) => el.textContent.trim()))]);
+  check('with names hidden, a chart tooltip names meters but no account', tip.length > 0 && accounts.every((name) => !tip.includes(name)), tip.replace(/\n/g, ' / '));
+  await page.click('[aria-label="Menu"]');
+  await menuItem(page, 'Hide names').click();
+
+  check('no script errors', errors.length === 0, errors.join(' | '));
+  await context.close();
+
+  // A narrow tile shows the even-pace table instead of the chart.
+  const phone = await open(browser, { width: 400, height: 860 });
+  await phone.page.keyboard.press('0');
+  await phone.page.waitForSelector('.ov-grid');
+  await phone.page.waitForTimeout(200);
+  check('at 400px the even-pace tile shows its table', (await phone.page.locator('.tile[data-tile="pace"] .ov-table:visible').count()) === 1 && (await phone.page.locator('.pm-mark').count()) === 0);
+  check('no element id appears twice on the Overview', await phone.page.evaluate(() => { const ids = [...document.querySelectorAll('[id]')].map((el) => el.id); return new Set(ids).size === ids.length; }));
+  check('at 400px the state marks in that table keep their size', await phone.page.evaluate(() => [...document.querySelectorAll('.tile[data-tile="pace"] .tbl .mark')].every((mark) => mark.getBoundingClientRect().width <= 14)));
+  await phone.context.close();
+
+  // An empty tracker: the Overview says what each tile is for instead of drawing nothing.
+  const bare = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const bp = await bare.newPage();
+  await bp.goto(URL_ + '#overview');
+  await bp.waitForSelector('.row, .ov-grid, .empty');
+  await bare.close();
+
+  // Contrast themes: the hatching and the expired columns are repainted, not left in author colours.
+  const forced = await browser.newContext({ viewport: { width: 1440, height: 900 }, forcedColors: 'active' });
+  const fp = await forced.newPage();
+  await fp.goto(URL_ + '#overview');
+  await fp.waitForSelector('.ov-grid .tile-chart svg');
+  const fills = await fp.evaluate(() => ({ stripe: getComputedStyle(document.querySelector('.hatch-stripe')).fill, mark: getComputedStyle(document.querySelector('.pm-mark')).color, text: getComputedStyle(document.body).color }));
+  check('forced colours: the hatching and the marks take system colours', fills.stripe === fills.text && fills.mark === fills.text, JSON.stringify(fills));
+  await forced.close();
 }
 
 // Sample quotas are invented, so no real notification may ever be raised for them: not with the tab
@@ -885,6 +1038,7 @@ async function reviewed(browser) {
     await keyboard(browser);
     await motion(browser);
     await sampleStaysQuiet(browser);
+    await overview(browser);
     await designed(browser);
     await accessible(browser);
     await reviewed(browser);

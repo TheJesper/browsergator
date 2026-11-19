@@ -5,9 +5,10 @@
 // again for that window. Anything chattier gets switched off within a week.
 
 import { allowanceQueue, horizonFor, type MeterView } from './forecast.js';
+import { upcomingResets } from './insights.js';
 import { plainBlock, plainLine } from './limits.js';
-import { nextBoundary, nominalWindowMs, windowLengthMs } from './reset.js';
-import { DAY, HOUR, formatDuration, formatMoment, toMs } from './time.js';
+import { nominalWindowMs, windowLengthMs } from './reset.js';
+import { DAY, formatDuration, formatMoment } from './time.js';
 import type { State } from './types.js';
 import { leftText, riskMoney } from './wording.js';
 
@@ -140,22 +141,6 @@ function fold(line: string): string {
   return out.join('\r\n ');
 }
 
-/** Upcoming ends of a meter's windows: the one it is in, then those its rule alone determines. */
-function upcomingResets(view: MeterView, nowMs: number, untilMs: number): number[] {
-  const first = toMs(view.meter.resetsAt);
-  if (first === null || first <= nowMs || first > untilMs) return [];
-  const resets = [first];
-  const rule = view.meter.reset;
-  while (resets.length < MAX_EVENTS_PER_METER) {
-    const last = resets[resets.length - 1] as number;
-    // A rolling window opens on first use, so only the current one has a known end.
-    const next = rule.kind === 'interval' ? last + rule.hours * HOUR : rule.kind === 'daily' || rule.kind === 'monthly' ? nextBoundary(rule, last) : null;
-    if (next === null || next > untilMs) break;
-    resets.push(next);
-  }
-  return resets;
-}
-
 /**
  * An iCalendar feed with one entry per upcoming reset of every expiring quota. Each entry covers the last
  * stretch before the reset, the same stretch the dashboard calls "use now", and rings when it begins.
@@ -181,7 +166,7 @@ export function calendarFeed(state: State, nowMs: number, options: CalendarOptio
     if (length === null || length < MIN_REMINDER_WINDOW) continue;
     const lead = horizonFor(length);
     const meterName = view.meter.label.charAt(0).toLowerCase() + view.meter.label.slice(1);
-    for (const resetMs of upcomingResets(view, nowMs, untilMs)) {
+    for (const resetMs of upcomingResets(view, nowMs, untilMs, MAX_EVENTS_PER_METER)) {
       // The entry for the window already under way starts now, so its alarm must speak of what is left
       // of it and not of the full lead time.
       const startsMs = Math.max(nowMs, resetMs - lead);

@@ -96,7 +96,8 @@ export function toast(message: string, kind: 'ok' | 'err' = 'ok'): void {
 // ---------------------------------------------------------------------------
 
 export type MenuEntry =
-  | { kind?: 'item'; label: string; icon?: string; end?: Child; checked?: boolean; danger?: boolean; onSelect: () => void }
+  /** `check` makes a checked item a checkbox (each on or off) rather than one choice among several. */
+  | { kind?: 'item'; label: string; icon?: string; end?: Child; checked?: boolean; check?: boolean; danger?: boolean; onSelect: () => void }
   | { kind: 'sep' }
   | { kind: 'title'; label: string };
 
@@ -135,7 +136,7 @@ export function showMenu(anchor: HTMLElement, entries: MenuEntry[]): void {
           {
             class: entry.danger ? 'menu-item danger' : 'menu-item',
             type: 'button',
-            role: checkable ? 'menuitemradio' : 'menuitem',
+            role: checkable ? (entry.check ? 'menuitemcheckbox' : 'menuitemradio') : 'menuitem',
             'aria-checked': checkable ? String(entry.checked) : null,
             onclick: () => {
               // Focus goes back to what opened the menu before the choice acts, so a dialog the choice

@@ -71,14 +71,19 @@ Each quota gets one state:
 | **New window** | Just reset; too early to forecast. |
 | **Used up** | Fully used. Nothing is wasted. |
 
-Six views over the same data, switched with the number keys:
+Seven views over the same data, switched with the number keys:
 
+0. **Overview**: a dashboard of tiles: what to use before its reset, what expires on which day over the
+   next 30 days, what finished windows left unused week by week, readings that need attention, every
+   quota against an even pace, and plan fit over 90 days. Tiles can be hidden; each chart has a table.
 1. **Queue**: ranked by what needs using first, with an inspector.
 2. **Board**: one card per subscription with all its meters.
 3. **Timeline**: every reset on one time axis (24 hours, 7 days, 30 days).
 4. **Table**: dense, sortable, copyable as Markdown or CSV.
 5. **Costs**: optional pay-as-you-go API spend against a budget.
 6. **History**: what actually expired in each finished window, and what it was worth.
+
+![The Overview: what to use now, what expires when, and what finished windows left unused](docs/img/overview-light.png)
 
 ![Every reset on one time axis](docs/img/timeline-light.png)
 
@@ -87,7 +92,7 @@ Six views over the same data, switched with the number keys:
 Everything has a copy button: a status line, Markdown, JSON, or a prompt that hands the decision to
 an agent. **C** copies a brief of the whole picture.
 
-Keyboard: `1`–`6` views, `U` update, `A` add, `C` copy brief, `/` filter, `J`/`K` rows, `S` sort,
+Keyboard: `0`–`6` views, `U` update, `A` add, `C` copy brief, `/` filter, `J`/`K` rows, `S` sort,
 `T` theme, `?` all shortcuts. Single keys can be switched off in the menu (for dictation and voice
 control); arrow keys, Enter and Esc always work.
 

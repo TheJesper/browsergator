@@ -320,13 +320,13 @@ describe('confidence', () => {
     state = rollState(state, later);
     expect(state.cycles[0]?.confidence).toBe('estimated');
     expect(summarise(state, later).lostIsEstimate).toBe(true);
-    expect(briefMarkdown(state, later, 'UTC')).toContain('Expired unused in the last 30 days: about $11.50.');
+    expect(briefMarkdown(state, later, 'UTC')).toContain('Expired unused, last 30 days: about $11.');
 
     let measured = add(emptyState(), 'Claude Max', [{ label: 'Weekly', reset: WEEKLY, resetsAt: '2026-11-20T00:00:00Z' }], { price: USD_100 }, utc(2026, 11, 14));
     measured = read(measured, 'claude-max:weekly', { usedPercent: 50 }, utc(2026, 11, 19, 23, 0));
     measured = rollState(measured, later);
     expect(summarise(measured, later).lostIsEstimate).toBe(false);
-    expect(briefMarkdown(measured, later, 'UTC')).toContain('Expired unused in the last 30 days: $11.50.');
+    expect(briefMarkdown(measured, later, 'UTC')).toContain('Expired unused, last 30 days: $11.50.');
   });
 });
 
@@ -369,7 +369,7 @@ describe('totals', () => {
     const totals = ledgerTotals(state.cycles, NOW);
     expect(totals.lost30['USD']).toBeCloseTo(11.5, 1);
     expect(totals.creditsLost30['USD']).toBeCloseTo(20, 9);
-    expect(briefMarkdown(state, NOW, 'UTC')).toContain('Expired unused in the last 30 days: $11.50, plus $20.00 in credits.');
+    expect(briefMarkdown(state, NOW, 'UTC')).toContain('Expired unused, last 30 days: $11.50, plus $20.00 in credits.');
   });
 
   it('averages utilisation over the same 30 days', () => {
@@ -383,7 +383,7 @@ describe('totals', () => {
     expect(ledgerTotals(state.cycles, NOW + 16 * DAY).creditsLost30['USD']).toBeCloseTo(20, 9);
     expect(ledgerTotals(state.cycles, utc(2026, 12, 12)).creditsLost30['USD']).toBeCloseTo(16, 9);
     expect(ledgerTotals(state.cycles, utc(2026, 12, 16)).creditsLost30['USD']).toBeCloseTo(10, 9);
-    expect(ledgerTotals(state.cycles, utc(2026, 12, 19))).toEqual({ lost30: {}, creditsLost30: {}, utilisation30: null, cycles30: 0, lostIsEstimate: false });
+    expect(ledgerTotals(state.cycles, utc(2026, 12, 19))).toEqual({ lost30: {}, creditsLost30: {}, utilisation30: null, cycles30: 0, lostIsEstimate: false, creditsLostIsEstimate: false });
     // A different span can be asked for.
     expect(ledgerTotals(state.cycles, NOW, 60).creditsLost30['USD']).toBeCloseTo(40, 9);
     expect(ledgerTotals(state.cycles, NOW, 7).creditsLost30['USD']).toBeCloseTo(16, 9);

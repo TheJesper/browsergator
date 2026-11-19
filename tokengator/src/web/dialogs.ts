@@ -975,7 +975,7 @@ export function remindersDialog(ctx: Ctx, tab: TabNotifications): void {
 // ---------------------------------------------------------------------------
 
 export const SHORTCUTS: readonly { keys: string[]; what: string }[] = [
-  { keys: ['1', '…', '6'], what: 'Switch view: Queue, Board, Timeline, Table, Costs, History' },
+  { keys: ['0', '…', '6'], what: 'Switch view: Overview, Queue, Board, Timeline, Table, Costs, History' },
   { keys: ['U'], what: 'Update usage (quick entry)' },
   { keys: ['A'], what: 'Add a subscription' },
   { keys: ['C'], what: 'Copy the brief' },

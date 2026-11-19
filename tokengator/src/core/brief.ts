@@ -3,11 +3,12 @@
 
 import type { MeterView, Summary } from './forecast.js';
 import { TIER_ORDER, allowanceQueue, summarise, viewState } from './forecast.js';
-import { formatMoney, formatPercent } from './format.js';
-import { TIER_LABEL, explain, headline, leftText, moneyPair, recommend, riskMoney, stateLabel, statusLine, summaryLine, usedText } from './wording.js';
+import { formatMoney, formatMoneyTotals, formatPercent } from './format.js';
+import type { LedgerWeek } from './insights.js';
+import { FIGURE_LABEL, TIER_LABEL, explain, headline, leftText, lostText, recommend, riskMoney, stateLabel, statusLine, summaryLine, usedText, utilisationText } from './wording.js';
 import type { State } from './types.js';
 import { summariseSpend } from './spend.js';
-import { formatAge, formatDuration, formatMoment, iso, localZone } from './time.js';
+import { dateKey, formatAge, formatDuration, formatMoment, iso, localZone } from './time.js';
 
 /** Agents have no clock, so every agent-facing text says what time it was written. */
 export function stamp(nowMs: number, tz: string = localZone()): string {
@@ -33,10 +34,14 @@ export function briefMarkdown(state: State, nowMs: number, tz: string = localZon
   lines.push(`_As of ${stamp(nowMs, tz)}_`);
   lines.push('');
   lines.push(`**${summaryLine(summary, currency)}**`);
-  const lost = moneyPair(summary.lost30, summary.creditsLost30, currency);
-  if (lost) {
+  // The same two figures, in the same words, as the Overview's "Finished windows" tile.
+  // A line about money only when money expired: "$0.00" in a brief reads as a figure worth reporting.
+  if (summary.cycles30 > 0) {
     lines.push('');
-    lines.push(`Expired unused in the last 30 days: ${summary.lostIsEstimate ? 'about ' : ''}${lost}.`);
+    if (hasMoney(summary.lost30) || hasMoney(summary.creditsLost30)) {
+      lines.push(`${FIGURE_LABEL.lost30}: ${lostText(summary.lost30, summary.creditsLost30, currency, summary.lostIsEstimate, summary.creditsLostIsEstimate)}.`);
+    }
+    lines.push(`${FIGURE_LABEL.used30}: ${utilisationText(summary.utilisation30, summary.cycles30)}.`);
   }
 
   if (queue.length === 0) {
@@ -78,6 +83,11 @@ export function briefMarkdown(state: State, nowMs: number, tz: string = localZon
 /** A window has a forecast once it has a clock, is past its first few percent, and is not used up. */
 function hasForecast(view: MeterView): boolean {
   return view.projectedFraction !== null && view.tier !== 'fresh' && view.tier !== 'spent' && view.tier !== 'idle' && view.tier !== 'expired';
+}
+
+/** True when any currency in a total holds a cent or more. */
+export function hasMoney(money: Record<string, number>): boolean {
+  return Object.values(money).some((amount) => amount > 0.004);
 }
 
 function escapeCell(text: string): string {
@@ -301,6 +311,22 @@ export function costsMarkdown(state: State, nowMs: number, tz?: string): string 
       : '';
     lines.push(
       `| ${escapeCell(source.label)} | ${formatMoney(s.monthToDate, source.currency)} | ${formatMoney(s.projected, source.currency)} | ${budget} |`
+    );
+  }
+  return lines.join('\n');
+}
+
+/** The weekly record of finished windows as a Markdown table, for the dashboard's copy action and `waste_report`. */
+export function weeksMarkdown(weeks: readonly LedgerWeek[], currency: string, tz?: string): string {
+  const lines = ['| Week of | Windows | Expired | Of which estimated | Credits expired | Used, trailing 30 days |', '| --- | --- | --- | --- | --- | --- |'];
+  for (const week of weeks) {
+    const day = dateKey(week.startMs, tz);
+    if (week.windows === 0) {
+      lines.push(`| ${day} | 0 | no window closed | | | ${week.trailingUtilisation === null ? '' : formatPercent(week.trailingUtilisation)} |`);
+      continue;
+    }
+    lines.push(
+      `| ${day} | ${week.windows} | ${formatMoneyTotals(week.lost, currency, formatMoney(0, currency))} | ${formatMoneyTotals(week.lostEstimated, currency)} | ${formatMoneyTotals(week.creditsLost, currency)} | ${week.trailingUtilisation === null ? '' : formatPercent(week.trailingUtilisation)} |`
     );
   }
   return lines.join('\n');

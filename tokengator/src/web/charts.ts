@@ -194,13 +194,13 @@ function describeCycle(cycle: ClosedCycle, nowMs: number): string {
   return `Window ended ${ended}: ${formatPercent(1 - cycle.wastedFraction)} used, ${formatPercent(cycle.wastedFraction)} expired.`;
 }
 
-function shortDate(ms: number): string {
+export function shortDate(ms: number): string {
   const date = new Date(ms);
   return `${date.getDate()} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][date.getMonth()] ?? ''}`;
 }
 
 /** A bar with a rounded data end and a square baseline. */
-function roundedTop(x: number, y: number, width: number, height: number, radius: number): string {
+export function roundedTop(x: number, y: number, width: number, height: number, radius: number): string {
   const r = Math.min(radius, width / 2, height);
   return `M${x} ${y + height} V${y + r} Q${x} ${y} ${x + r} ${y} H${x + width - r} Q${x + width} ${y} ${x + width} ${y + r} V${y + height} Z`;
 }
@@ -272,7 +272,7 @@ function dayLabel(date: string): string {
 }
 
 /** Rounds a maximum up to a clean axis value: 1, 2, 2.5, 5 or 10 times a power of ten. */
-function niceCeil(value: number): number {
+export function niceCeil(value: number): number {
   const power = 10 ** Math.floor(Math.log10(value));
   for (const step of [1, 2, 2.5, 5, 10]) {
     if (value <= step * power) return step * power;

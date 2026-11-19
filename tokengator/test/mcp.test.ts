@@ -641,7 +641,8 @@ describe('reading tools', () => {
 
     const lines = answer.text.split('\n');
     expect(lines[0]).toBe(STAMP);
-    expect(lines[1]).toBe('Last 30 days: 3 finished windows, 72% of the quota used on average, about $18.25 expired unused.');
+    // Worded as on the dashboard: the share used, then the money in whole units because a window was estimated.
+    expect(lines[1]).toBe('Last 30 days: 72% used on average over 3 windows; about $18 expired unused.');
     expect(answer.text).toContain('| Subscription | Meter | Windows | Unused on average | Expired value |');
     expect(answer.text).toContain('| Claude Max | Weekly limit | 2 | 38% | $17.25 |');
     expect(answer.text).toContain('| Suno Pro | Credits | 1 | 10% | $1.00 |');
