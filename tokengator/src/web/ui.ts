@@ -18,6 +18,8 @@ export interface FocusMark {
   within: string | null;
   /** Which of several identical controls it was. */
   nth: number;
+  /** Its place among all controls of its kind in that region, for a control whose own text changes. */
+  order: number;
 }
 
 const controlLabel = (el: Element): string => el.getAttribute('aria-label') ?? el.getAttribute('title') ?? (el.textContent ?? '').trim();
@@ -34,11 +36,17 @@ export function markFocus(root: HTMLElement, scopes: readonly string[]): FocusMa
   const active = document.activeElement;
   if (!(active instanceof HTMLElement) || active === document.body || !root.contains(active)) return null;
   const mark = { id: active.id, tag: active.tagName, label: controlLabel(active), scope: scopes.find((selector) => active.closest(selector) !== null) ?? '', within: meterOf(active) };
-  return { ...mark, nth: Math.max(0, lookalikes(root, mark, mark.within).indexOf(active)) };
+  const region = mark.scope ? root.querySelector<HTMLElement>(mark.scope) : root;
+  const order = region ? [...region.querySelectorAll<HTMLElement>(mark.tag)].indexOf(active) : -1;
+  return { ...mark, nth: Math.max(0, lookalikes(root, mark, mark.within).indexOf(active)), order };
 }
 
-/** Puts focus back on the control a mark describes, if the rebuild dropped it. True when focus is on a control. */
-export function restoreFocus(root: HTMLElement, mark: FocusMark | null): boolean {
+/**
+ * Puts focus back on the control a mark describes, if the rebuild dropped it. True when focus is on a
+ * control. `byPlace` also accepts the control now standing where the marked one stood: right for a panel
+ * that is redrawn with the same controls in the same order, where a switch changes its own wording.
+ */
+export function restoreFocus(root: HTMLElement, mark: FocusMark | null, byPlace = false): boolean {
   const current = document.activeElement;
   if (current instanceof HTMLElement && current !== document.body && current.isConnected) return true;
   if (!mark) return false;
@@ -50,7 +58,8 @@ export function restoreFocus(root: HTMLElement, mark: FocusMark | null): boolean
     // The same control for another meter: the inspector's buttons after the selection moved.
     lookalikes(root, mark, undefined)[0] ??
     // Or the row the control belonged to.
-    (mark.within ? root.querySelector<HTMLElement>(`[data-nav="row"][data-id="${CSS.escape(mark.within)}"]`) : null);
+    (mark.within ? root.querySelector<HTMLElement>(`[data-nav="row"][data-id="${CSS.escape(mark.within)}"]`) : null) ??
+    (byPlace && mark.order >= 0 ? ((mark.scope ? root.querySelector<HTMLElement>(mark.scope) : root)?.querySelectorAll<HTMLElement>(mark.tag)[mark.order] ?? null) : null);
   target?.focus({ preventScroll: true });
   return target !== null && target !== undefined;
 }
@@ -61,14 +70,25 @@ export function restoreFocus(root: HTMLElement, mark: FocusMark | null): boolean
 
 let toastHost: HTMLElement | null = null;
 
+/**
+ * Where messages are announced from. A modal dialog makes everything outside it inert and draws it under the
+ * backdrop, so while one is open the region lives inside it: a message raised from a dialog would otherwise
+ * be neither read out nor readable.
+ */
+function toastRegion(): HTMLElement {
+  if (!toastHost) toastHost = h('div', { class: 'toasts', role: 'status', 'aria-live': 'polite' });
+  const dialogs = document.querySelectorAll<HTMLElement>('dialog[open]');
+  const home = dialogs[dialogs.length - 1] ?? document.body;
+  if (toastHost.parentElement !== home) home.appendChild(toastHost);
+  return toastHost;
+}
+
 export function toast(message: string, kind: 'ok' | 'err' = 'ok'): void {
-  if (!toastHost) {
-    toastHost = h('div', { class: 'toasts', role: 'status', 'aria-live': 'polite' });
-    document.body.appendChild(toastHost);
-  }
-  const el = h('div', { class: kind === 'err' ? 'toast err' : 'toast' }, kind === 'ok' ? icon('check') : null, message);
-  toastHost.appendChild(el);
-  setTimeout(() => el.remove(), kind === 'err' ? 5200 : 2200);
+  // An error interrupts and stays long enough to be read; a click dismisses it.
+  const el = h('div', { class: kind === 'err' ? 'toast err' : 'toast', role: kind === 'err' ? 'alert' : null }, kind === 'ok' ? icon('check') : null, message);
+  if (kind === 'err') el.addEventListener('click', () => el.remove());
+  toastRegion().appendChild(el);
+  setTimeout(() => el.remove(), kind === 'err' ? 9000 : 2200);
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +178,12 @@ export function showMenu(anchor: HTMLElement, entries: MenuEntry[]): void {
     } else if (event.key === 'ArrowUp') {
       event.preventDefault();
       list[(index - 1 + list.length) % list.length]?.focus();
-    } else if (event.key === 'Tab') close();
+    } else if (event.key === 'Tab') {
+      // The menu sits at the end of the page. Closing it from there would send Tab to the top, so focus
+      // goes back to what opened it first and Tab carries on from that place.
+      close();
+      anchor.focus({ preventScroll: true });
+    }
   };
   const onPointer = (event: Event): void => {
     const target = event.target as Node;
@@ -226,6 +251,8 @@ export function openDialog(options: { title: string; class?: string; onClose?: (
   const finish = (): void => {
     if (finished) return;
     finished = true;
+    // Messages still showing move out with the region instead of vanishing with the dialog.
+    if (toastHost && el.contains(toastHost)) document.body.appendChild(toastHost);
     el.remove();
     options.onClose?.();
     if (!isDialogOpen()) restoreFocus(document.body, opener);

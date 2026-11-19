@@ -107,6 +107,10 @@ describe.each([
     }
   });
 
+  it('sets the text of an error message at 4.5:1 or better on its own fill (review finding)', () => {
+    expect(contrast(theme['on-stop'] as string, theme['stop'] as string)).toBeGreaterThanOrEqual(4.5);
+  });
+
   it('keeps input borders and the focus ring at 3:1 or better', () => {
     for (const ground of ['bg', 'surface']) {
       expect(contrast(theme['control'] as string, theme[ground] as string), `control on ${ground}`).toBeGreaterThanOrEqual(3);

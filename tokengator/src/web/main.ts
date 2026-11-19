@@ -95,7 +95,11 @@ function start(app: App, fellBack: boolean): void {
       }).then((yes) => {
         if (!yes) return;
         if (app.model.selectedId && view.account.meters.some((meter) => meter.id === app.model.selectedId)) app.select(null);
-        void actions.run(app.model.backend.removeAccount(view.account.id), `${view.account.label} deleted`);
+        void actions.run(app.model.backend.removeAccount(view.account.id), `${view.account.label} deleted`).then(() => {
+          // The row that had focus is gone. The next one takes it, or the Add button when none is left.
+          if (document.activeElement && document.activeElement !== document.body) return;
+          (pane.querySelector<HTMLElement>('[data-nav="row"]') ?? header.querySelector<HTMLElement>('.btn.primary'))?.focus({ preventScroll: true });
+        });
       });
     },
     snooze: (accountId, untilMs) => {
@@ -148,6 +152,24 @@ function start(app: App, fellBack: boolean): void {
   const filterInput = h('input', { id: 'filter', type: 'search', placeholder: 'Filter', 'aria-label': 'Filter subscriptions', autocomplete: 'off' }) as HTMLInputElement;
   filterInput.addEventListener('input', () => app.setFilter(filterInput.value));
   const moreButton = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Menu', title: 'Menu', onclick: () => showMenu(moreButton, mainMenu()) }, icon('more'));
+  // On a phone the filter field is behind this button, on a row of its own, so the filter is never missing.
+  const filterToggle = h('button', { class: 'icon-btn filter-toggle', type: 'button', 'aria-label': 'Filter', title: 'Filter (/)', 'aria-expanded': 'false', onclick: () => openFilter(!header.classList.contains('filter-open')) }, icon('search'));
+  function openFilter(open: boolean): void {
+    header.classList.toggle('filter-open', open);
+    filterToggle.setAttribute('aria-expanded', String(open));
+    if (open) {
+      filterInput.focus();
+      filterInput.select();
+    } else if (filterInput.value !== '') {
+      filterInput.value = '';
+      app.setFilter('');
+    }
+  }
+  // The header is sticky and wraps to two rows on a narrow screen. Its real height is what scrolling into
+  // view, the inspector and the table header have to stay clear of.
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(() => document.documentElement.style.setProperty('--header-h', `${Math.round(header.getBoundingClientRect().height)}px`)).observe(header);
+  }
   header.append(
     h('div', { class: 'brand' }, brandMark(), 'Tokengator'),
     tabs,
@@ -155,6 +177,7 @@ function start(app: App, fellBack: boolean): void {
       'div',
       { class: 'bar-tools' },
       h('label', { class: 'filter' }, icon('search'), filterInput, h('kbd', { class: 'k' }, '/')),
+      filterToggle,
       h('button', { class: 'btn', type: 'button', title: 'Update usage (U)', onclick: () => actions.quick() }, icon('edit'), h('span', { class: 'wide-only' }, 'Update'), h('kbd', null, 'U')),
       h('button', { class: 'btn', type: 'button', title: 'Copy a Markdown brief of what needs using (C)', onclick: () => actions.copyBrief() }, icon('copy'), h('span', { class: 'wide-only' }, 'Copy brief')),
       h('button', { class: 'btn primary', type: 'button', title: 'Add a subscription (A)', onclick: () => actions.add() }, icon('plus'), h('span', { class: 'wide-only' }, 'Add')),
@@ -176,6 +199,7 @@ function start(app: App, fellBack: boolean): void {
       { kind: 'sep' },
       { label: 'Compact rows', icon: 'rows', checked: prefs.density === 'compact', onSelect: () => app.setPrefs({ density: prefs.density === 'compact' ? 'comfortable' : 'compact' }) },
       { label: 'Hide names (screen sharing)', icon: 'eye', checked: prefs.privacy, onSelect: () => app.setPrefs({ privacy: !prefs.privacy }) },
+      { label: 'Single-key shortcuts', icon: 'keyboard', checked: prefs.shortcuts, onSelect: () => app.setPrefs({ shortcuts: !prefs.shortcuts }) },
       // What the two figures on every row show.
       { label: 'Show what is used, not what is left', icon: 'sort', checked: prefs.amounts === 'used', onSelect: () => app.setPrefs({ amounts: prefs.amounts === 'used' ? 'left' : 'used' }) },
       { label: 'Show reset times, not countdowns', icon: 'clock', checked: prefs.times === 'clock', onSelect: () => app.setPrefs({ times: prefs.times === 'clock' ? 'countdown' : 'clock' }) },
@@ -260,6 +284,8 @@ function start(app: App, fellBack: boolean): void {
   // "Match system" leaves the root element alone until the viewer has made an explicit choice, so a host
   // page that sets its own theme attribute keeps control.
   let lastTheme = 'system';
+  /** True while the details pane covers the page instead of docking beside it. */
+  const narrow = matchMedia('(max-width: 1039px)');
 
   function renderTabs(useNow: number): void {
     const current = app.model.prefs.view;
@@ -318,7 +344,8 @@ function start(app: App, fellBack: boolean): void {
     const sentence = money && line.includes(money) ? [line.slice(0, line.indexOf(money)), h('span', { class: 'at-risk num' }, money), line.slice(line.indexOf(money) + money.length)] : [line];
     const credits = (amounts: Money): HTMLElement | null => {
       const text = formatMoneyTotals(amounts, currency);
-      return text ? h('small', { title: CREDIT_VALUE_NOTE }, `+ ${text} in credits`) : null;
+      // Starts with a space, so the figure before it and this one are read and copied as two.
+      return text ? h('small', { title: CREDIT_VALUE_NOTE }, ` + ${text} in credits`) : null;
     };
     const liveClass = demo ? 'live sample' : online ? 'live' : 'live off';
     const liveText = demo ? 'Sample data' : online ? `Live${lastSync ? `, synced ${formatAge(now - lastSync)}` : ''}` : 'Offline';
@@ -370,7 +397,8 @@ function start(app: App, fellBack: boolean): void {
             { title: PLAN_VALUE_NOTE },
             lostMoney(s.lost30, currency, s.lostIsEstimate),
             credits(s.creditsLost30),
-            s.utilisation30 !== null ? h('small', null, `${formatPercent(s.utilisation30)} used`) : null
+            // The space is text, so the two figures are read and copied as two.
+            s.utilisation30 !== null ? [' ', h('small', null, `${formatPercent(s.utilisation30)} used`)] : null
           )
         )
       )
@@ -501,20 +529,35 @@ function start(app: App, fellBack: boolean): void {
     const selected = view === 'costs' || view === 'history' ? null : app.selected();
     layout.classList.toggle('with-inspector', selected !== null);
     if (selected) {
-      layout.append(h('button', { class: 'scrim', type: 'button', 'aria-label': 'Close details', onclick: () => app.select(null) }), inspector(ctx, selected));
+      // The scrim is for the pointer. The pane has its own Close button for everything else.
+      layout.append(h('button', { class: 'scrim', type: 'button', tabindex: -1, 'aria-hidden': 'true', onclick: () => app.select(null) }), inspector(ctx, selected));
     }
+    // Below the width at which the pane docks, it covers the page. Then it is a dialog: what is behind it
+    // cannot take focus or be operated, and focus starts inside it.
+    const overlay = selected !== null && narrow.matches;
+    for (const region of [header, banners, summary, toolbar, pane]) region.inert = overlay;
 
     const insp = layout.querySelector<HTMLElement>('.insp');
+    if (insp && overlay) {
+      insp.setAttribute('role', 'dialog');
+      insp.setAttribute('aria-modal', 'true');
+    }
     if (insp && insp.dataset['meter'] === shownBefore && inspScroll > 0) insp.scrollTop = inspScroll;
     const table = pane.querySelector<HTMLElement>('.table-wrap');
     if (table && tableScroll > 0) table.scrollLeft = tableScroll;
-    // A control that is gone with its inspector hands focus to the row the inspector was showing.
-    if (!restoreFocus(root, focusMark) && focusMark?.scope === '.insp' && shownBefore) {
-      pane.querySelector<HTMLElement>(`[data-nav="row"][data-id="${CSS.escape(shownBefore)}"]`)?.focus({ preventScroll: true });
-    }
+    // When the pane closes, focus goes back to the row it was showing, whichever of its controls had it.
+    // Looking for "the same control elsewhere" would pick some other row's button.
+    const paneClosed = insp === null && shownBefore !== null && (focusMark === null || focusMark.scope === '.insp');
+    const row = shownBefore ? pane.querySelector<HTMLElement>(`[data-nav="row"][data-id="${CSS.escape(shownBefore)}"]`) : null;
+    if (paneClosed && row) row.focus({ preventScroll: true });
+    else if (!restoreFocus(root, focusMark) && focusMark?.scope === '.insp') row?.focus({ preventScroll: true });
+    if (insp && overlay && !insp.contains(document.activeElement)) insp.querySelector<HTMLElement>('.insp-close')?.focus({ preventScroll: true });
     if (window.scrollY !== scrollY) window.scrollTo({ top: scrollY });
     notify();
   }
+
+  // The pane docks or covers depending on the width, so crossing that width redraws it.
+  narrow.addEventListener('change', () => render());
 
   // Rebuilding while the viewer is typing in the inspector would drop what they typed.
   function isEditingInPlace(): boolean {
@@ -594,13 +637,25 @@ function start(app: App, fellBack: boolean): void {
       if (typing && target === filterInput) {
         filterInput.value = '';
         app.setFilter('');
-        filterInput.blur();
+        // On a phone the field goes away again, and focus returns to the button that opened it.
+        if (header.classList.contains('filter-open')) {
+          openFilter(false);
+          filterToggle.focus();
+        } else filterInput.blur();
+      } else if (typing && target !== null && layout.querySelector('.insp')?.contains(target)) {
+        // Esc in the details pane closes the pane, from a field as from anywhere else in it. Blurring the
+        // field instead would drop focus on nothing, and the next Tab would leave the page.
+        if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) target.value = '';
+        app.select(null);
       } else if (typing) target?.blur();
       else if (app.model.selectedId) app.select(null);
       return;
     }
     // An open menu owns the keyboard: a shortcut pressed over it would change a view that cannot be redrawn.
     if (typing || isDialogOpen() || isMenuOpen()) return;
+    // Arrow keys move through the rows whatever the setting. Every other shortcut is a single character,
+    // which someone who dictates or uses voice control needs to be able to switch off.
+    if (!app.model.prefs.shortcuts && event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
     const view = VIEWS.find((candidate) => candidate.key === event.key);
     if (view) {
       event.preventDefault();
@@ -610,8 +665,12 @@ function start(app: App, fellBack: boolean): void {
     switch (event.key) {
       case '/':
         event.preventDefault();
-        filterInput.focus();
-        filterInput.select();
+        // Where the field is behind its button, the key opens it.
+        if (getComputedStyle(filterToggle).display !== 'none') openFilter(true);
+        else {
+          filterInput.focus();
+          filterInput.select();
+        }
         break;
       case 'u':
       case 'U': {

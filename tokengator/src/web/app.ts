@@ -36,6 +36,11 @@ export interface Prefs {
   notify: boolean;
   /** Meter windows already announced, so a notification fires once per window. */
   notified: string[];
+  /**
+   * Whether single keys act as shortcuts (1 to 6, U, A, C, J, K, S, T, /, ?). Someone who dictates text or
+   * drives the page by voice switches them off, so that a spoken word is never taken for six commands.
+   */
+  shortcuts: boolean;
 }
 
 const DEFAULT_PREFS: Prefs = {
@@ -49,6 +54,7 @@ const DEFAULT_PREFS: Prefs = {
   times: 'countdown',
   privacy: false,
   horizon: 168,
+  shortcuts: true,
   notify: false,
   notified: []
 };

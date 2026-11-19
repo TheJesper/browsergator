@@ -21,6 +21,7 @@ import {
   riskText,
   sourceText,
   stateChip,
+  flagText,
   stateKey,
   stateMark
 } from './parts.js';
@@ -106,7 +107,8 @@ function queueRow(ctx: Ctx, view: MeterView): HTMLElement {
         class: 'row-name',
         type: 'button',
         'aria-expanded': String(selectedId === view.id),
-        'aria-label': `${view.account.label}, ${view.meter.label}: ${barCaption(view, now).text}. Show details.`,
+        // The label replaces the button's content for a screen reader, so it has to carry the tags too.
+        'aria-label': `${view.account.label}, ${view.meter.label}: ${barCaption(view, now).text}.${flagText(view, now) ? ` ${flagText(view, now)}.` : ''} Show details.`,
         dataset: { id: view.id, nav: 'row' },
         onclick: isolated(select)
       },

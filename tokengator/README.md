@@ -88,7 +88,8 @@ Everything has a copy button: a status line, Markdown, JSON, or a prompt that ha
 an agent. **C** copies a brief of the whole picture.
 
 Keyboard: `1`–`6` views, `U` update, `A` add, `C` copy brief, `/` filter, `J`/`K` rows, `S` sort,
-`T` theme, `?` all shortcuts.
+`T` theme, `?` all shortcuts. Single keys can be switched off in the menu (for dictation and voice
+control); arrow keys, Enter and Esc always work.
 
 ## Reminders
 

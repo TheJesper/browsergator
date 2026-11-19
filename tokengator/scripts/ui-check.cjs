@@ -572,6 +572,154 @@ async function designed(browser) {
   await phone.context.close();
 }
 
+// What the accessibility review found, each pinned by a check.
+async function accessible(browser) {
+  console.log('\nAccessibility review findings');
+  const phone = await open(browser, { width: 400, height: 800 });
+  const page = phone.page;
+
+  // Below the docking width the details pane is a dialog: focus starts in it and cannot reach what it covers.
+  await page.keyboard.press('j');
+  const rowId = await page.evaluate(() => document.activeElement?.getAttribute('data-id'));
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.insp');
+  const modal = await page.evaluate(() => ({
+    inside: document.querySelector('.insp').contains(document.activeElement),
+    role: document.querySelector('.insp').getAttribute('role'),
+    behind: ['header.bar', '.summary', '.toolbar', '#main'].every((selector) => document.querySelector(selector).inert),
+    scrim: document.querySelector('.scrim').tabIndex
+  }));
+  check('at 400px the open details pane takes focus and makes the page behind it inert', modal.inside && modal.role === 'dialog' && modal.behind && modal.scrim === -1, JSON.stringify(modal));
+  let escaped = 0;
+  for (let i = 0; i < 25; i += 1) {
+    await page.keyboard.press('Tab');
+    if (await page.evaluate(() => document.activeElement !== document.body && !document.querySelector('.insp').contains(document.activeElement))) escaped += 1;
+  }
+  check('Tab never lands on a control hidden behind the pane', escaped === 0, `${escaped} stops outside`);
+  await page.locator('#insp-update').focus();
+  await page.keyboard.press('Escape');
+  const closed = await page.evaluate(() => ({ pane: document.querySelector('.insp') !== null, focus: document.activeElement?.getAttribute('data-id'), inert: document.querySelector('#main').inert }));
+  check('Esc in the Update field closes the pane and returns focus to its row', !closed.pane && closed.focus === rowId && !closed.inert, JSON.stringify(closed));
+
+  // The filter is reachable at phone width, by its button and by "/".
+  await page.keyboard.press('/');
+  const filter = await page.evaluate(() => ({ focused: document.activeElement?.id, shown: getComputedStyle(document.querySelector('.filter')).display !== 'none', expanded: document.querySelector('.filter-toggle').getAttribute('aria-expanded') }));
+  check('at 400px "/" opens the filter field and focuses it', filter.focused === 'filter' && filter.shown && filter.expanded === 'true', JSON.stringify(filter));
+  await page.keyboard.type('suno');
+  await page.waitForTimeout(150);
+  check('the phone filter filters', (await page.locator('.row').count()) === (await page.locator('.row', { hasText: 'Suno' }).count()));
+  await page.keyboard.press('Escape');
+  check('Esc clears it and returns focus to its button', (await page.evaluate(() => document.activeElement?.classList.contains('filter-toggle') ?? false)) && (await page.locator('.row').count()) > 3);
+
+  // Moving up the list never parks focus under the sticky header.
+  for (let i = 0; i < 14; i += 1) await page.keyboard.press('j');
+  let covered = 0;
+  for (let i = 0; i < 12; i += 1) {
+    await page.keyboard.press('k');
+    if (await page.evaluate(() => document.activeElement.getBoundingClientRect().top < document.querySelector('header.bar').getBoundingClientRect().bottom - 1)) covered += 1;
+  }
+  check('moving up with K never hides the focused row under the header', covered === 0, `${covered} covered`);
+  check('no script errors at 400px', phone.errors.length === 0, phone.errors.join(' | '));
+  await phone.context.close();
+
+  // 320px is 1280px at 400% zoom: nothing may need sideways scrolling.
+  const small = await open(browser, { width: 320, height: 640 });
+  for (const [key, name, selector] of VIEWS) {
+    await small.page.keyboard.press(key);
+    await small.page.waitForSelector(selector);
+    await small.page.waitForTimeout(120);
+    check(`320px: ${name} does not scroll sideways`, (await overflow(small.page)) <= 0, `overflow ${await overflow(small.page)}px`);
+  }
+  await small.context.close();
+
+  const { context, page: desk, errors } = await open(browser);
+  // Figures and their annotations are separate words for a screen reader and the clipboard.
+  const stat = await desk.evaluate(() => [...document.querySelectorAll('.stat dd')].map((dd) => dd.textContent));
+  // "about $39 80% used", never "about $3980% used"; "$23.10 + $82.05 in credits", never "$23.10+ ...".
+  const apart = (text) => (!/% used$/.test(text) || / \d+% used$/.test(text)) && (!text.includes('+') || text.includes(' + '));
+  check('a figure and its annotation do not run together', stat.every(apart) && stat.some((text) => / \d+% used$/.test(text)), JSON.stringify(stat));
+  // The row's name for a screen reader carries its tags.
+  const named = await desk.evaluate(() => [...document.querySelectorAll('.row')].filter((row) => row.querySelector('.tag')).map((row) => ({ tag: row.querySelector('.tag').textContent, label: row.querySelector('.row-name').getAttribute('aria-label') })));
+  check('a row\'s accessible name includes its tags', named.length > 0 && named.every((row) => row.label.includes(row.tag)), JSON.stringify(named.slice(0, 2)));
+
+  // Tab from a menu continues from the button that opened it.
+  await desk.locator('#sort-button').focus();
+  await desk.keyboard.press('Enter');
+  await desk.waitForSelector('.menu');
+  await desk.keyboard.press('Tab');
+  const afterMenu = await desk.evaluate(() => ({ menu: document.querySelector('.menu') !== null, tag: document.activeElement?.tagName, inToolbar: document.activeElement?.closest('.toolbar') !== null }));
+  check('Tab in a menu closes it and carries on from its button', !afterMenu.menu && afterMenu.inToolbar, JSON.stringify(afterMenu));
+
+  // Focus rings are drawn inside boxes that would clip them, and a menu item shows one.
+  await desk.locator('#sort-button').focus();
+  await desk.keyboard.press('Enter');
+  await desk.waitForSelector('.menu');
+  const ring = await desk.evaluate(() => ({ style: getComputedStyle(document.activeElement).outlineStyle, offset: getComputedStyle(document.activeElement).outlineOffset, width: getComputedStyle(document.activeElement).outlineWidth }));
+  check('the focused menu item has a focus ring', ring.style === 'solid' && ring.offset === '-2px' && ring.width === '2px', JSON.stringify(ring));
+  await desk.keyboard.press('Escape');
+
+  // Single-key shortcuts can be switched off; arrow keys and Esc still work.
+  await desk.click('[aria-label="Menu"]');
+  await menuItem(desk, 'Single-key shortcuts').click();
+  await desk.locator('.tabs .tab').first().focus();
+  await desk.keyboard.press('2');
+  await desk.keyboard.press('t');
+  const off = await desk.evaluate(() => ({ board: document.querySelector('.cards') !== null, theme: document.documentElement.getAttribute('data-theme') }));
+  check('with single-key shortcuts off, 2 and T do nothing', !off.board && off.theme === null, JSON.stringify(off));
+  await desk.keyboard.press('ArrowDown');
+  check('arrow keys still move through the rows', (await desk.evaluate(() => document.activeElement?.getAttribute('data-nav'))) === 'row');
+  await desk.click('[aria-label="Menu"]');
+  await menuItem(desk, 'Single-key shortcuts').click();
+  await desk.locator('.tabs .tab').first().focus();
+  await desk.keyboard.press('2');
+  check('switched back on, 2 shows the Board', (await desk.$('.cards')) !== null);
+  await desk.keyboard.press('1');
+
+  // A message raised while a dialog is open is inside that dialog, where it can be read and announced.
+  await desk.click('[aria-label="Menu"]');
+  await menuItem(desk, 'Connect agents').click();
+  await desk.waitForSelector('dialog[open]');
+  await desk.locator('dialog[open] .snip .btn.small').first().click();
+  await desk.waitForSelector('.toast');
+  check('a toast raised from a dialog is shown inside it', await desk.evaluate(() => document.querySelector('dialog[open]').contains(document.querySelector('.toast'))));
+  await desk.keyboard.press('Escape');
+  check('and the region returns to the page when the dialog closes', await desk.evaluate(() => document.querySelector('.toasts').parentElement === document.body));
+
+  // The Add dialog keeps focus on the category that was chosen, and moves on to the plan after a provider.
+  await desk.keyboard.press('a');
+  await desk.waitForSelector('dialog[open]');
+  const coding = desk.locator('dialog[open] .chip-btn', { hasText: 'Coding' });
+  await coding.focus();
+  await desk.keyboard.press('Enter');
+  check('choosing a category in Add keeps focus on it', (await desk.evaluate(() => document.activeElement?.textContent)) === 'Coding');
+  await desk.locator('dialog[open] .provider').first().focus();
+  await desk.keyboard.press('Enter');
+  check('choosing a provider moves focus to its plans', await desk.evaluate(() => document.activeElement?.getAttribute('type') === 'radio'));
+  await desk.keyboard.press('Escape');
+
+  // A snoozed row keeps its text at full strength.
+  check('no row is faded as a whole', await desk.evaluate(() => [...document.querySelectorAll('.row')].every((row) => getComputedStyle(row).opacity === '1')));
+  check('no script errors', errors.length === 0, errors.join(' | '));
+  await context.close();
+
+  // Contrast themes: states that were fills or shadows are restated with system colours and outlines.
+  const forced = await browser.newContext({ viewport: { width: 1280, height: 900 }, forcedColors: 'active' });
+  const high = await forced.newPage();
+  await high.goto(URL_);
+  await high.waitForSelector('.row');
+  const marks = await high.evaluate(() => {
+    const style = (selector) => {
+      const el = document.querySelector(selector);
+      return el ? { outline: getComputedStyle(el).outlineStyle, background: getComputedStyle(el).backgroundColor, image: getComputedStyle(el).backgroundImage, border: getComputedStyle(el).borderBottomStyle } : null;
+    };
+    return { projection: style('.fbar .seg-proj'), expiring: style('.row.r-quiet .fbar .seg-exp'), tab: style('.tab[aria-current="page"]'), chip: style('.chip-btn[aria-pressed="true"]'), plain: style('.chip-btn[aria-pressed="false"]') };
+  });
+  check('forced colours: the projection is an outline, since shadows are dropped', marks.projection?.outline === 'solid', JSON.stringify(marks.projection));
+  check('forced colours: the expiring share is still hatched', /repeating-linear-gradient/.test(marks.expiring?.image ?? ''), JSON.stringify(marks.expiring));
+  check('forced colours: the current view and a pressed chip are marked', marks.tab?.border === 'solid' && marks.chip?.background !== marks.plain?.background, JSON.stringify({ tab: marks.tab, chip: marks.chip, plain: marks.plain }));
+  await forced.close();
+}
+
 // What the independent review found in the dashboard's logic, each pinned by a check.
 async function reviewed(browser) {
   console.log('\nReview findings');
@@ -738,6 +886,7 @@ async function reviewed(browser) {
     await motion(browser);
     await sampleStaysQuiet(browser);
     await designed(browser);
+    await accessible(browser);
     await reviewed(browser);
   } catch (error) {
     failures += 1;

@@ -248,12 +248,28 @@ The dashboard SHALL pair every colour-coded state with a text label or icon, SHA
 - **WHEN** the queue is sorted by anything other than "use first", so that it has no tier headings
 - **THEN** every row carries its tier as a mark and a label
 
+#### Scenario: A message raised from a dialog
+- **WHEN** an action inside a dialog confirms or fails
+- **THEN** the message is shown inside that dialog, where it is announced and not dimmed, and an error is announced as an alert
+
+#### Scenario: What a screen reader hears
+- **WHEN** a row carries a tag such as "updated 4d ago" or "blocked"
+- **THEN** the row's accessible name includes it, and a figure and its annotation are read as two separate values
+
+#### Scenario: A contrast theme
+- **WHEN** the system forces its own colours
+- **THEN** the shares of a bar, the current view, pressed controls, the selected row and keyboard focus are still distinguishable
+
+#### Scenario: Snoozed and estimated
+- **WHEN** a row is snoozed or a finished window is an estimate
+- **THEN** its text stays at full contrast and the estimate is drawn as an outline, not faded
+
 #### Scenario: Reduced motion
 - **WHEN** the system requests reduced motion
 - **THEN** bars and panels change without animation
 
 ### Requirement: Keyboard operation
-The dashboard SHALL be fully operable by keyboard and SHALL provide shortcuts to switch views, focus the filter, open quick entry, copy the brief, add an account, move through rows, open the inspector and show the list of shortcuts. Shortcuts SHALL be inactive while a text field has focus.
+The dashboard SHALL be fully operable by keyboard and SHALL provide shortcuts to switch views, focus the filter, open quick entry, copy the brief, add an account, move through rows, open the inspector and show the list of shortcuts. Shortcuts SHALL be inactive while a text field has focus, and the single-character ones SHALL be switchable off.
 
 #### Scenario: Switch view by key
 - **WHEN** the user presses 3 outside a text field
@@ -262,6 +278,18 @@ The dashboard SHALL be fully operable by keyboard and SHALL provide shortcuts to
 #### Scenario: Typing in a field
 - **WHEN** the user types "3" in the filter field
 - **THEN** the character is entered and the view does not change
+
+#### Scenario: Single-key shortcuts switched off
+- **WHEN** the user switches single-key shortcuts off and presses 2 or T
+- **THEN** nothing happens, while the arrow keys, Enter and Esc work as before
+
+#### Scenario: Tab from a menu
+- **WHEN** the user presses Tab in an open menu
+- **THEN** the menu closes and focus continues from the button that opened it
+
+#### Scenario: Focus is never parked under the header
+- **WHEN** the user moves up the list by key
+- **THEN** the focused row is scrolled clear of the sticky header
 
 #### Scenario: A key pressed over an open menu
 - **WHEN** the user presses 2 while a menu is open
@@ -277,6 +305,18 @@ The dashboard SHALL remain usable at a width of 400 CSS pixels: the page SHALL n
 #### Scenario: Phone width
 - **WHEN** the viewport is 400 pixels wide
 - **THEN** every view fits without horizontal page scrolling and all actions remain reachable
+
+#### Scenario: The inspector covers the page
+- **WHEN** the inspector opens on a screen narrower than the width at which it docks
+- **THEN** focus moves into it, the page behind it can neither take focus nor be operated, and closing it returns focus to the row
+
+#### Scenario: Filtering on a phone
+- **WHEN** the viewport is 400 pixels wide and the user presses "/" or the filter button
+- **THEN** the filter field opens on a row of its own with focus in it
+
+#### Scenario: Four hundred percent zoom
+- **WHEN** the viewport is 320 pixels wide
+- **THEN** no view needs sideways scrolling of the page
 
 #### Scenario: Inspector taller than the screen
 - **WHEN** the inspector is open on a screen shorter than its content

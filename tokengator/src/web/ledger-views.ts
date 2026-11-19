@@ -17,7 +17,8 @@ import { copyText } from './ui.js';
 /** Dollar credits that expired, shown beside the plan money and never added to it. */
 function creditNote(credits: Money, currency: string): HTMLElement | null {
   const text = formatMoneyTotals(credits, currency);
-  return text ? h('small', null, `+ ${text} in credits`) : null;
+  // Starts with a space, so the figure before it and this one are read and copied as two.
+  return text ? h('small', null, ` + ${text} in credits`) : null;
 }
 
 export function costsView(ctx: Ctx): HTMLElement {
@@ -65,7 +66,7 @@ export function costsView(ctx: Ctx): HTMLElement {
             'div',
             null,
             h('h3', null, h('span', { class: 'mono', 'aria-hidden': 'true' }, monogramFor(CATALOG, source.providerId, source.label)), source.label),
-            h('div', { class: 'big' }, formatMoney(summary.monthToDate, source.currency), h('small', null, 'this month')),
+            h('div', { class: 'big' }, formatMoney(summary.monthToDate, source.currency), h('small', null, ' this month')),
             budget
               ? h(
                   'div',
@@ -170,7 +171,7 @@ export function historyView(ctx: Ctx): HTMLElement {
           'div',
           { class: 'stat' },
           h('dt', { class: 'label' }, 'Utilisation, 30 days'),
-          h('dd', null, totals30.utilisation30 === null ? '—' : formatPercent(totals30.utilisation30), h('small', null, `${totals30.cycles30} window${totals30.cycles30 === 1 ? '' : 's'}`))
+          h('dd', null, totals30.utilisation30 === null ? '—' : formatPercent(totals30.utilisation30), h('small', null, ` ${totals30.cycles30} window${totals30.cycles30 === 1 ? '' : 's'}`))
         )
       )
     ),

@@ -225,6 +225,13 @@ export function sourceText(view: MeterView): string {
 }
 
 /** Small tags after a name: stale, assumed, blocked, snoozed. */
+/** The cautions of a row as words, for the row's accessible name: what the tags say, and why. */
+export function flagText(view: MeterView, nowMs: number): string {
+  return flags(view, nowMs)
+    .map((tag) => [tag.textContent, tag.title].filter(Boolean).join(' (') + (tag.title ? ')' : ''))
+    .join(', ');
+}
+
 export function flags(view: MeterView, nowMs: number): HTMLElement[] {
   const out: HTMLElement[] = [];
   if (view.blockedBy !== null) {

@@ -13,7 +13,7 @@ import type { Account, Meter, Price, ResetRule, SpendSource, Unit } from '../cor
 import { BackendError, type ReminderDelivery } from './backend.js';
 import type { Ctx } from './ctx.js';
 import { h, icon, type Child } from './dom.js';
-import { confirmDialog, copyText, openDialog } from './ui.js';
+import { confirmDialog, copyText, markFocus, openDialog, restoreFocus } from './ui.js';
 
 // ---------------------------------------------------------------------------
 // Small form helpers
@@ -98,6 +98,8 @@ function meterForm(meter: Meter | null, onRemove: ((form: MeterForm) => void) | 
   const kind = selectInput(`m${n}-kind`, RESET_KINDS, rule.kind);
   const every = textInput(`m${n}-every`, String(inDays ? hours / 24 : hours), '7', 'number');
   const everyUnit = selectInput(`m${n}-everyunit`, [{ id: 'hours', label: 'hours' }, { id: 'days', label: 'days' }], inDays ? 'days' : 'hours');
+  // The visible label "Length" belongs to the number beside it, so the unit gets a name of its own.
+  everyUnit.setAttribute('aria-label', 'Length unit');
   const day = textInput(`m${n}-day`, rule.kind === 'monthly' ? String(rule.day) : '1', '1', 'number');
   const time = textInput(`m${n}-time`, rule.kind === 'daily' || rule.kind === 'monthly' ? rule.time : '00:00', '00:00', 'time');
   const zone = textInput(`m${n}-tz`, rule.kind === 'daily' || rule.kind === 'monthly' ? rule.tz : localZone(), 'Europe/Stockholm');
@@ -141,11 +143,13 @@ function meterForm(meter: Meter | null, onRemove: ((form: MeterForm) => void) | 
     el: h(
       'fieldset',
       { class: 'meter-form', style: { margin: '0' } },
+      // The legend names the group for a screen reader: without it every meter's fields sound alike.
+      h('legend', { class: 'sr' }, meter ? meter.label : 'New meter'),
       h(
         'div',
         { class: 'meter-form-head' },
-        h('b', null, meter ? meter.label : 'New meter'),
-        onRemove ? h('button', { class: 'btn small quiet', type: 'button', onclick: () => onRemove(form) }, icon('trash'), 'Remove') : null
+        h('b', { 'aria-hidden': 'true' }, meter ? meter.label : 'New meter'),
+        onRemove ? h('button', { class: 'btn small quiet', type: 'button', 'aria-label': `Remove ${meter ? meter.label : 'this new meter'}`, onclick: () => onRemove(form) }, icon('trash'), 'Remove') : null
       ),
       h('div', { class: 'form-grid' }, field('Name', label), field('Kind', role), field('Counted in', unit), limitField, nounField, field('Used so far', used)),
       h('div', { class: 'form-grid' }, field('Resets', kind, undefined, true), everyField, dayField, timeField, zoneField, resetsField, valueRow, carryRow, partialRow)
@@ -333,8 +337,11 @@ export function addDialog(ctx: Ctx): void {
             'aria-pressed': String(category === id),
             onclick: () => {
               category = id;
+              // The buttons are rebuilt; focus stays on the one that was pressed.
+              const mark = markFocus(dialog.el, []);
               drawChips();
               drawGrid();
+              restoreFocus(dialog.el, mark);
             }
           },
           id === 'all' ? 'All' : CATEGORY_LABEL[id]
@@ -361,6 +368,8 @@ export function addDialog(ctx: Ctx): void {
               custom = false;
               drawGrid();
               drawDetail();
+              // On to the next decision: which plan.
+              detail.querySelector<HTMLElement>('input[type="radio"]')?.focus();
             }
           },
           h('span', { class: 'mono', 'aria-hidden': 'true' }, entry.monogram),
@@ -751,6 +760,12 @@ const SOURCE_KIND: Record<string, string> = {
 export function sourcesDialog(ctx: Ctx): void {
   const dialog = openDialog({ title: 'Automatic sources', class: 'wide' });
   const draw = (): void => {
+    // The panel is rebuilt with the same controls in the same order, so focus stays where it was.
+    const mark = markFocus(dialog.el, []);
+    paint();
+    restoreFocus(dialog.el, mark, true);
+  };
+  const paint = (): void => {
     const { collectors, demo, now } = ctx.app.model;
     dialog.body.replaceChildren();
     dialog.body.appendChild(
@@ -839,6 +854,12 @@ export function remindersDialog(ctx: Ctx, tab: TabNotifications): void {
   const tag = (text: string, warn = false): HTMLElement => h('span', { class: warn ? 'tag warn' : text === 'on' ? 'tag on' : 'tag' }, text);
 
   const draw = (): void => {
+    // The panel is rebuilt with the same controls in the same order, so focus stays where it was.
+    const mark = markFocus(dialog.el, []);
+    paint();
+    restoreFocus(dialog.el, mark, true);
+  };
+  const paint = (): void => {
     const { reminders, demo, meta, state, backend } = ctx.app.model;
     const live = !demo && backend.kind === 'http';
     const desktopOn = live && reminders.desktop.enabled;
@@ -969,12 +990,13 @@ export const SHORTCUTS: readonly { keys: string[]; what: string }[] = [
 
 export function shortcutsDialog(): void {
   const dialog = openDialog({ title: 'Keyboard shortcuts' });
-  dialog.body.appendChild(
+  dialog.body.append(
     h(
       'dl',
       { class: 'keys' },
       SHORTCUTS.flatMap((entry) => [h('dt', null, entry.keys.map((key) => h('kbd', { class: 'k' }, key))), h('dd', null, entry.what)])
-    )
+    ),
+    h('p', { class: 'hint', style: { marginTop: '12px' } }, 'Single keys can be switched off under Menu > Single-key shortcuts, for dictation and voice control. Arrow keys, Enter and Esc always work.')
   );
   dialog.foot.append(h('span', { class: 'sp' }), h('button', { class: 'btn primary', type: 'button', onclick: dialog.close }, 'Done'));
 }

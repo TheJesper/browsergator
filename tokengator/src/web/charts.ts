@@ -150,7 +150,8 @@ export function cycleColumns(cycles: readonly ClosedCycle[], nowMs: number, widt
     const usedHeight = Math.max(usedFraction > 0 ? 2 : 0, usedFraction * plot);
     // The gap between the two parts is surface, not a stroke.
     const wastedHeight = cycle.wastedFraction >= 0.02 ? Math.max(2, cycle.wastedFraction * plot - 2) : 0;
-    const group = s('g', { opacity: cycle.confidence === 'estimated' ? 0.6 : 1 });
+    // An estimated window is drawn as outlines, at full strength: fading it would take it below 3:1.
+    const group = s('g', { class: cycle.confidence === 'estimated' ? 'est' : null });
     if (usedHeight > 0) {
       group.appendChild(
         s('path', {

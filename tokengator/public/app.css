@@ -36,6 +36,8 @@
   --ok-ink: #2a6a3f;
   --hot-ink: #6b5600;
   --stop-ink: #9c2457;
+  /* Text on a --stop fill. */
+  --on-stop: #ffffff;
 
   --focus: #13618d;
   /* Boundaries of inputs: 3:1 against the surfaces they sit on. */
@@ -84,6 +86,7 @@
     --ok-ink: #9dd4ab;
     --hot-ink: #e8cf83;
     --stop-ink: #faa9c1;
+    --on-stop: #192529;
     --focus: #8dccf9;
     --control: #738488;
     --select: #263947;
@@ -115,6 +118,7 @@
   --ok-ink: #9dd4ab;
   --hot-ink: #e8cf83;
   --stop-ink: #faa9c1;
+  --on-stop: #192529;
   --focus: #8dccf9;
   --control: #738488;
   --select: #263947;
@@ -208,10 +212,13 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
   font-weight: 500; font-size: 13.5px; white-space: nowrap; cursor: pointer;
 }
 .tab:hover { color: var(--ink); }
+/* These sit in boxes that clip what is drawn outside them, so their focus ring is drawn inside. */
+.tab:focus-visible, .seg button:focus-visible, .menu-item:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .tab[aria-current="page"] { color: var(--ink); }
 .tab[aria-current="page"]::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; background: var(--ink); }
 .tab .count { font: 600 11.5px/1 var(--font-ui); color: var(--expiring-ink); }
 .bar-tools { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.filter-toggle { display: none; }
 .filter { position: relative; display: flex; align-items: center; }
 .filter .ico { position: absolute; left: 9px; color: var(--ink-3); pointer-events: none; }
 .filter input {
@@ -263,7 +270,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 .seg button { height: 28px; padding: 0 10px; border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--ink-3); font-size: 12.5px; font-weight: 500; cursor: pointer; }
 .seg button:first-child { border-left: 0; }
 .seg button:hover { color: var(--ink); }
-.seg button[aria-pressed="true"] { background: var(--raised); color: var(--ink); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip-btn { height: 26px; padding: 0 9px; border: 1px solid var(--line); border-radius: 13px; background: transparent; color: var(--ink-3); font-size: 12.5px; cursor: pointer; }
 .chip-btn:hover { color: var(--ink); border-color: var(--line-strong); }
@@ -353,7 +360,7 @@ button.link:hover { color: var(--ink); }
 .legend .l-today { background: var(--ink-2); }
 .legend .l-budget { width: 14px; height: 0; border-top: 1px dashed var(--ink); background: none; border-radius: 0; }
 .legend .l-line { width: 14px; height: 2px; border-radius: 1px; background: var(--used); }
-.legend .l-guide { width: 14px; height: 1px; background: var(--line-strong); }
+.legend .l-guide { width: 14px; height: 1px; background: var(--control); }
 .legend .l-dash { width: 14px; height: 0; border-top: 2px dashed var(--used); background: none; }
 
 /* ---- queue ---------------------------------------------------------------- */
@@ -388,7 +395,9 @@ button.link:hover { color: var(--ink); }
   background-image: repeating-linear-gradient(135deg, var(--expiring) 0 1.5px, transparent 1.5px 5px);
 }
 .row.selected, .row.selected:hover { background: var(--select); }
-.row.snoozed { opacity: 0.6; }
+/* A snoozed row is still a row to read and operate, so its text is not faded. Its bar goes quiet instead;
+   the tag and the Snoozed heading say the rest. */
+.row.snoozed .fbar-track { filter: saturate(0.3); }
 .row > .mono { grid-area: mono; }
 .row-name { grid-area: name; min-width: 0; display: block; padding: 0; border: 0; background: none; text-align: left; cursor: pointer; }
 /* A name is never shortened to make room for a tag: when both do not fit, the tag moves to a line of its own. */
@@ -485,7 +494,7 @@ button.link:hover { color: var(--ink); }
 .chart text { font: 400 11px var(--font-ui); fill: var(--ink-3); }
 .chart .grid { stroke: var(--line); stroke-width: 1; }
 .chart .axis { stroke: var(--line-strong); stroke-width: 1; }
-.chart .guide { stroke: var(--line-strong); stroke-width: 1; fill: none; }
+.chart .guide { stroke: var(--control); stroke-width: 1; fill: none; }
 .chart .actual { stroke: var(--used); stroke-width: 2; fill: none; stroke-linejoin: round; stroke-linecap: round; }
 .chart .area { fill: var(--used); opacity: 0.1; }
 .chart .proj { stroke: var(--used); stroke-width: 2; fill: none; stroke-dasharray: 4 4; stroke-linecap: round; }
@@ -495,6 +504,10 @@ button.link:hover { color: var(--ink); }
 .chart .waste-solid { fill: var(--expiring); }
 .chart .col-used { fill: var(--used); }
 .chart .col-ok { fill: var(--ok); }
+/* A window nobody observed is an estimate, and an estimate is an outline, as in the forecast bar. */
+.chart .est .col-used { fill: none; stroke: var(--used); stroke-width: 1.5; }
+.chart .est .col-ok { fill: none; stroke: var(--ok); stroke-width: 1.5; }
+.chart .est .waste-solid { fill: none; stroke: var(--expiring); stroke-width: 1.5; }
 .chart .col-spend { fill: var(--used); }
 .chart .col-today { fill: var(--ink-2); }
 .chart .budget { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 2 3; }
@@ -633,7 +646,7 @@ button.link:hover { color: var(--ink); }
   padding: 5px; border: 1px solid var(--line-strong); border-radius: var(--r-3); background: var(--surface); box-shadow: var(--shadow);
 }
 .menu-item { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 9px; border: 0; border-radius: var(--r-2); background: transparent; text-align: left; font-size: 13px; cursor: pointer; }
-.menu-item:hover, .menu-item:focus-visible { background: var(--raised); outline: none; }
+.menu-item:hover, .menu-item:focus-visible { background: var(--raised); }
 .menu-item .ico { color: var(--ink-3); }
 .menu-item .end { margin-left: auto; color: var(--ink-3); font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
 .menu-item[aria-checked="true"] .end { color: var(--ink); }
@@ -722,10 +735,14 @@ textarea.input { height: auto; min-height: 72px; padding: 8px 10px; resize: vert
 /* ---- toast ---------------------------------------------------------------- */
 .toasts { position: fixed; z-index: 80; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); display: grid; gap: 8px; justify-items: center; pointer-events: none; }
 .toast { display: inline-flex; align-items: center; gap: 8px; padding: 8px 13px; border-radius: 18px; background: var(--ink); color: var(--bg); font-size: 13px; font-weight: 500; box-shadow: var(--shadow); animation: toast-in 160ms ease-out; }
-.toast.err { background: var(--stop); color: #fff; }
+.toast.err { background: var(--stop); color: var(--on-stop); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 /* ---- narrow header -------------------------------------------------------- */
+/* Scrolling a control into view, by key or by focus, stops short of the sticky header. The header's real
+   height is measured by the page and written to --header-h. */
+html { scroll-padding-top: calc(var(--header-h) + env(safe-area-inset-top, 0px) + 8px); }
+
 @media (max-width: 900px) {
   .bar { flex-wrap: wrap; gap: 0 12px; padding-top: 8px; }
   .tabs { order: 3; flex: 1 1 100%; height: 38px; margin: 4px calc(-1 * var(--gutter-r)) 0 calc(-1 * var(--gutter)); padding: 0 calc(var(--gutter) - 10px); border-top: 1px solid var(--line); }
@@ -735,7 +752,11 @@ textarea.input { height: auto; min-height: 72px; padding: 8px 10px; resize: vert
   .insp { top: 0; }
 }
 @media (max-width: 560px) {
+  /* The filter is a button here that opens the field on a row of its own; "/" does the same. */
   .filter { display: none; }
+  .bar.filter-open .filter { display: flex; order: 4; flex: 1 1 100%; margin: 6px 0 8px; }
+  .bar.filter-open .filter input { width: 100%; }
+  .filter-toggle { display: inline-flex; }
   /* A phone shows the list in its top half: the summary is tighter, the figure the headline already
      carries is not repeated, and the toolbar is one line that scrolls sideways. */
   .summary { padding-top: 14px; padding-bottom: 12px; gap: 10px; }
@@ -744,21 +765,50 @@ textarea.input { height: auto; min-height: 72px; padding: 8px 10px; resize: vert
   .stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; width: 100%; }
   .stat, .stat:first-child { padding: 0; border-left: 0; }
   .stat dd { font-size: 16px; }
-  .toolbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
-  .toolbar::-webkit-scrollbar { display: none; }
+  /* One line that scrolls sideways, with its right edge faded so that it shows there is more. */
+  .toolbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); padding-right: 36px; }
   .chips { flex-wrap: nowrap; }
   .select-btn, .check, .chip-btn, .seg { flex: none; white-space: nowrap; }
   .toolbar .legend, .toolbar .spacer { display: none; }
   /* The first day mark would sit on top of "now". */
   .tl-tick.near { display: none; }
+  /* The figures under a bar wrap rather than lose their end, which is the part that says what expires. */
+  .fcap { white-space: normal; }
+  /* On a lane this narrow the figures cannot sit beside the bar's end without leaving the screen, so the
+     bar keeps the top of the lane and the figures get a line of their own under it, from the left. */
+  .tl-lane { min-height: 54px; }
+  .tl-span { top: 13px; margin-top: 0; }
+  .tl-end, .tl-end.flip { left: 0 !important; right: 0; top: auto; bottom: 7px; transform: none; padding: 0 0 0 6px; margin: 0; white-space: normal; flex-wrap: wrap; gap: 0 6px; }
+  /* Two figures side by side wrap inside their own half instead of running into each other. */
+  .stat dd { white-space: normal; }
+  /* A reset further out than the horizon: its figures go under the name rather than off the screen. */
+  .tl-later li { flex-wrap: wrap; }
+  .tl-later li .num { margin-left: 0; white-space: normal; flex-basis: 100%; padding-left: 22px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
 @media (forced-colors: active) {
-  .fbar .seg-used { background: Highlight; }
-  .fbar .seg-proj, .tl-span { background: transparent; box-shadow: inset 0 0 0 2px GrayText; }
-  .fbar .seg-exp { background: Mark; }
+  /* In a contrast theme the system drops shadows and repaints backgrounds, so every state that was a fill
+     or a shadow is restated here with system colours, borders and outlines. */
+  .fbar-track, .budget-bar, .legend i, .live i, .tl-span { forced-color-adjust: none; }
+  .fbar-track, .budget-bar { background: Canvas; outline: 1px solid CanvasText; }
+  .fbar .fbar-track .seg-used, .budget-bar i, .legend .l-used, .legend .l-today { background: Highlight; }
+  .fbar.is-spent .fbar-track .seg-used, .legend .l-ok { background: CanvasText; }
+  .fbar .fbar-track .seg-proj, .legend .l-proj { background: Canvas; box-shadow: none; outline: 2px solid Highlight; outline-offset: -2px; }
+  .row .fbar .fbar-track .seg-exp, .fbar .fbar-track .seg-exp, .legend .l-exp, .tl-span.exp {
+    background-color: Canvas;
+    background-image: repeating-linear-gradient(135deg, CanvasText 0 2px, Canvas 2px 5px);
+  }
+  .tl-span { background: Canvas; box-shadow: none; outline: 2px solid Highlight; outline-offset: -2px; }
+  .tl-span.ok { background: CanvasText; outline: 0; }
   .fbar-now { background: CanvasText; box-shadow: none; }
+  .live i { background: CanvasText; }
+  /* What is current, pressed or selected. */
+  .tab[aria-current="page"] { border-bottom: 2px solid Highlight; }
+  .chip-btn[aria-pressed="true"], .seg button[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .row.selected, .card.selected, .tl-row.selected { outline: 2px solid Highlight; outline-offset: -2px; }
+  .menu-item:focus-visible, .tab:focus-visible, .seg button:focus-visible { outline: 2px solid Highlight; outline-offset: -2px; }
 }
+
