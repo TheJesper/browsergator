@@ -720,6 +720,17 @@ describe('connect', () => {
   });
 });
 
+describe('the README and the connect command agree', () => {
+  it('every connection command the README shows is one `tokengator connect` prints', async () => {
+    const readme = readFileSync(join(packageRoot(), 'README.md'), 'utf8');
+    const shown = readme.split('\n').filter((line) => /^(claude|codex|gemini) mcp add /.test(line));
+    expect(shown.length).toBeGreaterThanOrEqual(3);
+    const io = makeIo();
+    expect(await connect([], io)).toBe(0);
+    for (const line of shown) expect(io.out(), line).toContain(line);
+  });
+});
+
 describe('export and import', () => {
   it('round-trips the whole state through a file', async () => {
     await seed();

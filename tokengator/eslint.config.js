@@ -59,7 +59,9 @@ export default tseslint.config(
         document: 'readonly',
         navigator: 'readonly',
         getComputedStyle: 'readonly',
-        HTMLElement: 'readonly'
+        HTMLElement: 'readonly',
+        window: 'readonly',
+        Notification: 'writable'
       }
     },
     rules: { '@typescript-eslint/no-require-imports': 'off' }

@@ -321,6 +321,38 @@ async function managing(browser) {
   await context.close();
 }
 
+async function reminders(browser) {
+  console.log('\nReminders panel');
+  const { context, page, errors } = await open(browser);
+  // Nothing may ask for notification permission before the person chooses to switch it on.
+  await page.evaluate(() => {
+    window.__asked = 0;
+    const ask = Notification.requestPermission.bind(Notification);
+    Notification.requestPermission = (...args) => {
+      window.__asked += 1;
+      return ask(...args);
+    };
+  });
+  await page.locator('[aria-label="Menu"]').click();
+  await menuItem(page, 'Reminders').click();
+  await page.waitForSelector('dialog[open]');
+  const panel = page.locator('dialog[open]');
+  const text = await panel.innerText();
+  check('the panel lists every route: tab, this computer, phone or chat, calendar', ['In this browser tab', 'On this computer', 'On your phone or in a chat', 'In your calendar'].every((title) => text.includes(title)));
+  check('on sample data it says which routes need the local service', /Needs the local service/.test(text));
+  check('opening the panel asks for no permission', (await page.evaluate(() => window.__asked)) === 0);
+  await panel.locator('.collector', { hasText: 'In this browser tab' }).getByRole('button').click();
+  await page.waitForTimeout(250);
+  check('switching the tab route on is what asks for permission', (await page.evaluate(() => window.__asked)) === 1);
+  await panel.locator('button', { hasText: 'Copy as .ics' }).click();
+  await page.waitForTimeout(150);
+  const ics = await clipboard(page);
+  check('the calendar copies as an iCalendar document', ics.startsWith('BEGIN:VCALENDAR') && ics.includes('BEGIN:VEVENT') && ics.trimEnd().endsWith('END:VCALENDAR'), ics.slice(0, 60));
+  await page.keyboard.press('Escape');
+  check('no script errors', errors.length === 0, errors.join(' | '));
+  await context.close();
+}
+
 async function keyboard(browser) {
   console.log('\nKeyboard only');
   const { context, page, errors } = await open(browser);
@@ -412,6 +444,7 @@ async function motion(browser) {
     await inspector(browser);
     await copying(browser);
     await managing(browser);
+    await reminders(browser);
     await keyboard(browser);
     await motion(browser);
   } catch (error) {
