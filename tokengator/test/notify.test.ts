@@ -144,6 +144,11 @@ describe('webhookRequest', () => {
     expect(injected.headers['Title']).toBeUndefined();
   });
 
+  it('sends Slack a name as text, whatever is written in it', () => {
+    const request = webhookRequest(target('https://hooks.slack.com/services/T0/B0/xyz'), { title: 'Use <!channel> & <@U123> now', body: 'See <https://evil.example|here>.' });
+    expect(JSON.parse(request.body)).toEqual({ text: '*Use &lt;!channel&gt; &amp; &lt;@U123&gt; now*\nSee &lt;https://evil.example|here&gt;.' });
+  });
+
   it('speaks JSON to Slack and Discord, and lets nothing ping anyone', () => {
     expect(JSON.parse(webhookRequest(target('https://hooks.slack.com/services/T0/B0/xyz'), message).body)).toEqual({
       text: '*Use Claude Max now*\n38% left of the weekly limit, resets in 14h.'
@@ -185,6 +190,18 @@ describe('ReminderRunner', () => {
     const again = await h.runner.check();
     expect(again.due).toEqual([]);
     expect(h.commands).toHaveLength(1);
+  });
+
+  it('delivers a reminder for a name that a hand-edited file filled with control characters', async () => {
+    const state = stateWith([['Claude Max', weekly(14, 62)]], true);
+    const NUL = String.fromCharCode(0);
+    const ESC = String.fromCharCode(27);
+    const edited: State = { ...state, accounts: state.accounts.map((account) => ({ ...account, label: `Clau${NUL}de${ESC}[2J\rMax` })) };
+    const h = harness(edited);
+    expect((await h.runner.check()).deliveries).toEqual([{ channel: 'desktop', ok: true }]);
+    const [title, body] = h.commands[0]?.args.slice(-2) ?? [];
+    expect(title).toBe('Use Clau de [2J Max now');
+    for (const text of [title ?? '', body ?? '']) expect([...text].every((char) => (char.codePointAt(0) ?? 0) >= 32)).toBe(true);
   });
 
   it('folds several due quotas into one notification', async () => {

@@ -288,6 +288,22 @@ export class TokengatorService {
     });
   }
 
+  /**
+   * Switches one collector on or off. The list is changed where it is read, inside the store's lock, so
+   * two switches made at the same moment (two clicks, or the dashboard and the command line) both take
+   * effect. Returns whether the collector is on afterwards, read back from what was stored.
+   */
+  setCollectorEnabled(id: string, enabled: boolean): Promise<boolean> {
+    return this.mutate((state) => {
+      const current = new Set(state.settings.enabledCollectors);
+      if (current.has(id) === enabled) return { state, result: enabled };
+      if (enabled) current.add(id);
+      else current.delete(id);
+      const next = updateSettings(state, { enabledCollectors: [...current] });
+      return { state: next, result: next.settings.enabledCollectors.includes(id) };
+    });
+  }
+
   exportState(): Promise<State> {
     return this.state();
   }

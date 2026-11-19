@@ -192,12 +192,14 @@ keys of the automatic sources.
 
 - Listens on loopback. It refuses to start on any other address without `TOKENGATOR_TOKEN`.
 - Every request must carry the service's own Host header (DNS rebinding) and, on the API and MCP
-  endpoint, must not come from another origin. Writes are JSON only, 256 KB at most.
+  endpoint, must not come from another origin. Writes are JSON only, 256 KB at most (16 MB for importing a backup).
 - With a token: bearer header, or a session cookie obtained by opening
   `http://127.0.0.1:4777/#token=…` once. The token is never accepted in a query string.
 - Collectors may contact only their own provider over HTTPS and do not follow redirects.
 - Reminder text reaches the notification command as arguments or environment variables, never
   through a shell. The reminder address must be HTTPS and is never stored, logged or shown.
+- Numbers, window lengths, dates and names are bounded where they enter, and the store refuses to
+  write a document it could not read back. The home directory is created for its owner only.
 - Logs go to standard error and pass through redaction.
 
 ## How the forecast works

@@ -17,6 +17,25 @@ The system SHALL represent each subscription as an account with a provider, a la
 - **WHEN** a client submits an account with no meters
 - **THEN** the request is rejected with a message naming the missing meters and nothing is stored
 
+### Requirement: Bounds on what is accepted
+The system SHALL accept amounts, limits, prices and spend only as finite numbers from 0 to 1e12 (a limit from 1e-6), SHALL accept a window length only from one minute to 366 days, SHALL accept a date and time only in ISO 8601 form between the years 1990 and 2200, and SHALL remove control characters from names and labels (line breaks are kept in notes only). An input outside these bounds SHALL be refused with an error naming the field.
+
+#### Scenario: Window of no length
+- **WHEN** a meter is created with a reset interval of 1e-320 hours
+- **THEN** it is refused with an error naming `reset.hours`
+
+#### Scenario: A number that is not a date
+- **WHEN** a meter's reset time is set to the text `1`
+- **THEN** it is refused with an error naming `resetsAt`
+
+#### Scenario: Escape sequences in a name
+- **WHEN** an account is named with terminal escape sequences, a carriage return and a NUL
+- **THEN** the stored name contains none of them
+
+#### Scenario: A stored rule that cannot be stepped
+- **WHEN** a state file already holds a meter with a window of no length and its reset time passes
+- **THEN** the meter goes back to waiting for a reset time and every other read still works
+
 ### Requirement: Limits on part of a plan
 The system SHALL let a throttle meter be marked as covering only part of a plan, such as one model family inside a weekly allowance. Such a meter SHALL be shown with its own usage and reset, SHALL never be counted as waste, and SHALL NOT mark the rest of the account as blocked when it is reached.
 

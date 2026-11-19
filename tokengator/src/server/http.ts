@@ -11,7 +11,7 @@ import { CATALOG, CATALOG_CHECKED } from '../core/catalog.js';
 import type { SpendSourceInput } from '../core/spend.js';
 import type { MeterSource, Price, Reading, Settings } from '../core/types.js';
 import type { CollectorHost, CollectorStatus } from './collectors/types.js';
-import { MAX_BODY_BYTES, VERSION, type ServiceConfig } from './config.js';
+import { MAX_BODY_BYTES, MAX_IMPORT_BYTES, VERSION, type ServiceConfig } from './config.js';
 import { calendarFeed } from '../core/reminders.js';
 import { log } from './logger.js';
 import type { ReminderRunner, ReminderStatus } from './notify.js';
@@ -62,7 +62,7 @@ const EVENT_BACKLOG_BYTES = 64 * 1024;
  * resets the connection and the client never sees the answer, so a moderately oversized body is drained
  * first; beyond this the connection is closed instead.
  */
-const DRAIN_LIMIT_BYTES = 4 * MAX_BODY_BYTES;
+const DRAIN_FACTOR = 4;
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
   '.html': 'text/html; charset=utf-8',
@@ -216,17 +216,14 @@ function requireJson(req: IncomingMessage): void {
   }
 }
 
-function tooLarge(drained: boolean): HttpError {
-  return new HttpError(
-    413,
-    'too_large',
-    `The request body is larger than ${MAX_BODY_BYTES / 1024} KB.`,
-    drained ? {} : { Connection: 'close' }
-  );
+function tooLarge(limit: number, drained: boolean): HttpError {
+  const size = limit >= 1024 * 1024 ? `${limit / (1024 * 1024)} MB` : `${limit / 1024} KB`;
+  return new HttpError(413, 'too_large', `The request body is larger than ${size}.`, drained ? {} : { Connection: 'close' });
 }
 
-/** Reads a request body, refusing to hold more than MAX_BODY_BYTES of it. */
-function readBody(req: IncomingMessage): Promise<Buffer> {
+/** Reads a request body, refusing to hold more than `limit` bytes of it. */
+function readBody(req: IncomingMessage, limit: number = MAX_BODY_BYTES): Promise<Buffer> {
+  const drainLimit = DRAIN_FACTOR * limit;
   return new Promise<Buffer>((done, fail) => {
     if (req.destroyed) {
       // Gone before anyone listened: none of the events below would ever fire.
@@ -234,8 +231,8 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
       return;
     }
     const declared = Number(req.headers['content-length']);
-    if (Number.isFinite(declared) && declared > DRAIN_LIMIT_BYTES) {
-      fail(tooLarge(false));
+    if (Number.isFinite(declared) && declared > drainLimit) {
+      fail(tooLarge(limit, false));
       return;
     }
     const chunks: Buffer[] = [];
@@ -250,15 +247,15 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
     };
     const onData = (chunk: Buffer): void => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES && !over) {
+      if (size > limit && !over) {
         over = true;
         chunks.length = 0;
       }
       if (!over) chunks.push(chunk);
-      else if (size > DRAIN_LIMIT_BYTES) settle(() => fail(tooLarge(false)));
+      else if (size > drainLimit) settle(() => fail(tooLarge(limit, false)));
     };
     req.on('data', onData);
-    req.once('end', () => settle(() => (over ? fail(tooLarge(true)) : done(Buffer.concat(chunks, size)))));
+    req.once('end', () => settle(() => (over ? fail(tooLarge(limit, true)) : done(Buffer.concat(chunks, size)))));
     req.once('error', () => settle(() => fail(new ClientGoneError())));
     req.once('close', () => settle(() => fail(new ClientGoneError())));
   });
@@ -566,7 +563,9 @@ export class TokengatorHttpServer {
     let body: unknown;
     if ((method === 'POST' || method === 'PATCH') && hasBody(req)) {
       requireJson(req);
-      body = parseJson(await readBody(req));
+      // An import carries a whole state document; everything else is a few fields.
+      const importing = found.route.path.length === 1 && found.route.path[0] === 'import';
+      body = parseJson(await readBody(req, importing ? MAX_IMPORT_BYTES : MAX_BODY_BYTES));
     }
     await found.route.handle({ req, res, params: found.params, body });
   }

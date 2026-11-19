@@ -71,13 +71,20 @@ const COMMAND_TIMEOUT_MS = 15_000;
 
 function runCommand(command: DesktopCommand): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command.command, command.args, {
-      stdio: 'ignore',
-      windowsHide: true,
-      shell: false,
-      timeout: COMMAND_TIMEOUT_MS,
-      env: { ...process.env, ...command.env }
-    });
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command.command, command.args, {
+        stdio: 'ignore',
+        windowsHide: true,
+        shell: false,
+        timeout: COMMAND_TIMEOUT_MS,
+        env: { ...process.env, ...command.env }
+      });
+    } catch {
+      // Node refuses some arguments outright. Its message quotes them, so it is not passed on.
+      reject(new Error(`${command.command} could not be started.`));
+      return;
+    }
     child.once('error', (error: NodeJS.ErrnoException) => {
       reject(new Error(error.code === 'ENOENT' ? `${command.command} is not installed.` : `${command.command} could not be started.`));
     });
@@ -127,7 +134,9 @@ const headerSafe = (text: string): boolean => /^[\x20-\x7E]*$/.test(text);
 
 export function webhookRequest(target: WebhookTarget, message: OutgoingMessage): { headers: Record<string, string>; body: string } {
   if (target.format === 'slack') {
-    return { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: `*${message.title}*\n${message.body}` }) };
+    // Slack reads <!channel>, <@U…> and <http…|text> inside angle brackets. Escaped, a name is only a name.
+    const literal = (text: string): string => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: `*${literal(message.title)}*\n${literal(message.body)}` }) };
   }
   if (target.format === 'discord') {
     // Nothing in a reminder should ping anyone, whatever an account happens to be called.
@@ -351,7 +360,7 @@ export class ReminderRunner {
       this.memory = sent;
       return;
     }
-    await mkdir(this.options.home, { recursive: true });
+    await mkdir(this.options.home, { recursive: true, mode: 0o700 });
     const temp = `${file}.${process.pid}.tmp`;
     try {
       await writeFile(temp, `${JSON.stringify({ sent }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });

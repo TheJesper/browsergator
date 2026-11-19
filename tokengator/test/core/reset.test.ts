@@ -846,3 +846,42 @@ describe('rollState', () => {
     expect(ends).toEqual(ends.slice().sort());
   });
 });
+
+describe('numbers that would not survive being stored', () => {
+  it('refuses a reading whose amount overflows once it is scaled to the meter', () => {
+    const { state, account, meter } = one({ label: 'Weekly', reset: WEEKLY });
+    // 1e12 out of 1e-6 on a percent meter is 1e20 percent: each input is in range, the result is not.
+    expectReadingError(() => applyReadingToState(state, account.id, meter.id, { used: 1e12, limit: 1e-6 }, NOW), 'used');
+    // The reviewer's case: a limit that small is refused before anything is divided by it.
+    expectReadingError(() => applyReadingToState(state, account.id, meter.id, { used: 1e308, limit: 1e-300 }, NOW), 'limit');
+    expectReadingError(() => applyReadingToState(state, account.id, meter.id, { used: 5, limit: 1e308 }, NOW), 'limit');
+    expectReadingError(() => applyReadingToState(state, account.id, meter.id, { used: Number.POSITIVE_INFINITY }, NOW), 'used');
+    expectReadingError(() => applyReadingToState(state, account.id, meter.id, { remaining: Number.NaN }, NOW), 'remaining');
+    const counted = one({ label: 'Credits', unit: 'credits', limit: 1000, reset: WEEKLY });
+    expectReadingError(() => applyReadingToState(counted.state, counted.account.id, counted.meter.id, { usedPercent: 100, limit: 1e308 }, NOW), 'limit');
+  });
+
+  it('refuses a reset time that is not an ISO 8601 date and time, or is outside any sensible range', () => {
+    const { state, account, meter } = one({ label: 'Weekly', reset: WEEKLY });
+    for (const bad of ['1', 'next friday', '275760-09-13T00:00:00Z', '0001-01-01T00:00:00Z']) {
+      expectReadingError(() => applyReadingToState(state, account.id, meter.id, { usedPercent: 10, resetsAt: bad }, NOW), 'resetsAt');
+    }
+    expectReadingError(() => applyReadingToState(state, account.id, meter.id, { usedPercent: 10, windowStartedAt: '7' }, NOW), 'windowStartedAt');
+  });
+
+  it('does not let a window of no length in a stored file take every read down', () => {
+    // Validation refuses this rule now. A file written before that, or edited by hand, may still hold it.
+    const { state, meter } = one({ label: 'Tiny', reset: { kind: 'interval', hours: 1 }, resetsAt: iso(NOW + HOUR) });
+    const broken: State = {
+      ...state,
+      accounts: state.accounts.map((account) => ({
+        ...account,
+        meters: account.meters.map((entry) => (entry.id === meter.id ? { ...entry, reset: { kind: 'interval' as const, hours: 1e-320 } } : entry))
+      }))
+    };
+    const rolled = rollState(broken, NOW + 2 * HOUR);
+    const after = rolled.accounts[0]?.meters[0] as Meter;
+    expect(after.resetsAt).toBeNull();
+    expect(JSON.parse(JSON.stringify(rolled))).toEqual(rolled);
+  });
+});

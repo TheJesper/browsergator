@@ -200,6 +200,19 @@ describe('calendarFeed', () => {
     expect(events(calendarFeed(add(emptyState(), 'Codex', [rolling]), NOW))).toHaveLength(1);
   });
 
+  it('never lets a name start a calendar line of its own', () => {
+    const state = add(emptyState(), 'Claude Max', [weekly(14, 62)]);
+    const edited: State = {
+      ...state,
+      accounts: state.accounts.map((account) => ({ ...account, label: 'Claude\rATTENDEE:mailto:x@evil.example\nMax' }))
+    };
+    const feed = calendarFeed(edited, NOW, { daysAhead: 1 });
+    const lines = feed.replace(/\r\n /g, '').split('\r\n');
+    expect(lines.some((line) => line.startsWith('ATTENDEE'))).toBe(false);
+    // Every line break in the document is the CR LF that ends a line.
+    expect(feed.replace(/\r\n/g, '')).not.toMatch(/[\r\n]/);
+  });
+
   it('escapes text and folds long lines to 75 octets', () => {
     const state = add(emptyState(), 'Tëam; Acme, Inc. — a long account name that keeps on going', [weekly(14, 62, { label: 'Wëekly limit' })]);
     const feed = calendarFeed(state, NOW, { daysAhead: 1 });

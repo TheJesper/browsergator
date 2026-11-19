@@ -390,6 +390,31 @@ describe('collector runner', () => {
     ...extra
   });
 
+  it('keeps every switch when several are flipped at the same moment, and answers with what was stored', async () => {
+    const svc = service();
+    const ids = ['alpha', 'bravo', 'charlie', 'delta', 'echo'];
+    const runner = createCollectorRunner(svc, {
+      env: {},
+      homeDir: '/nonexistent',
+      collectors: ids.map((id) => fake(id, () => Promise.resolve({ used: 10 }))),
+      now: () => NOW
+    });
+    const answers = await Promise.all(ids.map((id) => runner.setEnabled(id, true)));
+    expect(answers.map((status) => status.enabled)).toEqual([true, true, true, true, true]);
+    expect([...(await svc.state()).settings.enabledCollectors].sort()).toEqual(ids);
+
+    await Promise.all([runner.setEnabled('alpha', false), runner.setEnabled('charlie', false), runner.setEnabled('echo', false)]);
+    expect([...(await svc.state()).settings.enabledCollectors].sort()).toEqual(['bravo', 'delta']);
+    expect((await runner.list()).map((status) => [status.id, status.enabled])).toEqual([
+      ['alpha', false],
+      ['bravo', true],
+      ['charlie', false],
+      ['delta', true],
+      ['echo', false]
+    ]);
+    runner.stop();
+  });
+
   it('runs nothing until a collector is enabled', async () => {
     const svc = service();
     const collect = vi.fn(() => Promise.resolve({ used: 10 }));

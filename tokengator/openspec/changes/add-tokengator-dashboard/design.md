@@ -99,7 +99,7 @@ A finished cycle is recorded only for allowance meters that have had at least on
 
 - Bind `127.0.0.1`; refuse a non-loopback bind without `TOKENGATOR_TOKEN`.
 - Every request: Host must be a loopback name or the configured host, with the service's port.
-- State-changing requests: Origin, when present, must equal the service's own origin; bodies must be `application/json` and at most 256 KB. A cross-site form cannot produce that without a preflight, which the service never approves.
+- State-changing requests: Origin, when present, must equal the service's own origin; bodies must be `application/json` and at most 256 KB (16 MB for an import, which carries a whole state document and must be able to take back what an export produced). A cross-site form cannot produce that without a preflight, which the service never approves.
 - With a token: bearer header or an HTTP-only, SameSite=Strict cookie minted by `POST /api/session`; comparison with `timingSafeEqual`. See D15 for why the token never travels in a query string.
 - The MCP endpoint is mounted inside the HTTP server, behind the same Host, Origin and token checks. The SDK's own rebinding guard is not used: it would need a second copy of the allowed-host list, and one list is easier to keep right than two.
 - Credentials are read from the environment (or `~/.tokengator/.env`) inside the collector at call time and never leave that function. The redaction helper used for logs and error messages strips anything that looks like a key or bearer value.
@@ -201,6 +201,12 @@ All bodies are JSON. Errors are `{ "error": { "code", "message", "field"?, "cand
 | `* /mcp` | MCP Streamable HTTP | |
 
 The token is never accepted in a query string, where it would end up in history and logs. The dashboard reads it from the address fragment (`/#token=…`), which browsers do not send to servers, exchanges it at `/api/session` for the cookie and removes the fragment.
+
+### D15a. Inputs are bounded where they enter, and the store checks its own work
+
+Three things that arrive from outside can break more than the request they came in: a number that overflows (JSON writes Infinity as `null`, and a document with a `null` where a number belongs is set aside as corrupt on the next read), a window of nearly no length (rolling it forward never ends), and text with control characters in it (an escape sequence in a terminal, a carriage return in a calendar line, a NUL in a command argument). All three are refused or cleaned in the core's validation, with one set of bounds in `limits.ts`, so the HTTP API, the MCP tools, the CLI, imports and collectors cannot differ.
+
+Two more layers sit behind that, because validation is written by people. The store serialises the document, reads the result back through the same check a load uses, and refuses to write anything that would not pass; the file on disk is then exactly as it was. And the three places where text leaves for somewhere that would interpret it (the notification command, the webhook, the calendar) clean it again, since a state file can be edited by hand.
 
 ### D16. Reminders reach the person outside the tab
 

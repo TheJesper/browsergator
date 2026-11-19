@@ -2,6 +2,7 @@
 // when a reset time passes with nobody watching. Everything here is pure: (state, now) -> state.
 
 import type { Account, ClosedCycle, Meter, Reading, ResetRule, State } from './types.js';
+import { MIN_WINDOW_HOURS, isAmount, isLimit, parseInstant } from './limits.js';
 import { DAY, HOUR, MONTH, clamp, daysInMonth, iso, localZone, parseClock, toMs, zonedParts, zonedTimeToUtc } from './time.js';
 
 /** A month, in hours: the cadence of a billing-cycle meter whose renewal day is not known yet. */
@@ -210,6 +211,12 @@ export function rollMeter(meter: Meter, nowMs: number): { meter: Meter; closed: 
       // Jump straight to the window containing `now` instead of iterating thousands of short windows.
       const skipped = Math.floor((nowMs - end) / step);
       next = end + (skipped + 1) * step;
+      // A rule that cannot be stepped (a length of nearly nothing in a hand-edited or older file) must not
+      // take every read down with it. The meter goes back to waiting for a reset time.
+      if (!(step >= MIN_WINDOW_HOURS * HOUR) || !Number.isFinite(next) || next <= nowMs) {
+        current = { ...current, resetsAt: null, windowStartedAt: null };
+        break;
+      }
       current = {
         ...current,
         used: 0,
@@ -332,7 +339,7 @@ function resolveUsed(reading: Reading, limit: number): number | null {
     throw new ReadingError('used', 'Give one of used, remaining, usedPercent or remainingPercent, not several.');
   }
   const check = (field: string, value: number, max?: number): number => {
-    if (!Number.isFinite(value) || value < 0) throw new ReadingError(field, `${field} must be a number of 0 or more.`);
+    if (!isAmount(value)) throw new ReadingError(field, `${field} must be a number of 0 or more.`);
     if (max !== undefined && value > max) throw new ReadingError(field, `${field} must be between 0 and ${max}.`);
     return value;
   };
@@ -370,28 +377,28 @@ export function applyReading(meter: Meter, reading: Reading, nowMs: number): { m
   // meter, which keeps its limit of 100: "45 of 200" has to be stored there as 22.5, not as 45.
   let outOf = limit;
   if (reading.limit !== undefined) {
-    if (!Number.isFinite(reading.limit) || reading.limit <= 0) {
-      throw new ReadingError('limit', 'limit must be a number greater than 0.');
-    }
+    if (!isLimit(reading.limit)) throw new ReadingError('limit', 'limit must be a number greater than 0.');
     outOf = reading.limit;
     limit = current.unit === 'percent' ? 100 : reading.limit;
   }
 
   let newEnd: number | null = null;
   if (reading.resetsAt !== undefined) {
-    newEnd = toMs(reading.resetsAt);
-    if (newEnd === null) throw new ReadingError('resetsAt', 'resetsAt must be an ISO 8601 date and time.');
+    newEnd = parseInstant(reading.resetsAt);
+    if (newEnd === null) throw new ReadingError('resetsAt', 'resetsAt must be an ISO 8601 date and time, such as 2026-11-21T09:00:00Z.');
   }
   let newStart: number | null = null;
   if (reading.windowStartedAt !== undefined) {
-    newStart = toMs(reading.windowStartedAt);
+    newStart = parseInstant(reading.windowStartedAt);
     if (newStart === null) {
-      throw new ReadingError('windowStartedAt', 'windowStartedAt must be an ISO 8601 date and time.');
+      throw new ReadingError('windowStartedAt', 'windowStartedAt must be an ISO 8601 date and time, such as 2026-11-14T09:00:00Z.');
     }
   }
 
   const reported = resolveUsed(reading, outOf);
   const used = reported === null || outOf === limit ? reported : (reported * limit) / outOf;
+  // Every input was in range, but two of them divided can still leave it. Nothing out of range is stored.
+  if (used !== null && !isAmount(used)) throw new ReadingError('used', 'That amount is too large for this meter.');
   if (used === null && newEnd === null && reading.limit === undefined) {
     throw new ReadingError('used', 'A reading needs an amount (used, remaining or a percentage) or a reset time.');
   }

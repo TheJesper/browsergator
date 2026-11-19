@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { addAccount } from '../src/core/accounts.js';
 import { applyReadingToState } from '../src/core/reset.js';
 import { emptyState, type State } from '../src/core/types.js';
-import { FileStateStore, LockTimeoutError, MemoryStateStore, type StateStore } from '../src/server/store.js';
+import { FileStateStore, LockTimeoutError, MemoryStateStore, UnstorableStateError, type StateStore } from '../src/server/store.js';
 
 const NOW = Date.UTC(2026, 10, 19, 10, 0, 0);
 
@@ -419,5 +419,54 @@ describe('MemoryStateStore', () => {
     expect(store.location).toBe('memory');
     expect(store.warnings).toEqual([]);
     store.close();
+  });
+});
+
+describe('guards added after review', () => {
+  it('refuses to write a document that would not load again, and leaves the file as it was', async () => {
+    const store = open();
+    await store.update(adding('Claude'));
+    const before = await readFile(join(home, 'state.json'), 'utf8');
+    const poisoned = store.update((state) => {
+      const accounts = state.accounts.map((account) => ({ ...account, meters: account.meters.map((meter) => ({ ...meter, used: Number.POSITIVE_INFINITY })) }));
+      return { state: { ...state, accounts }, result: null };
+    });
+    await expect(poisoned).rejects.toBeInstanceOf(UnstorableStateError);
+    expect(await readFile(join(home, 'state.json'), 'utf8')).toBe(before);
+    // Nothing was set aside, and the next change goes through as usual.
+    expect((await readdir(home)).filter((name) => name.startsWith('state.corrupt'))).toEqual([]);
+    await store.update(adding('Suno'));
+    expect((await store.read()).accounts.map((account) => account.label)).toEqual(['Claude', 'Suno']);
+  });
+
+  it('still announces a change made by another process when something reads the state in between', async () => {
+    const watching = open(home, { pollMs: 40 });
+    await watching.read();
+    let announced = 0;
+    watching.onChange(() => (announced += 1));
+    await sleep(80);
+
+    const other = open();
+    await other.update(adding('Written elsewhere'));
+    // A request that reads before the next poll used to swallow the announcement.
+    expect((await watching.read()).accounts).toHaveLength(1);
+    await waitFor(() => announced > 0);
+    expect(announced).toBe(1);
+  });
+
+  it('does not announce its own first look at a file that was already there', async () => {
+    await open().update(adding('Already here'));
+    const watching = open(home, { pollMs: 30 });
+    let announced = 0;
+    watching.onChange(() => (announced += 1));
+    await sleep(150);
+    expect(announced).toBe(0);
+  });
+
+  it.skipIf(process.platform === 'win32')('creates the home directory for its owner only', async () => {
+    const fresh = join(home, 'made-by-the-store');
+    await open(fresh).update(adding('Claude'));
+    expect((await stat(fresh)).mode & 0o077).toBe(0);
+    expect((await stat(join(fresh, 'state.json'))).mode & 0o077).toBe(0);
   });
 });

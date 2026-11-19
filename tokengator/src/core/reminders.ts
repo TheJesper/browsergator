@@ -5,6 +5,7 @@
 // again for that window. Anything chattier gets switched off within a week.
 
 import { allowanceQueue, horizonFor, type MeterView } from './forecast.js';
+import { plainBlock, plainLine } from './limits.js';
 import { nextBoundary, nominalWindowMs, windowLengthMs } from './reset.js';
 import { DAY, HOUR, formatDuration, formatMoment, toMs } from './time.js';
 import type { State } from './types.js';
@@ -44,15 +45,18 @@ function reminderFor(view: MeterView, nowMs: number, tz?: string): Reminder | nu
   // A closed session limit that outlasts the window means there is nothing the person can do about it.
   if (view.blockedUntilMs !== null && view.blockedUntilMs >= view.resetsAtMs) return null;
 
-  const meterName = view.meter.label.charAt(0).toLowerCase() + view.meter.label.slice(1);
+  // Names are cleaned where they are stored. They are cleaned again here because this text goes to a
+  // command, a header and other people's servers, and a state file can be edited by hand.
+  const label = plainLine(view.meter.label);
+  const meterName = label.charAt(0).toLowerCase() + label.slice(1);
   const parts = [`${leftText(view)} of the ${meterName}, resets in ${formatDuration(view.resetsAtMs - nowMs)} (${formatMoment(view.resetsAtMs, nowMs, tz)}).`];
   const money = riskMoney(view);
   if (money) parts.push(`About ${money} expires at this pace.`);
   if (view.blockedUntilMs !== null && view.blockedUntilMs > nowMs) {
-    parts.push(`Usable again ${formatMoment(view.blockedUntilMs, nowMs, tz)}${view.blockedBy ? `, when the ${view.blockedBy.toLowerCase()} reopens` : ''}.`);
+    parts.push(`Usable again ${formatMoment(view.blockedUntilMs, nowMs, tz)}${view.blockedBy ? `, when the ${plainLine(view.blockedBy).toLowerCase()} reopens` : ''}.`);
   }
   if (view.stale) parts.push('The reading is old, so check the real number first.');
-  return { key, meterId: view.id, title: `Use ${view.account.label} now`, body: parts.join(' '), resetsAtMs: view.resetsAtMs };
+  return { key, meterId: view.id, title: `Use ${plainLine(view.account.label)} now`, body: parts.join(' '), resetsAtMs: view.resetsAtMs };
 }
 
 /** Every quota that should be raised now and has not been raised for its current window. Most urgent first. */
@@ -109,7 +113,12 @@ const MAX_EVENTS_PER_METER = 14;
 
 const stamp = (ms: number): string => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
 
-const escapeText = (text: string): string => text.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+/**
+ * Text for a calendar line. A line feed becomes the escape for one; every other control character is
+ * dropped first, because a bare carriage return inside a value would start a line of its own.
+ */
+const escapeText = (text: string): string =>
+  plainBlock(text).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
 
 /** Lines longer than 75 octets continue on the next line after a space. Counts bytes, not characters. */
 function fold(line: string): string {

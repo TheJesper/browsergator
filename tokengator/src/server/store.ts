@@ -67,6 +67,18 @@ function looksLikeState(value: unknown): value is State {
   return true;
 }
 
+/**
+ * Raised instead of writing a document that would not load again. Every input is validated before it gets
+ * here, so this is a last line of defence: one number that overflowed to Infinity is written by JSON as
+ * null, and the next read would set the whole file aside as corrupt.
+ */
+export class UnstorableStateError extends Error {
+  constructor() {
+    super('That change would leave the state file unreadable, so it was not saved.');
+    this.name = 'UnstorableStateError';
+  }
+}
+
 /** Raised for a state file written by a newer Tokengator. It is left untouched. */
 export class NewerStateError extends Error {
   constructor(location: string, version: unknown) {
@@ -91,7 +103,8 @@ export class FileStateStore implements StateStore {
   private readonly listeners = new Set<() => void>();
   private readonly lockTimeoutMs: number;
   private timer: NodeJS.Timeout | undefined;
-  private lastSeen = '';
+  /** What the file looked like when listeners were last told about it. Null until the first look. */
+  private lastSeen: string | null = null;
   /** Serialises writers inside this process; the lock directory serialises across processes. */
   private queue: Promise<unknown> = Promise.resolve();
 
@@ -103,16 +116,25 @@ export class FileStateStore implements StateStore {
     this.lockDir = join(home, 'state.lock');
     this.lockTimeoutMs = options.lockTimeoutMs ?? 4000;
     const pollMs = options.pollMs ?? 1500;
+    // The baseline is how the file looks now, at the start. Anything that changes it afterwards, other
+    // than this store's own writes, is announced.
+    void this.fingerprint().then((seen) => {
+      if (this.lastSeen === null) this.lastSeen = seen;
+    });
     if (pollMs > 0) {
-      this.timer = setInterval(() => void this.poll(), pollMs);
+      // A look at the file takes its turn in the same queue as this store's own writes. Otherwise a look
+      // that began before a write could finish after it and announce that write a second time.
+      this.timer = setInterval(() => {
+        this.queue = this.queue.then(() => this.poll()).catch(() => undefined);
+      }, pollMs);
       this.timer.unref();
     }
   }
 
-  async read(): Promise<State> {
-    const state = await this.load();
-    this.lastSeen = await this.fingerprint();
-    return state;
+  read(): Promise<State> {
+    // Reading must not count as "seen": a change made by another process is announced by the poll, and a
+    // request that happens to read in between would otherwise swallow that announcement.
+    return this.load();
   }
 
   update<T>(change: (state: State) => { state: State; result: T }): Promise<T> {
@@ -134,7 +156,8 @@ export class FileStateStore implements StateStore {
   }
 
   private async locked<T>(change: (state: State) => { state: State; result: T }): Promise<T> {
-    await mkdir(this.home, { recursive: true });
+    // Private to the user: the optional .env beside the state file holds provider keys.
+    await mkdir(this.home, { recursive: true, mode: 0o700 });
     await this.acquire();
     try {
       const current = await this.load();
@@ -213,8 +236,10 @@ export class FileStateStore implements StateStore {
   }
 
   private async persist(state: State): Promise<void> {
+    const text = JSON.stringify(state, null, 2);
+    if (!looksLikeState(JSON.parse(text))) throw new UnstorableStateError();
     const temp = `${this.location}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
-    await writeFile(temp, `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    await writeFile(temp, `${text}\n`, { encoding: 'utf8', mode: 0o600 });
     // On Windows a rename can fail briefly while another process has the target open.
     for (let attempt = 0; ; attempt += 1) {
       try {
@@ -241,6 +266,11 @@ export class FileStateStore implements StateStore {
   private async poll(): Promise<void> {
     if (this.listeners.size === 0) return;
     const seen = await this.fingerprint();
+    if (this.lastSeen === null) {
+      // The first look is the baseline, not a change.
+      this.lastSeen = seen;
+      return;
+    }
     if (seen === this.lastSeen) return;
     this.lastSeen = seen;
     this.emit();

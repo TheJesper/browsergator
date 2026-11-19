@@ -168,18 +168,16 @@ export function createCollectorRunner(service: TokengatorService, options: Colle
     },
     async setEnabled(id: string, enabled: boolean): Promise<CollectorStatus> {
       const collector = find(id);
-      const current = await enabledIds();
-      if (enabled) current.add(id);
-      else current.delete(id);
-      await service.updateSettings({ enabledCollectors: [...current] });
+      // One atomic change to the stored list, and the answer says what is stored, not what was asked for.
+      const stored = await service.setCollectorEnabled(id, enabled);
       const run = runs.get(id) as Run;
-      if (enabled) await runOne(collector);
+      if (stored) await runOne(collector);
       else {
         if (run.timer) clearTimeout(run.timer);
         run.timer = undefined;
         run.nextRunAt = null;
       }
-      return status(collector, enabled);
+      return status(collector, stored);
     },
     async refresh(ids?: string[]): Promise<CollectorStatus[]> {
       const enabled = await enabledIds();

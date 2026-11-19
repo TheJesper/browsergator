@@ -14,6 +14,7 @@ import type {
 } from './types.js';
 import { STATE_VERSION, emptyState } from './types.js';
 import { MAX_SAMPLES, anchorMeter, rollState } from './reset.js';
+import { MAX_WINDOW_HOURS, MIN_WINDOW_HOURS, isAmount, isLimit, parseInstant, plainBlock, plainLine } from './limits.js';
 import { iso, isValidTimeZone, toMs } from './time.js';
 
 export class ValidationError extends Error {
@@ -105,7 +106,8 @@ function text(field: string, value: unknown, max: number, required: boolean): st
     return null;
   }
   if (typeof value !== 'string') throw new ValidationError(field, `${field} must be text.`);
-  const trimmed = value.trim();
+  // Notes may run over several lines. Everything else is one line, and nothing keeps a control character.
+  const trimmed = field === 'notes' || field.endsWith('.notes') ? plainBlock(value) : plainLine(value);
   if (!trimmed && required) throw new ValidationError(field, `${field} is required.`);
   if (trimmed.length > max) throw new ValidationError(field, `${field} must be at most ${max} characters.`);
   return trimmed || null;
@@ -113,10 +115,9 @@ function text(field: string, value: unknown, max: number, required: boolean): st
 
 function instant(field: string, value: unknown): string | null {
   if (value === undefined || value === null || value === '') return null;
-  if (typeof value !== 'string' || toMs(value) === null) {
-    throw new ValidationError(field, `${field} must be an ISO 8601 date and time.`);
-  }
-  return iso(toMs(value) as number);
+  const ms = parseInstant(value);
+  if (ms === null) throw new ValidationError(field, `${field} must be an ISO 8601 date and time, such as 2026-11-21T09:00:00Z.`);
+  return iso(ms);
 }
 
 export function validateResetRule(rule: unknown, field = 'reset'): ResetRule {
@@ -124,8 +125,8 @@ export function validateResetRule(rule: unknown, field = 'reset'): ResetRule {
   const r = rule as Record<string, unknown>;
   const hours = (): number => {
     const value = r['hours'];
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 24 * 366) {
-      throw new ValidationError(`${field}.hours`, 'hours must be a number greater than 0.');
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < MIN_WINDOW_HOURS || value > MAX_WINDOW_HOURS) {
+      throw new ValidationError(`${field}.hours`, 'hours must be a number from one minute (0.0167) to 366 days (8784).');
     }
     return value;
   };
@@ -174,9 +175,7 @@ function validatePrice(value: unknown): Price | null {
   if (typeof value !== 'object') throw new ValidationError('price', 'price must be an object.');
   const p = value as Record<string, unknown>;
   const amount = p['amount'];
-  if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0) {
-    throw new ValidationError('price.amount', 'price.amount must be a number of 0 or more.');
-  }
+  if (!isAmount(amount)) throw new ValidationError('price.amount', 'price.amount must be a number of 0 or more.');
   if (amount === 0) return null;
   const currency = typeof p['currency'] === 'string' ? p['currency'].trim().toUpperCase() : 'USD';
   if (!/^[A-Z]{3}$/.test(currency)) {
@@ -202,17 +201,13 @@ function buildMeter(
   if (!UNIT_IDS.includes(unit)) throw new ValidationError(`${field}.unit`, `unit must be one of ${UNIT_IDS.join(', ')}.`);
   let limit = unit === 'percent' ? 100 : input.limit;
   if (limit === undefined) throw new ValidationError(`${field}.limit`, 'limit is required unless the unit is percent.');
-  if (typeof limit !== 'number' || !Number.isFinite(limit) || limit <= 0) {
-    throw new ValidationError(`${field}.limit`, 'limit must be a number greater than 0.');
-  }
+  if (!isLimit(limit)) throw new ValidationError(`${field}.limit`, 'limit must be a number greater than 0.');
   if (unit === 'percent') limit = 100;
   const used = input.used ?? 0;
-  if (typeof used !== 'number' || !Number.isFinite(used) || used < 0) {
-    throw new ValidationError(`${field}.used`, 'used must be a number of 0 or more.');
-  }
+  if (!isAmount(used)) throw new ValidationError(`${field}.used`, 'used must be a number of 0 or more.');
   const reset = validateResetRule(input.reset, `${field}.reset`);
   const valueShare = input.valueShare ?? (role === 'allowance' && isFirstAllowance ? 1 : 0);
-  if (typeof valueShare !== 'number' || valueShare < 0 || valueShare > 1) {
+  if (typeof valueShare !== 'number' || !(valueShare >= 0 && valueShare <= 1)) {
     throw new ValidationError(`${field}.valueShare`, 'valueShare must be between 0 and 1.');
   }
   const key = uniqueSlug(slugify(input.key ?? label), takenKeys);
@@ -358,15 +353,11 @@ export function updateMeter(state: State, meterId: string, patch: MeterPatch, no
     else delete next.unitLabel;
   }
   if ('limit' in patch && patch.limit !== undefined && next.unit !== 'percent') {
-    if (typeof patch.limit !== 'number' || !Number.isFinite(patch.limit) || patch.limit <= 0) {
-      throw new ValidationError('limit', 'limit must be a number greater than 0.');
-    }
+    if (!isLimit(patch.limit)) throw new ValidationError('limit', 'limit must be a number greater than 0.');
     next.limit = patch.limit;
   }
   if ('used' in patch && patch.used !== undefined) {
-    if (typeof patch.used !== 'number' || !Number.isFinite(patch.used) || patch.used < 0) {
-      throw new ValidationError('used', 'used must be a number of 0 or more.');
-    }
+    if (!isAmount(patch.used)) throw new ValidationError('used', 'used must be a number of 0 or more.');
     next.used = patch.used;
     next.updatedAt = iso(nowMs);
     next.estimated = false;
@@ -395,7 +386,7 @@ export function updateMeter(state: State, meterId: string, patch: MeterPatch, no
     else delete next.partial;
   }
   if ('valueShare' in patch && patch.valueShare !== undefined) {
-    if (typeof patch.valueShare !== 'number' || patch.valueShare < 0 || patch.valueShare > 1) {
+    if (typeof patch.valueShare !== 'number' || !(patch.valueShare >= 0 && patch.valueShare <= 1)) {
       throw new ValidationError('valueShare', 'valueShare must be between 0 and 1.');
     }
     next.valueShare = next.role === 'throttle' ? 0 : patch.valueShare;
@@ -508,10 +499,10 @@ export function parseState(document: unknown, nowMs: number): State {
           const samples = Array.isArray(source['samples'])
             ? source['samples']
                 .filter((sample): sample is { t: string; used: number } =>
-                  isRecord(sample) && typeof sample['t'] === 'string' && toMs(sample['t']) !== null && typeof sample['used'] === 'number'
+                  isRecord(sample) && parseInstant(sample['t']) !== null && isAmount(sample['used'])
                 )
                 .slice(-240)
-                .map((sample) => ({ t: iso(toMs(sample.t) as number), used: Math.max(0, sample.used) }))
+                .map((sample) => ({ t: iso(parseInstant(sample.t) as number), used: sample.used }))
             : [];
           const kind = isRecord(source['source']) ? source['source']['kind'] : undefined;
           const sourceKind: MeterSource['kind'] =
@@ -554,11 +545,11 @@ export function parseState(document: unknown, nowMs: number): State {
       (cycle): cycle is State['cycles'][number] =>
         isRecord(cycle) &&
         typeof cycle['meterId'] === 'string' &&
-        typeof cycle['endedAt'] === 'string' &&
-        toMs(cycle['endedAt']) !== null &&
-        typeof cycle['limit'] === 'number' &&
-        typeof cycle['used'] === 'number' &&
-        typeof cycle['wastedFraction'] === 'number'
+        parseInstant(cycle['endedAt']) !== null &&
+        isAmount(cycle['limit']) &&
+        isAmount(cycle['used']) &&
+        typeof cycle['wastedFraction'] === 'number' &&
+        Number.isFinite(cycle['wastedFraction'])
     )
     .slice(-2000)
     .map((cycle) => ({
@@ -566,15 +557,15 @@ export function parseState(document: unknown, nowMs: number): State {
       accountId: String(cycle.accountId ?? ''),
       meterId: cycle.meterId,
       providerId: String(cycle.providerId ?? 'custom'),
-      accountLabel: String(cycle.accountLabel ?? '').slice(0, 60),
-      meterLabel: String(cycle.meterLabel ?? '').slice(0, 60),
+      accountLabel: plainLine(String(cycle.accountLabel ?? '')).slice(0, 60),
+      meterLabel: plainLine(String(cycle.meterLabel ?? '')).slice(0, 60),
       unit: UNIT_IDS.includes(cycle.unit) ? cycle.unit : 'percent',
-      startedAt: toMs(cycle.startedAt) === null ? null : iso(toMs(cycle.startedAt) as number),
-      endedAt: iso(toMs(cycle.endedAt) as number),
+      startedAt: parseInstant(cycle.startedAt) === null ? null : iso(parseInstant(cycle.startedAt) as number),
+      endedAt: iso(parseInstant(cycle.endedAt) as number),
       limit: cycle.limit,
       used: cycle.used,
       wastedFraction: Math.min(1, Math.max(0, cycle.wastedFraction)),
-      wastedValue: typeof cycle.wastedValue === 'number' ? cycle.wastedValue : null,
+      wastedValue: isAmount(cycle.wastedValue) ? cycle.wastedValue : null,
       currency: typeof cycle.currency === 'string' ? cycle.currency.slice(0, 3).toUpperCase() : null,
       confidence: cycle.confidence === 'measured' ? 'measured' : 'estimated'
     }));
@@ -588,7 +579,7 @@ export function parseState(document: unknown, nowMs: number): State {
       ? raw['entries']
           .filter(
             (entry): entry is { date: string; amount: number } =>
-              isRecord(entry) && typeof entry['date'] === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(entry['date']) && typeof entry['amount'] === 'number' && entry['amount'] >= 0
+              isRecord(entry) && typeof entry['date'] === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(entry['date']) && isAmount(entry['amount'])
           )
           .map((entry) => ({ date: entry.date, amount: entry.amount }))
           .sort((a, b) => (a.date < b.date ? -1 : 1))
@@ -609,7 +600,7 @@ export function parseState(document: unknown, nowMs: number): State {
       providerId: slugify(typeof raw['providerId'] === 'string' ? raw['providerId'] : 'custom'),
       label,
       currency,
-      monthlyBudget: typeof budget === 'number' && budget > 0 ? budget : null,
+      monthlyBudget: isAmount(budget) && budget > 0 ? budget : null,
       entries,
       source,
       updatedAt: instant(`spend[${index}].updatedAt`, raw['updatedAt'])

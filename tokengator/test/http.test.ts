@@ -389,11 +389,35 @@ describe('Request validation', () => {
     const chunk = Buffer.alloc(64 * 1024, 0x20);
     const answer = await raw(harness.port, {
       method: 'POST',
-      path: '/api/import',
+      path: '/api/quick',
       headers: { Host: `127.0.0.1:${harness.port}`, ...JSON_HEADERS, 'Transfer-Encoding': 'chunked' },
       chunks: [chunk, chunk, chunk, chunk, chunk]
     });
     expect(answer.status).toBe(413);
+  });
+
+  it('gives an import room for a whole state document, and still has a ceiling', async () => {
+    const harness = await start();
+    // 320 KB of white space is within the import allowance; it is refused for what it is, not for its size.
+    const chunk = Buffer.alloc(64 * 1024, 0x20);
+    const roomy = await raw(harness.port, {
+      method: 'POST',
+      path: '/api/import',
+      headers: { Host: `127.0.0.1:${harness.port}`, ...JSON_HEADERS, 'Transfer-Encoding': 'chunked' },
+      chunks: [chunk, chunk, chunk, chunk, chunk]
+    });
+    expect(roomy.status).toBe(400);
+    // A body that announces itself as far beyond the ceiling is turned away before any of it is read.
+    const beyond = await raw(harness.port, {
+      method: 'POST',
+      path: '/api/import',
+      headers: { Host: `127.0.0.1:${harness.port}`, ...JSON_HEADERS, 'Content-Length': String(70 * 1024 * 1024) },
+      chunks: ['{']
+    }).then(
+      (answer) => answer.status,
+      () => 'reset' as const
+    );
+    expect([413, 'reset']).toContain(beyond);
   });
 
   it('cuts off a body far beyond the cap', async () => {
@@ -1391,5 +1415,115 @@ describe('reminders and the calendar', () => {
     const demo = await start({ reminders: sample.build, demo: true });
     expect((await send(demo, 'POST', '/api/reminders/test', {})).status).toBe(400);
     expect(sample.commands).toEqual([]);
+  });
+});
+
+describe('input that must never reach the state file (review findings)', () => {
+  const tracked = (): State =>
+    addAccount(
+      emptyState(),
+      {
+        label: 'Claude Max',
+        meters: [
+          { label: 'Weekly limit', reset: { kind: 'interval', hours: 168 }, used: 62, resetsAt: iso(NOW + 14 * HOUR) },
+          { label: 'Credits', unit: 'credits', limit: 1000, reset: { kind: 'interval', hours: 720 }, used: 10, resetsAt: iso(NOW + 100 * HOUR) }
+        ]
+      },
+      NOW
+    ).state;
+
+  /** fetch refuses to serialise Infinity, and JSON has no word for it. A body can still say 1e999. */
+  const sendRaw = (harness: Harness, method: string, path: string, body: string): Promise<Response> =>
+    fetch(`${harness.base}${path}`, { method, headers: JSON_HEADERS, body });
+
+  it('answers 400 for numbers that overflow, and the stored document stays one that loads', async () => {
+    const store = new MemoryStateStore(tracked());
+    const harness = await start({ store });
+    const before = JSON.stringify(await store.read());
+    const refused: [string, string, string][] = [
+      ['POST', '/api/meters/claude-max:weekly-limit/readings', '{"used":1e308,"limit":1e-300}'],
+      ['POST', '/api/meters/claude-max:weekly-limit/readings', '{"used":1e999}'],
+      ['POST', '/api/meters/claude-max:credits/readings', '{"usedPercent":100,"limit":1e308}'],
+      ['PATCH', '/api/meters/claude-max:credits', '{"limit":1e-300}'],
+      ['PATCH', '/api/meters/claude-max:credits', '{"used":1e999}'],
+      ['POST', '/api/accounts', '{"label":"X","meters":[{"label":"M","unit":"credits","limit":1e999,"reset":{"kind":"none"}}]}'],
+      ['POST', '/api/accounts', '{"label":"X","meters":[{"label":"M","reset":{"kind":"interval","hours":1e-320}}]}'],
+      ['PATCH', '/api/meters/claude-max:credits', '{"resetsAt":"1"}'],
+      ['PATCH', '/api/meters/claude-max:credits', '{"resetsAt":"275760-09-13T00:00:00Z"}']
+    ];
+    for (const [method, path, body] of refused) {
+      const response = await sendRaw(harness, method, path, body);
+      expect(response.status, `${method} ${path} ${body}`).toBe(400);
+      expect((await errorOf(response)).code).toBe('validation');
+    }
+    expect(JSON.stringify(await store.read())).toBe(before);
+    // Every route still answers afterwards.
+    expect((await send(harness, 'GET', '/api/state')).status).toBe(200);
+    expect((await send(harness, 'GET', '/api/export')).status).toBe(200);
+  });
+
+  it('refuses spend that overflows, one amount or the running total', async () => {
+    const harness = await start({ state: tracked() });
+    const created = await send(harness, 'POST', '/api/spend', { label: 'API' });
+    const id = ((await created.json()) as { source: SpendSource }).source.id;
+    expect((await sendRaw(harness, 'POST', `/api/spend/${id}/entries`, '{"amount":1e308,"mode":"add"}')).status).toBe(400);
+    expect((await sendRaw(harness, 'POST', `/api/spend/${id}/entries`, '{"amount":9e11,"mode":"add"}')).status).toBe(200);
+    expect((await sendRaw(harness, 'POST', `/api/spend/${id}/entries`, '{"amount":9e11,"mode":"add"}')).status).toBe(400);
+    const state = (await readState(harness)).state;
+    expect(JSON.parse(JSON.stringify(state))).toEqual(state);
+  });
+
+  it('imports a document with overflowing figures by leaving those figures out', async () => {
+    const harness = await start({ state: tracked() });
+    const exported = (await (await send(harness, 'GET', '/api/export')).json()) as Record<string, any>;
+    const HUGE = '__huge__';
+    exported['accounts'][0].meters[0].samples = [{ t: iso(NOW - HOUR), used: HUGE }, { t: iso(NOW - 2 * HOUR), used: 40 }];
+    exported['spend'] = [{ id: 'api', label: 'API', currency: 'USD', entries: [{ date: '2026-11-18', amount: HUGE }, { date: '2026-11-19', amount: 2 }], source: { kind: 'manual' } }];
+    const response = await sendRaw(harness, 'POST', '/api/import', JSON.stringify(exported).replaceAll(`"${HUGE}"`, '1e999'));
+    expect(response.status).toBe(200);
+    const state = (await readState(harness)).state;
+    expect(state.accounts[0]?.meters[0]?.samples).toEqual([{ t: iso(NOW - 2 * HOUR), used: 40 }]);
+    expect(state.spend[0]?.entries).toEqual([{ date: '2026-11-19', amount: 2 }]);
+    expect(JSON.parse(JSON.stringify(state))).toEqual(state);
+  });
+
+  it('takes back its own export when that is larger than the cap on ordinary requests', async () => {
+    // Twelve accounts with full sample histories: well past 256 KB, as a year of real use is.
+    let state = emptyState();
+    for (let index = 0; index < 12; index += 1) {
+      state = addAccount(state, { label: `Subscription ${index}`, meters: [{ label: 'Weekly', reset: { kind: 'interval', hours: 168 }, resetsAt: iso(NOW + 100 * HOUR) }] }, NOW).state;
+    }
+    state = {
+      ...state,
+      accounts: state.accounts.map((account) => ({
+        ...account,
+        meters: account.meters.map((meter) => ({ ...meter, samples: Array.from({ length: 240 }, (_, n) => ({ t: iso(NOW - (240 - n) * 60_000 * 7), used: n / 4 })) }))
+      })),
+      cycles: Array.from({ length: 1500 }, (_, n) => ({
+        id: `c${n}`,
+        accountId: 'subscription-0',
+        meterId: 'subscription-0:weekly',
+        providerId: 'custom',
+        accountLabel: 'Subscription 0',
+        meterLabel: 'Weekly',
+        unit: 'percent' as const,
+        startedAt: iso(NOW - (n + 2) * 7 * 24 * HOUR),
+        endedAt: iso(NOW - (n + 1) * 7 * 24 * HOUR),
+        limit: 100,
+        used: 60,
+        wastedFraction: 0.4,
+        wastedValue: 9.2,
+        currency: 'USD',
+        confidence: 'measured' as const
+      }))
+    };
+    const harness = await start({ state });
+    const exported = await (await send(harness, 'GET', '/api/export')).text();
+    expect(Buffer.byteLength(exported)).toBeGreaterThan(MAX_BODY_BYTES);
+    const restored = await sendRaw(harness, 'POST', '/api/import', exported);
+    expect(restored.status).toBe(200);
+    expect((await readState(harness)).state.accounts).toHaveLength(12);
+    // The cap on everything else is unchanged.
+    expect((await send(harness, 'POST', '/api/quick', { text: 'x'.repeat(300 * 1024) })).status).toBe(413);
   });
 });

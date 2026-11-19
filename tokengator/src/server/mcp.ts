@@ -120,7 +120,12 @@ const resetArg = z
       .describe(
         'rolling: opens on first use and lasts `hours`. interval: a fixed cadence of `hours` (a weekly cap is 168). daily, monthly: a wall-clock boundary. once: a single expiry date. none: a balance without a clock.'
       ),
-    hours: z.number().positive().optional().describe('rolling and interval: window length in hours.'),
+    hours: z
+      .number()
+      .min(1 / 60)
+      .max(24 * 366)
+      .optional()
+      .describe('rolling and interval: window length in hours, from one minute to 366 days.'),
     day: z.number().int().min(1).max(31).optional().describe('monthly: day of the month, clamped to the month length.'),
     time: z.string().max(5).optional().describe('daily and monthly: HH:MM on a 24-hour clock. Default 00:00.'),
     tz: z.string().max(64).optional().describe('daily and monthly: IANA time zone such as Europe/Stockholm. Default UTC.')

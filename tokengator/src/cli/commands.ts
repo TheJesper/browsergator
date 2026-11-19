@@ -668,6 +668,17 @@ export async function doctor(args: readonly string[], io: Io): Promise<number> {
     say(io, '');
     say(io, redact(`Configuration problem: ${configProblem}`));
   }
+  // The environment file holds keys. On a machine with other users it should be readable by its owner only.
+  if (process.platform !== 'win32' && isFile(envFile)) {
+    try {
+      if ((statSync(envFile).mode & 0o077) !== 0) {
+        say(io, '');
+        say(io, `The environment file can be read by other users of this machine. Make it private: chmod 600 "${envFile}"`);
+      }
+    } catch {
+      // Not being able to look is not worth a line.
+    }
+  }
 
   // Availability is worked out against a copy held in memory, so asking never changes the state file.
   const memory = new MemoryStateStore({ ...emptyState(), settings: { ...emptyState().settings, enabledCollectors: inspected.enabledCollectors } });

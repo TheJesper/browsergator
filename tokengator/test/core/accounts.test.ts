@@ -928,3 +928,96 @@ describe('parseState', () => {
     expect(asDocument(imported)).toEqual(asDocument(richState()));
   });
 });
+
+describe('input bounds (nothing that is stored can break the next load)', () => {
+  const NOW_MS = Date.parse('2026-11-19T10:00:00Z');
+  const base = (): State => addAccount(emptyState(), { label: 'Claude', meters: [{ label: 'Credits', unit: 'credits', limit: 1000, reset: { kind: 'interval', hours: 168 } }] }, NOW_MS).state;
+  const field = (work: () => unknown): string | undefined => {
+    try {
+      work();
+    } catch (error) {
+      return (error as { field?: string }).field ?? 'threw-without-field';
+    }
+    return undefined;
+  };
+
+  it('refuses amounts, limits and prices that are not finite or are absurdly large or small', () => {
+    const meter = (extra: Partial<MeterInput>): AccountInput => ({ label: 'X', meters: [{ label: 'M', unit: 'credits', limit: 100, reset: { kind: 'none' }, ...extra }] });
+    for (const limit of [Number.POSITIVE_INFINITY, Number.NaN, 1e308, 1e13, 1e-300, 0, -1]) {
+      expect(field(() => addAccount(emptyState(), meter({ limit }), NOW_MS)), String(limit)).toBe('meters[0].limit');
+    }
+    for (const used of [Number.POSITIVE_INFINITY, Number.NaN, 1e308, -1]) {
+      expect(field(() => addAccount(emptyState(), meter({ used }), NOW_MS)), String(used)).toBe('meters[0].used');
+    }
+    expect(field(() => addAccount(emptyState(), meter({ valueShare: Number.NaN }), NOW_MS))).toBe('meters[0].valueShare');
+    expect(field(() => addAccount(emptyState(), { ...meter({}), price: { amount: 1e308, currency: 'USD', period: 'month' } }, NOW_MS))).toBe('price.amount');
+    const state = base();
+    expect(field(() => updateMeter(state, 'claude:credits', { limit: 1e-300 }, NOW_MS))).toBe('limit');
+    expect(field(() => updateMeter(state, 'claude:credits', { used: Number.POSITIVE_INFINITY }, NOW_MS))).toBe('used');
+  });
+
+  it('refuses a window of nearly no length, which would roll over without end', () => {
+    for (const hours of [1e-320, 1e-9, 0.001, 0, -5, 24 * 367, Number.POSITIVE_INFINITY]) {
+      expect(field(() => validateResetRule({ kind: 'interval', hours })), String(hours)).toBe('reset.hours');
+      expect(field(() => validateResetRule({ kind: 'rolling', hours })), String(hours)).toBe('reset.hours');
+    }
+    expect(validateResetRule({ kind: 'interval', hours: 1 / 60 })).toEqual({ kind: 'interval', hours: 1 / 60 });
+    expect(validateResetRule({ kind: 'rolling', hours: 5 })).toEqual({ kind: 'rolling', hours: 5 });
+  });
+
+  it('takes control characters out of names and keeps line breaks only in notes', () => {
+    const ESC = String.fromCharCode(27);
+    const NUL = String.fromCharCode(0);
+    const label = `  Cla${ESC}[2Jude${NUL}\r\nMax${String.fromCharCode(0x202e)}  `;
+    const { account } = addAccount(
+      emptyState(),
+      { label, notes: `first line\r\nsecond${ESC} line\twith a tab${NUL}`, meters: [{ label: `Week${ESC}ly\rlimit`, unitLabel: `req${NUL}uests`, unit: 'requests', limit: 10, reset: { kind: 'none' } }] },
+      NOW_MS
+    );
+    expect(account.label).toBe('Cla [2Jude Max');
+    expect(account.notes).toBe('first line\nsecond line\twith a tab');
+    expect(account.meters[0]?.label).toBe('Week ly limit');
+    expect(account.meters[0]?.unitLabel).toBe('req uests');
+    for (const text of [account.label, account.meters[0]?.label ?? '', account.meters[0]?.unitLabel ?? '']) {
+      expect([...text].some((char) => (char.codePointAt(0) ?? 0) < 32 || (char.codePointAt(0) ?? 0) === 127)).toBe(false);
+    }
+    // A name that is nothing but control characters is no name.
+    expect(field(() => addAccount(emptyState(), { label: `${ESC}${NUL}\r\n`, meters: [{ label: 'M', reset: { kind: 'none' } }] }, NOW_MS))).toBe('label');
+  });
+
+  it('reads reset times as ISO 8601 only, inside a range a reset can fall in', () => {
+    const state = base();
+    for (const bad of ['1', 'March 7', '2026-13-45T00:00:00Z', '275760-09-13T00:00:00Z', '+275760-09-13T00:00:00.000Z', '1500-01-01T00:00:00Z', '9999-12-31T23:59:59Z', 'tomorrow', '']) {
+      if (bad === '') continue;
+      expect(field(() => updateMeter(state, 'claude:credits', { resetsAt: bad }, NOW_MS)), bad).toBe('resetsAt');
+    }
+    for (const good of ['2026-11-21T09:00:00Z', '2026-11-21T10:00:00+01:00', '2026-11-21T09:00:00.000Z', '2026-11-21 09:00']) {
+      expect(field(() => updateMeter(state, 'claude:credits', { resetsAt: good }, NOW_MS)), good).toBeUndefined();
+    }
+  });
+
+  it('drops samples, spend entries and ledger entries that are not finite when importing, instead of storing them', () => {
+    const exported = JSON.parse(JSON.stringify(base())) as Record<string, any>;
+    // JSON cannot carry Infinity, but a request body can say 1e999, which parses to it. The marker stands in.
+    const HUGE = '__huge__';
+    exported['accounts'][0].meters[0].samples = [
+      { t: '2026-11-18T10:00:00Z', used: 5 },
+      { t: '2026-11-18T11:00:00Z', used: HUGE },
+      { t: 'not a time', used: 6 }
+    ];
+    exported['spend'] = [{ id: 'api', label: 'API', currency: 'USD', entries: [{ date: '2026-11-18', amount: 3 }, { date: '2026-11-19', amount: HUGE }], source: { kind: 'manual' } }];
+    exported['cycles'] = [
+      { meterId: 'claude:credits', endedAt: '2026-11-12T00:00:00Z', limit: 1000, used: 400, wastedFraction: 0.6, wastedValue: HUGE, currency: 'USD', confidence: 'measured' },
+      { meterId: 'claude:credits', endedAt: '2026-11-05T00:00:00Z', limit: HUGE, used: 400, wastedFraction: 0.6 }
+    ];
+    const body = JSON.stringify(exported).replaceAll(`"${HUGE}"`, '1e999');
+    expect(body).toContain('1e999');
+    const imported = parseState(JSON.parse(body), NOW_MS);
+    expect(imported.accounts[0]?.meters[0]?.samples).toEqual([{ t: '2026-11-18T10:00:00.000Z', used: 5 }]);
+    expect(imported.spend[0]?.entries).toEqual([{ date: '2026-11-18', amount: 3 }]);
+    expect(imported.cycles).toHaveLength(1);
+    expect(imported.cycles[0]?.wastedValue).toBeNull();
+    // What comes out is a document that says the same thing after a trip through JSON.
+    expect(JSON.parse(JSON.stringify(imported))).toEqual(imported);
+  });
+});

@@ -3,6 +3,7 @@
 
 import type { MeterSource, SpendSource, State } from './types.js';
 import { NotFoundError, ValidationError, slugify } from './accounts.js';
+import { isAmount, plainLine } from './limits.js';
 import { dateKey, daysInMonth, iso } from './time.js';
 
 export const MAX_SPEND_DAYS = 400;
@@ -34,9 +35,7 @@ export interface SpendSummary {
 
 function validBudget(value: unknown): number | null {
   if (value === undefined || value === null || value === 0) return null;
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-    throw new ValidationError('monthlyBudget', 'monthlyBudget must be a number of 0 or more.');
-  }
+  if (!isAmount(value)) throw new ValidationError('monthlyBudget', 'monthlyBudget must be a number of 0 or more.');
   return value;
 }
 
@@ -52,7 +51,7 @@ export function addSpendSource(
   nowMs: number,
   source: MeterSource = { kind: 'manual' }
 ): { state: State; source: SpendSource } {
-  const label = typeof input.label === 'string' ? input.label.trim() : '';
+  const label = typeof input.label === 'string' ? plainLine(input.label) : '';
   if (!label) throw new ValidationError('label', 'label is required.');
   if (label.length > 60) throw new ValidationError('label', 'label must be at most 60 characters.');
   if (state.spend.length >= 50) throw new ValidationError('spend', 'At most 50 spend sources are supported.');
@@ -86,7 +85,7 @@ export function updateSpendSource(
   const source = requireSource(state, id);
   const next: SpendSource = { ...source };
   if (patch.label !== undefined) {
-    const label = patch.label.trim();
+    const label = typeof patch.label === 'string' ? plainLine(patch.label) : '';
     if (!label) throw new ValidationError('label', 'label is required.');
     next.label = label.slice(0, 60);
   }
@@ -113,9 +112,7 @@ export function recordSpend(
   via?: MeterSource
 ): State {
   const source = requireSource(state, id);
-  if (typeof entry.amount !== 'number' || !Number.isFinite(entry.amount) || entry.amount < 0) {
-    throw new ValidationError('amount', 'amount must be a number of 0 or more.');
-  }
+  if (!isAmount(entry.amount)) throw new ValidationError('amount', 'amount must be a number of 0 or more.');
   const date = entry.date ?? dateKey(nowMs, tz);
   // The parser rolls "2026-11-31" over into December instead of refusing it, so compare what comes back:
   // a day the calendar does not have would count towards the month and appear on no day.
@@ -127,6 +124,7 @@ export function recordSpend(
   const index = entries.findIndex((existing) => existing.date === date);
   const previous = index >= 0 ? (entries[index]?.amount ?? 0) : 0;
   const amount = entry.mode === 'add' ? previous + entry.amount : entry.amount;
+  if (!isAmount(amount)) throw new ValidationError('amount', 'That makes the total for the day too large.');
   if (index >= 0) entries[index] = { date, amount };
   else entries.push({ date, amount });
   entries.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));

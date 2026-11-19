@@ -8,6 +8,11 @@ export const DEFAULT_PORT = 4777;
 export const DEFAULT_HOST = '127.0.0.1';
 /** Largest request body the service accepts. */
 export const MAX_BODY_BYTES = 256 * 1024;
+/**
+ * The cap for the one request that carries a whole state document. A year of history for a handful of
+ * subscriptions is larger than the cap above, and a backup the service wrote has to be restorable.
+ */
+export const MAX_IMPORT_BYTES = 16 * 1024 * 1024;
 
 export interface ServiceConfig {
   host: string;

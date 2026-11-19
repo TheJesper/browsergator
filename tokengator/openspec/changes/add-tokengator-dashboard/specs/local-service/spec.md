@@ -18,7 +18,7 @@ The service SHALL listen on 127.0.0.1 unless configured otherwise and SHALL refu
 - **THEN** it exits with an error explaining that a token is required
 
 ### Requirement: Request validation
-The service SHALL reject requests whose Host header is not one of its own addresses, SHALL reject state-changing requests that carry an Origin other than its own, and SHALL accept request bodies only as JSON up to 256 KB.
+The service SHALL reject requests whose Host header is not one of its own addresses, SHALL reject state-changing requests that carry an Origin other than its own, and SHALL accept request bodies only as JSON up to 256 KB. The one request that carries a whole state document, an import, SHALL instead be accepted up to 16 MB, so that a document the service exported can always be imported back.
 
 #### Scenario: DNS rebinding attempt
 - **WHEN** a request arrives with Host `evil.example`
@@ -31,6 +31,10 @@ The service SHALL reject requests whose Host header is not one of its own addres
 #### Scenario: Oversized body
 - **WHEN** a request body exceeds 256 KB
 - **THEN** it is answered with 413 and nothing changes
+
+#### Scenario: Restoring a large backup
+- **WHEN** a state with a year of history exports to more than 256 KB and that export is posted to the import route
+- **THEN** it is imported
 
 ### Requirement: Optional access token
 The service SHALL, when a token is configured, require it on the API, the event stream and the MCP endpoint, as a bearer header or as a session cookie obtained by presenting the token once, SHALL compare tokens in constant time, and SHALL never accept a token in a query string.
@@ -61,6 +65,39 @@ The service SHALL store its state as a single JSON document in the Tokengator ho
 #### Scenario: Change made by another process
 - **WHEN** another process changes the stored document while the service is running
 - **THEN** connected dashboards are told to refresh within five seconds
+
+### Requirement: A stored document always loads
+The service SHALL refuse any input that would leave a number in the state that is not finite, and SHALL never write a state document that it could not read back. When a change would produce such a document it SHALL be refused, the file SHALL stay as it was, and nothing SHALL be set aside as corrupt.
+
+#### Scenario: A reading that overflows
+- **WHEN** a reading with `used` 1e308 and `limit` 1e-300 is reported
+- **THEN** it is answered with a validation error and the state file is unchanged
+
+#### Scenario: An import with a number too large to represent
+- **WHEN** an imported document contains a sample or a spend entry of 1e999
+- **THEN** the import succeeds without that figure and the stored document loads again
+
+#### Scenario: Defence in depth
+- **WHEN** a change that passed validation would still serialise to a document the service cannot load
+- **THEN** the write is refused and the previous file is untouched
+
+### Requirement: Private home directory
+The service SHALL create its home directory, its state file and its record of reminders readable and writable by the owning user only, and `doctor` SHALL say so when the environment file can be read by other users.
+
+#### Scenario: First start
+- **WHEN** the service creates its home directory on a POSIX system
+- **THEN** the directory has no permissions for group or others
+
+#### Scenario: Readable environment file
+- **WHEN** the environment file has permissions for group or others
+- **THEN** `doctor` says it can be read by other users and how to make it private
+
+### Requirement: Collector switches are atomic
+Switching a collector on or off SHALL be one change to the stored list, made under the same lock as every other change, and the answer SHALL report what was stored.
+
+#### Scenario: Several switched at once
+- **WHEN** five collectors are switched on at the same moment
+- **THEN** all five are stored as on
 
 ### Requirement: HTTP API
 The service SHALL provide a JSON API to read the full state, create, update and delete accounts and meters, record readings and quick updates, manage spend sources and entries, read the catalog, export and import state, run collectors and read their status, together with a server-sent event stream that announces every change. Errors SHALL use a consistent JSON shape with a code and a message.

@@ -407,3 +407,25 @@ describe('costs are not waste', () => {
     expect(summary.utilisation30).toBe(1);
   });
 });
+
+describe('spend amounts stay storable', () => {
+  it('refuses an amount, a running total or a budget that is not a finite, sensible number', () => {
+    const now = Date.parse('2026-11-19T10:00:00Z');
+    let state = addSpendSource(emptyState(), { label: 'API' }, now).state;
+    const id = state.spend[0]?.id as string;
+    for (const amount of [Number.POSITIVE_INFINITY, Number.NaN, 1e308, 1e13, -1]) {
+      expect(() => recordSpend(state, id, { amount }, now, 'UTC'), String(amount)).toThrow(ValidationError);
+    }
+    state = recordSpend(state, id, { amount: 9e11 }, now, 'UTC');
+    // Each amount is in range; the day's total would not be.
+    expect(() => recordSpend(state, id, { amount: 9e11, mode: 'add' }, now, 'UTC')).toThrow(/too large/);
+    expect(() => addSpendSource(emptyState(), { label: 'B', monthlyBudget: 1e308 }, now)).toThrow(ValidationError);
+    expect(JSON.parse(JSON.stringify(state))).toEqual(state);
+  });
+
+  it('keeps control characters out of a spend source name', () => {
+    const now = Date.parse('2026-11-19T10:00:00Z');
+    const { source } = addSpendSource(emptyState(), { label: `Open${String.fromCharCode(27)}[2JAI\r\nAPI` }, now);
+    expect(source.label).toBe('Open [2JAI API');
+  });
+});
