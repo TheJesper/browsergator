@@ -621,7 +621,8 @@ describe('applyReading', () => {
         meterId: meter.id,
         accountId: account.id,
         startedAt: '2026-11-13T00:00:00.000Z',
-        endedAt: '2026-11-20T00:00:00.000Z',
+        // The 20th has not come yet. The window ended early, when the reading found the next one running.
+        endedAt: iso(NOW),
         limit: 100,
         used: 55,
         confidence: 'measured',
@@ -642,7 +643,8 @@ describe('applyReading', () => {
       const { meter } = one({ label: 'Weekly', reset: WEEKLY, used: 30, resetsAt: '2026-11-20T00:00:00Z' });
       const halfLater = utc(2026, 11, 20) + WEEK / 2;
       const moved = applyReading(meter, { usedPercent: 5, resetsAt: iso(halfLater) }, NOW);
-      expect(moved.closed).toMatchObject({ endedAt: '2026-11-20T00:00:00.000Z', used: 30 });
+      // The new window began a week before its end, which is where the old one stopped.
+      expect(moved.closed).toMatchObject({ endedAt: iso(halfLater - WEEK), used: 30 });
       expect(moved.meter.samples).toHaveLength(1);
       expect(moved.meter.windowStartedAt).toBe(iso(halfLater - WEEK));
     });
@@ -883,5 +885,132 @@ describe('numbers that would not survive being stored', () => {
     const after = rolled.accounts[0]?.meters[0] as Meter;
     expect(after.resetsAt).toBeNull();
     expect(JSON.parse(JSON.stringify(rolled))).toEqual(rolled);
+  });
+});
+
+describe('a reading that moves the reset (review findings)', () => {
+  const price = { price: { amount: 100, currency: 'USD', period: 'month' as const } };
+  const weeklyAt = (resetsAt: string, createdAt: number): { state: State; account: Account; meter: Meter } =>
+    one({ label: 'Weekly', reset: WEEKLY, resetsAt }, createdAt, price);
+  const only = (state: State): Meter => (state.accounts[0] as Account).meters[0] as Meter;
+
+  it('takes a later date on its own as a corrected date: usage stays, nothing is recorded', () => {
+    const { state, account, meter } = weeklyAt('2026-11-21T10:00:00Z', utc(2026, 11, 15));
+    const read = applyReadingToState(state, account.id, meter.id, { usedPercent: 62 }, utc(2026, 11, 18));
+    const corrected = applyReadingToState(read, account.id, meter.id, { resetsAt: '2026-11-25T10:00:00Z' }, NOW);
+    expect(corrected.cycles).toEqual([]);
+    expect(only(corrected)).toMatchObject({
+      used: 62,
+      estimated: false,
+      resetsAt: '2026-11-25T10:00:00.000Z',
+      windowStartedAt: '2026-11-18T10:00:00.000Z',
+      updatedAt: iso(utc(2026, 11, 18))
+    });
+    expect(only(corrected).samples).toHaveLength(1);
+    // When that window ends with nothing typed since the 18th, a real, measured-then-stale figure is closed once.
+    const later = rollState(corrected, utc(2026, 11, 25, 11, 0));
+    expect(later.cycles).toHaveLength(1);
+    expect(later.cycles[0]).toMatchObject({ used: 62, endedAt: '2026-11-25T10:00:00.000Z' });
+  });
+
+  it('takes a later date with the same usage or more as the same window', () => {
+    const { state, account, meter } = weeklyAt('2026-11-21T10:00:00Z', utc(2026, 11, 15));
+    const read = applyReadingToState(state, account.id, meter.id, { usedPercent: 62 }, utc(2026, 11, 18));
+    const same = applyReadingToState(read, account.id, meter.id, { usedPercent: 70, resetsAt: '2026-11-25T10:00:00Z' }, NOW);
+    expect(same.cycles).toEqual([]);
+    expect(only(same)).toMatchObject({ used: 70, resetsAt: '2026-11-25T10:00:00.000Z' });
+    expect(only(same).samples.map((sample) => sample.used)).toEqual([62, 70]);
+  });
+
+  it('takes a later date with less usage as a new window, and closes the old one no later than now', () => {
+    const { state, account, meter } = weeklyAt('2026-11-21T10:00:00Z', utc(2026, 11, 15));
+    const read = applyReadingToState(state, account.id, meter.id, { usedPercent: 62 }, utc(2026, 11, 18));
+    const restarted = applyReadingToState(read, account.id, meter.id, { usedPercent: 4, resetsAt: '2026-11-26T08:00:00Z' }, NOW);
+    expect(restarted.cycles).toHaveLength(1);
+    // A week before the 26th at 08:00 is the 19th at 08:00, two hours before now.
+    expect(restarted.cycles[0]).toMatchObject({ used: 62, endedAt: '2026-11-19T08:00:00.000Z', confidence: 'measured' });
+    expect(Date.parse(restarted.cycles[0]?.endedAt ?? '')).toBeLessThanOrEqual(NOW);
+    expect(only(restarted)).toMatchObject({ used: 4, estimated: false, windowStartedAt: '2026-11-19T08:00:00.000Z' });
+  });
+
+  it('extends or shortens a one-off expiry without ever closing it', () => {
+    const { state, account, meter } = one({ label: 'Prepaid credits', unit: 'usd', limit: 50, reset: { kind: 'once' } }, utc(2026, 11, 1));
+    let next = applyReadingToState(state, account.id, meter.id, { used: 10, resetsAt: '2026-12-19T00:00:00Z' }, utc(2026, 11, 2));
+    const started = only(next).windowStartedAt;
+    expect(started).toBe(iso(utc(2026, 11, 2)));
+    // A top-up pushes the expiry out by a year; a typo fix pulls it back. Less "used" changes nothing either.
+    for (const reading of [
+      { used: 12, resetsAt: '2027-11-19T00:00:00Z' },
+      { used: 12, resetsAt: '2026-12-01T00:00:00Z' },
+      { used: 3, resetsAt: '2027-06-01T00:00:00Z' },
+      { resetsAt: '2027-11-19T00:00:00Z' }
+    ]) {
+      next = applyReadingToState(next, account.id, meter.id, reading, NOW);
+      expect(next.cycles, JSON.stringify(reading)).toEqual([]);
+      expect(only(next)).toMatchObject({ expired: false, windowStartedAt: started, resetsAt: new Date(reading.resetsAt).toISOString() });
+    }
+    expect(only(next).used).toBe(3);
+  });
+
+  it('takes back a finished window that a too-early reset time wrote, once the real reset is known', () => {
+    // Typed as Wednesday 12:00; the real reset is Thursday 09:00.
+    const { state, account, meter } = weeklyAt('2026-11-18T12:00:00Z', utc(2026, 11, 12));
+    const read = applyReadingToState(state, account.id, meter.id, { usedPercent: 62 }, utc(2026, 11, 17));
+    const rolled = rollState(read, utc(2026, 11, 18, 12, 30));
+    expect(rolled.cycles).toHaveLength(1);
+    expect(only(rolled)).toMatchObject({ used: 0, estimated: true });
+
+    const corrected = applyReadingToState(rolled, account.id, meter.id, { usedPercent: 70, resetsAt: '2026-11-19T09:00:00Z' }, utc(2026, 11, 18, 13, 0));
+    expect(corrected.cycles).toEqual([]);
+    expect(only(corrected)).toMatchObject({ used: 70, estimated: false, windowStartedAt: '2026-11-12T09:00:00.000Z', resetsAt: '2026-11-19T09:00:00.000Z' });
+
+    const ended = rollState(corrected, utc(2026, 11, 19, 9, 30));
+    expect(ended.cycles).toHaveLength(1);
+    expect(ended.cycles[0]).toMatchObject({ used: 70, startedAt: '2026-11-12T09:00:00.000Z', endedAt: '2026-11-19T09:00:00.000Z' });
+  });
+
+  it('gives the usage back when only the date is corrected after such a roll', () => {
+    const { state, account, meter } = weeklyAt('2026-11-18T12:00:00Z', utc(2026, 11, 12));
+    const read = applyReadingToState(state, account.id, meter.id, { usedPercent: 62 }, utc(2026, 11, 17));
+    const rolled = rollState(read, utc(2026, 11, 18, 12, 30));
+    const corrected = applyReadingToState(rolled, account.id, meter.id, { resetsAt: '2026-11-19T09:00:00Z' }, utc(2026, 11, 18, 13, 0));
+    expect(corrected.cycles).toEqual([]);
+    expect(only(corrected)).toMatchObject({ used: 62, estimated: false, resetsAt: '2026-11-19T09:00:00.000Z' });
+  });
+
+  it('does the same when the roll and the correction happen in one call', () => {
+    const { state, account, meter } = weeklyAt('2026-11-18T12:00:00Z', utc(2026, 11, 12));
+    const read = applyReadingToState(state, account.id, meter.id, { usedPercent: 62 }, utc(2026, 11, 17));
+    // Nothing looked at the state between the wrong reset passing and the correction.
+    const corrected = applyReadingToState(read, account.id, meter.id, { usedPercent: 70, resetsAt: '2026-11-19T09:00:00Z' }, utc(2026, 11, 18, 13, 0));
+    expect(corrected.cycles).toEqual([]);
+    expect(only(corrected)).toMatchObject({ used: 70, windowStartedAt: '2026-11-12T09:00:00.000Z' });
+  });
+
+  it('turns a balance that is given an expiry into a one-off expiry, with a forecast and one honest ledger entry', () => {
+    const { state, account, meter } = one({ label: 'Credit balance', unit: 'usd', limit: 20, reset: { kind: 'none' } }, utc(2026, 11, 10));
+    const read = applyReadingToState(state, account.id, meter.id, { used: 6, resetsAt: iso(NOW + 3 * DAY) }, NOW);
+    expect(only(read).reset).toEqual({ kind: 'once' });
+    expect(only(read)).toMatchObject({ windowStartedAt: iso(NOW), resetsAt: iso(NOW + 3 * DAY), expired: false });
+    const view = viewMeter(read.accounts[0] as Account, only(read), NOW + 2 * DAY);
+    expect(view.tier).not.toBe('balance');
+    expect(view.msLeft).toBe(DAY);
+
+    const after = rollState(read, NOW + 3 * DAY + HOUR);
+    expect(only(after).expired).toBe(true);
+    expect(after.cycles).toHaveLength(1);
+    expect(after.cycles[0]).toMatchObject({ used: 6, limit: 20 });
+    expect(viewMeter(after.accounts[0] as Account, only(after), NOW + 4 * DAY).tier).toBe('expired');
+  });
+
+  it('records nothing for a balance that a file still holds with a reset time on it', () => {
+    const { state } = one({ label: 'Credit balance', unit: 'usd', limit: 20, used: 6, reset: { kind: 'none' } }, utc(2026, 11, 10));
+    const leftover: State = {
+      ...state,
+      accounts: state.accounts.map((account) => ({ ...account, meters: account.meters.map((meter) => ({ ...meter, resetsAt: iso(NOW - HOUR) })) }))
+    };
+    const rolled = rollState(leftover, NOW);
+    expect(rolled.cycles).toEqual([]);
+    expect(only(rolled)).toMatchObject({ resetsAt: null, used: 6, expired: false });
   });
 });

@@ -407,14 +407,23 @@ describe('totals', () => {
     expect(summary.utilisation30).toBeCloseTo((0.7 + 0.5 + 0.1) / 3, 9);
   });
 
-  it('ignores a cycle whose end still lies ahead', () => {
-    // A provider that reports a later reset closes the stored window before its own end has come.
+  it('records a window the provider ended early at the moment that was found out, never in the future', () => {
     let state = add(emptyState(), 'Claude Max', [{ label: 'Weekly', reset: WEEKLY, resetsAt: '2026-11-20T00:00:00Z' }], { price: USD_100 }, utc(2026, 11, 14));
     state = read(state, 'claude-max:weekly', { usedPercent: 55 }, utc(2026, 11, 19, 6, 0));
     state = read(state, 'claude-max:weekly', { usedPercent: 4, resetsAt: '2026-11-27T00:00:00Z' }, NOW);
     expect(state.cycles).toHaveLength(1);
-    expect(ledgerTotals(state.cycles, NOW).cycles30).toBe(0);
-    expect(ledgerTotals(state.cycles, utc(2026, 11, 20, 1, 0)).cycles30).toBe(1);
+    expect(state.cycles[0]?.endedAt).toBe(iso(NOW));
+    expect(ledgerTotals(state.cycles, NOW).cycles30).toBe(1);
+  });
+
+  it('ignores a cycle whose end lies ahead, should a file ever hold one', () => {
+    let state = add(emptyState(), 'Claude Max', [{ label: 'Weekly', reset: WEEKLY, resetsAt: '2026-11-20T00:00:00Z' }], { price: USD_100 }, utc(2026, 11, 14));
+    state = read(state, 'claude-max:weekly', { usedPercent: 55 }, utc(2026, 11, 19, 6, 0));
+    state = rollState(state, utc(2026, 11, 20, 1, 0));
+    expect(state.cycles).toHaveLength(1);
+    const ahead = { ...(state.cycles[0] as State['cycles'][number]), endedAt: '2026-11-25T00:00:00.000Z' };
+    expect(ledgerTotals([ahead], NOW).cycles30).toBe(0);
+    expect(ledgerTotals([ahead], utc(2026, 11, 25, 1, 0)).cycles30).toBe(1);
   });
 
   it('lists the recent cycles of one meter in order', () => {

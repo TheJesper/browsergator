@@ -186,18 +186,20 @@ export function rollMeter(meter: Meter, nowMs: number): { meter: Meter; closed: 
     const end = toMs(current.resetsAt);
     if (end === null || end > nowMs || current.expired) break;
 
+    const rule = current.reset;
+    if (rule.kind === 'none') {
+      // A balance has no window to finish. A reset time on one is a leftover, and nothing is recorded for it.
+      current = { ...current, resetsAt: null, windowStartedAt: null };
+      break;
+    }
+
     if (first) {
       closed = closeWindow(current, end);
       first = false;
     }
 
-    const rule = current.reset;
     if (rule.kind === 'once') {
       current = { ...current, expired: true };
-      break;
-    }
-    if (rule.kind === 'none') {
-      current = { ...current, resetsAt: null, windowStartedAt: null };
       break;
     }
     if (rule.kind === 'rolling') {
@@ -367,9 +369,14 @@ function pushSample(meter: Meter, nowMs: number, used: number): Meter['samples']
  * Applies one reading. Returns the updated meter and, when the reading revealed that a window had ended,
  * the finished cycle to record.
  */
-export function applyReading(meter: Meter, reading: Reading, nowMs: number): { meter: Meter; closed: CycleDraft | null } {
+export function applyReading(
+  meter: Meter,
+  reading: Reading,
+  nowMs: number
+): { meter: Meter; closed: CycleDraft | null; /** End time of a recorded cycle that this reading shows was never a window's end. */ retract: string | null } {
   const rolled = rollMeter(meter, nowMs);
   let current = rolled.meter;
+  let retract: string | null = null;
   let closed = rolled.closed;
 
   let limit = current.limit;
@@ -406,14 +413,37 @@ export function applyReading(meter: Meter, reading: Reading, nowMs: number): { m
   const nominal = nominalWindowMs(current.reset);
   const oldEnd = toMs(current.resetsAt);
 
+  // A balance that is given an expiry is no longer a balance without a clock: it is a one-off expiry, and
+  // has to be shown, forecast and recorded as one.
+  if (newEnd !== null && newEnd > nowMs && current.reset.kind === 'none') {
+    current = { ...current, reset: { kind: 'once' }, windowStartedAt: null };
+  }
+
   if (newEnd !== null && newEnd > nowMs) {
     const sameWindow = oldEnd !== null && Math.abs(newEnd - oldEnd) < (windowLengthMs(current) ?? nominal ?? DAY) / 2;
-    if (oldEnd !== null && !sameWindow && newEnd > oldEnd) {
-      // The provider is already in a later window than the one we were tracking.
-      closed = closed ?? closeWindow(current, oldEnd);
+    const moved = oldEnd !== null && !sameWindow;
+    // A one-off expiry has no next window to be in: a later date extends it, an earlier one shortens it.
+    const recurring = current.reset.kind !== 'once';
+    // A reset that is much later than the one tracked means a new window only when the usage says so, by
+    // having gone down. The same usage or more with a later date is the same window with a corrected date,
+    // and a date on its own says nothing about usage at all.
+    const restarted = moved && recurring && oldEnd !== null && newEnd > oldEnd && used !== null && used < current.used;
+    if (restarted && oldEnd !== null) {
+      // The provider is in a later window than the one tracked. The old one ended where the new one
+      // began, when the rule says where that is, and in any case no later than its own reset and no later
+      // than now: a window cannot be recorded as finishing in the future.
+      const began = windowStartFor(current.reset, newEnd);
+      closed = closed ?? closeWindow(current, Math.min(oldEnd, nowMs, began ?? Number.POSITIVE_INFINITY));
       current = { ...current, used: 0, samples: [], windowStartedAt: null };
-    } else if (oldEnd !== null && !sameWindow) {
-      // An earlier reset than we believed: the anchor was wrong. Keep the usage, drop the stale start.
+    } else if (moved && recurring) {
+      // The anchor was wrong. Keep the usage and drop the start that went with the wrong anchor.
+      if (oldEnd !== null && newEnd < oldEnd && current.estimated && current.windowStartedAt !== null) {
+        // The meter was rolled forward on that wrong anchor, and the roll wrote a finished window into the
+        // ledger. The window had not finished. If the roll happened in this very call it is simply not
+        // recorded; otherwise the caller is told which entry to take back.
+        if (closed !== null && closed.endedAt === current.windowStartedAt) closed = null;
+        else retract = current.windowStartedAt;
+      }
       current = { ...current, windowStartedAt: null };
     }
     // A reported reset says something about the schedule, not only about this window: without this a
@@ -452,7 +482,7 @@ export function applyReading(meter: Meter, reading: Reading, nowMs: number): { m
     estimated: used === null ? current.estimated : false,
     source: reading.source ?? current.source
   };
-  return { meter: current, closed };
+  return { meter: current, closed, retract };
 }
 
 const two = (n: number): string => String(n).padStart(2, '0');
@@ -493,7 +523,16 @@ export function applyReadingToState(
   const account = rolled.accounts.find((candidate) => candidate.id === accountId);
   const meter = account?.meters.find((candidate) => candidate.id === meterId);
   if (!account || !meter) throw new ReadingError('meter', 'No such meter.');
-  const { meter: next, closed } = applyReading(meter, reading, nowMs);
+  const applied = applyReading(meter, reading, nowMs);
+  const { closed } = applied;
+  let next = applied.meter;
+  // A cycle the automatic roll-over wrote for a window that, it now turns out, had not ended.
+  const premature = applied.retract === null ? undefined : rolled.cycles.find((cycle) => cycle.meterId === meterId && cycle.endedAt === applied.retract);
+  if (premature && next.estimated) {
+    // The roll also threw the usage away. A date on its own does not bring a new figure, so the last real
+    // one comes back with the window it belonged to.
+    next = { ...next, used: clamp(premature.used, 0, next.limit), estimated: false };
+  }
   const accounts = rolled.accounts.map((candidate) =>
     candidate.id === accountId
       ? {
@@ -503,6 +542,7 @@ export function applyReadingToState(
         }
       : candidate
   );
-  const cycles = closed ? appendCycles(rolled.cycles, [completeCycle(closed, account, meter, 0)]) : rolled.cycles;
+  const kept = premature ? rolled.cycles.filter((cycle) => cycle !== premature) : rolled.cycles;
+  const cycles = closed ? appendCycles(kept, [completeCycle(closed, account, meter, 0)]) : kept;
   return { ...rolled, accounts, cycles };
 }
