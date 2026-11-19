@@ -104,7 +104,7 @@ export function burnUp(view: MeterView, nowMs: number): HTMLElement {
       pointer.clientX,
       pointer.clientY,
       h('b', null, `${formatPercent(nearest.f)} used`),
-      h('span', null, view.meter.unit === 'percent' ? '' : ` · ${formatAmount(view.meter, nearest.used)}`),
+      h('span', null, view.meter.unit === 'percent' ? '' : `, ${formatAmount(view.meter, nearest.used)}`),
       h('br'),
       h('span', null, formatMoment(nearest.t, nowMs))
     );
@@ -168,9 +168,9 @@ export function cycleColumns(cycles: readonly ClosedCycle[], nowMs: number, widt
         ? h(
             'span',
             null,
-            ` · ${cycle.confidence === 'estimated' ? 'about ' : ''}${formatPercent(cycle.wastedFraction)} expired${cycle.wastedValue && cycle.currency ? ` (${formatMoney(cycle.wastedValue, cycle.currency)})` : ''}`
+            `, ${cycle.confidence === 'estimated' ? 'about ' : ''}${formatPercent(cycle.wastedFraction)} expired${cycle.wastedValue && cycle.currency ? ` (${formatMoney(cycle.wastedValue, cycle.currency)})` : ''}`
           )
-        : h('span', null, ' · nothing expired'),
+        : h('span', null, ', nothing expired'),
       h('br'),
       h('span', null, `ended ${formatMoment(ended, nowMs)}`)
     ]);

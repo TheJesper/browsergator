@@ -4,14 +4,14 @@
 
 AI subscriptions are sold as quota that expires: a 5-hour session window, a weekly cap, a monthly pile of premium requests, characters or credits. Whatever is left when the window resets is gone, and it is paid for either way. Someone running Claude, Codex, Copilot, Gemini, ElevenLabs and Suno side by side has a dozen independent clocks and no single place that says "go use this one now, it resets in 14 hours and 38% of it is still there".
 
-Existing tools mostly answer a different question. The category is dominated by macOS menu-bar apps for coding plans (CodexBar, OpenUsage, ClaudeBar, Quotio and a dozen more) and by token-cost analysers (ccusage, tokscale, Splitrail). They are built around the fear of running out: quota left over is drawn green and called headroom or reserve. A few have started to notice the opposite problem (OpenUsage has a "Use It or Lose It" section for windows that reset within a day, CodexBar added opt-in reminders for the Codex weekly window, the small `aiuse` CLI computes a value at risk), but in every case it is a secondary notification, and the research found no tool that:
+Existing tools mostly answer a different question. The category is dominated by macOS menu-bar apps for coding plans (CodexBar, OpenUsage, ClaudeBar, Quotio and a dozen more) and by token-cost analysers (ccusage, tokscale, Splitrail). They are built around the fear of running out: quota left over is drawn green and called headroom or reserve. A few have started to notice the opposite problem: OpenUsage has a "Use It or Lose It" section for windows that reset within a day, CodexBar and GenAIUsageWidget have opt-in reminders before a reset, Tokenkarma sells an under-use alert in its top tier, and two small projects (`aiuse`, a CLI, and `claude-quota-tracker`, macOS and Claude only) are built around the idea. In the larger tools it is a secondary notification, and the research found no tool that:
 
 - makes expiring quota the primary view and ranks every subscription by it,
 - puts a money value on the loss where a person sees it at a glance, and keeps a record of what actually expired (one small CLI, `aiuse`, computes a value at risk; no dashboard shows one),
 - runs the same on Windows, macOS and Linux (most are macOS only),
 - covers plans with no API at all: Suno, Midjourney, Runway and most creative tools are tracked by nobody,
 - lets a subscription be declared by hand in seconds and kept current by an agent that can see the usage page,
-- gives agents a tool that answers "which plan should this task spend" (existing quota MCP servers are read-only and return raw percentages for one or two coding providers).
+- gives agents a tool that answers "which plan should this task spend" and a way to report what they read (the quota MCP servers that exist are read-only, cover one or two coding providers, and at most nudge about the 5-hour window).
 
 See `research.md` for the survey and its sources.
 

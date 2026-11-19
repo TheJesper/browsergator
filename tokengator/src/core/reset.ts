@@ -86,9 +86,16 @@ export function windowStartFor(rule: ResetRule, resetsAtMs: number): number | nu
     case 'interval':
       return resetsAtMs - rule.hours * HOUR;
     case 'daily':
-    case 'monthly':
+    case 'monthly': {
       // One millisecond earlier, otherwise "at or before" would return the reset itself.
-      return previousBoundary(rule, resetsAtMs - 1);
+      const before = previousBoundary(rule, resetsAtMs - 1);
+      if (before === null) return null;
+      // A reset time shortly after one of the rule's boundaries is that boundary reported late (the
+      // provider's real reset is at 14:37, say), not a window a few hours long that starts in the future.
+      // Same half-window test as for readings: under half a window is a correction.
+      const half = (rule.kind === 'daily' ? DAY : MONTH) / 2;
+      return resetsAtMs - before < half ? previousBoundary(rule, before - 1) : before;
+    }
     default:
       return null;
   }
@@ -208,6 +215,10 @@ export function rollMeter(meter: Meter, nowMs: number): { meter: Meter; closed: 
       break;
     }
     next = nextBoundary(rule, end);
+    // A reset that came shortly before one of the rule's boundaries (the provider's own clock) was that
+    // boundary: the next window runs to the one after, not for the few hours in between. Without this a
+    // collector-fed meter records that sliver as a window that expired fully unused.
+    if (next !== null && next - end < (rule.kind === 'daily' ? DAY : MONTH) / 2) next = nextBoundary(rule, next);
     if (next === null) break;
     current = { ...current, used: 0, windowStartedAt: iso(end), resetsAt: iso(next), samples: [], estimated: true };
   }

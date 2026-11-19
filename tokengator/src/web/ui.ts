@@ -134,10 +134,9 @@ export interface DialogHandle {
   setError: (message: string | null) => void;
 }
 
-let dialogCount = 0;
-
+/** Asked of the document rather than counted, so it is right the instant a dialog closes. */
 export function isDialogOpen(): boolean {
-  return dialogCount > 0;
+  return document.querySelector('dialog[open]') !== null;
 }
 
 export function openDialog(options: { title: string; class?: string; onClose?: () => void; head?: boolean }): DialogHandle {
@@ -159,7 +158,6 @@ export function openDialog(options: { title: string; class?: string; onClose?: (
   }
   el.append(body, foot);
   el.addEventListener('close', () => {
-    dialogCount = Math.max(0, dialogCount - 1);
     el.remove();
     options.onClose?.();
   });
@@ -168,7 +166,6 @@ export function openDialog(options: { title: string; class?: string; onClose?: (
     if (event.target === el) close();
   });
   document.body.appendChild(el);
-  dialogCount += 1;
   el.showModal();
   return {
     el,

@@ -22,7 +22,7 @@ import { viewState } from '../../src/core/forecast.js';
 import { applyReadingToState, rollState } from '../../src/core/reset.js';
 import { addSpendSource, recordSpend } from '../../src/core/spend.js';
 import { DAY, HOUR, iso } from '../../src/core/time.js';
-import { STATE_VERSION, emptyState, type Account, type Meter, type State } from '../../src/core/types.js';
+import { STATE_VERSION, emptyState, type Account, type Meter, type MeterSource, type Reading, type State } from '../../src/core/types.js';
 
 const utc = (y: number, mo: number, d: number, h = 0, mi = 0): number => Date.UTC(y, mo - 1, d, h, mi, 0);
 /** Thursday 19 November 2026, 10:00 UTC. */
@@ -217,6 +217,11 @@ describe('addAccount', () => {
     expect(ids.slice(0, 3)).toEqual(['claude-max-20x', 'chatgpt-codex', 'item']);
     expect(state.accounts.map((account) => account.label)).toEqual(labels.map((label) => label.trim()));
     expect(slugify('Hello, World')).toBe('hello-world');
+    // Letters outside a-z never reach an id, whatever they turn into.
+    for (const label of ['Svensk tjänst', 'Låtar & ljud', 'Café crème', '日本語', 'Ünïcödé 3000']) {
+      expect(slugify(label)).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
+      expect(slugify(label).length).toBeLessThanOrEqual(40);
+    }
   });
 
   it('shares the plan price with the first allowance only, and never with a throttle', () => {
@@ -548,6 +553,15 @@ describe('updateMeter', () => {
     expect(meterOf(state)).toMatchObject({ resetsAt: iso(NOW + 3 * DAY), windowStartedAt: iso(NOW - DAY) });
   });
 
+  it('keeps a month-long window when a monthly meter is given its exact reset time', () => {
+    let state = addAccount(emptyState(), base({ meters: [{ label: 'Weekly', unit: 'credits', limit: 2500, used: 300, reset: { kind: 'monthly', day: 12, time: '00:00', tz: 'UTC' } }] }), NOW).state;
+    state = updateMeter(state, 'claude-max:weekly', { resetsAt: '2026-12-12T14:37:00Z' }, NOW);
+    expect(meterOf(state)).toMatchObject({ resetsAt: '2026-12-12T14:37:00.000Z', windowStartedAt: '2026-11-12T00:00:00.000Z' });
+    const view = viewState(state, NOW)[0];
+    expect(view?.elapsedFraction).toBeGreaterThan(0.2);
+    expect(view?.tier).toBe('behind');
+  });
+
   it('revives an expired one-off meter when it gets a new expiry', () => {
     let state = addAccount(emptyState(), base({ meters: [{ label: 'Weekly', unit: 'credits', limit: 100, used: 10, reset: { kind: 'once' }, resetsAt: iso(NOW + HOUR) }] }), NOW).state;
     state = rollState(state, NOW + 2 * HOUR);
@@ -688,6 +702,7 @@ function richState(): State {
       notes: 'Shared with the team',
       meters: [
         { label: 'Session', key: 'session', role: 'throttle', reset: { kind: 'rolling', hours: 5 } },
+        { label: 'Opus session', key: 'opus-session', role: 'throttle', partial: true, reset: { kind: 'rolling', hours: 5 } },
         { label: 'Weekly', key: 'weekly', reset: { kind: 'interval', hours: 168 }, resetsAt: '2026-11-06T09:00:00Z' },
         { label: 'Weekly Opus', key: 'weekly-opus', reset: { kind: 'interval', hours: 168 }, resetsAt: '2026-11-06T09:00:00Z', valueShare: 0.4 }
       ]
@@ -711,7 +726,7 @@ function richState(): State {
       label: 'Svensk tjänst',
       price: { amount: 249, currency: 'SEK', period: 'month' },
       meters: [
-        { label: 'Låtar', unit: 'count', unitLabel: 'songs', limit: 500, used: 120, reset: { kind: 'daily', time: '00:00', tz: 'America/Los_Angeles' } },
+        { label: 'Låtar', key: 'songs', unit: 'count', unitLabel: 'songs', limit: 500, used: 120, reset: { kind: 'daily', time: '00:00', tz: 'America/Los_Angeles' } },
         { label: 'Characters', unit: 'characters', limit: 100_000, used: 20_000, reset: { kind: 'interval', hours: 720 }, resetsAt: '2026-11-25T00:00:00Z', rollover: 'carries', valueShare: 0.5 }
       ]
     },
@@ -731,24 +746,25 @@ function richState(): State {
   ).state;
 
   // Readings from every kind of source, over three weeks, so windows close and samples build up.
-  const readings: [number, string, string, Record<string, unknown>][] = [
-    [utc(2026, 11, 2, 9, 0), 'claude-max', 'claude-max:weekly', { usedPercent: 31, source: { kind: 'statusline', id: 'claude-statusline' } }],
-    [utc(2026, 11, 2, 9, 0), 'claude-max', 'claude-max:session', { usedPercent: 80, source: { kind: 'statusline', id: 'claude-statusline' } }],
-    [utc(2026, 11, 5, 21, 0), 'claude-max', 'claude-max:weekly', { usedPercent: 74, source: { kind: 'statusline', id: 'claude-statusline' } }],
-    [utc(2026, 11, 5, 21, 0), 'claude-max', 'claude-max:weekly-opus', { usedPercent: 12, source: { kind: 'collector', id: 'claude-usage' } }],
-    [utc(2026, 11, 6, 10, 0), 'suno-pro', 'suno-pro:monthly-credits', { remaining: 1200, source: { kind: 'agent', id: 'claude-code', note: 'read from the usage page' } }],
-    [utc(2026, 11, 14, 12, 0), 'claude-max', 'claude-max:weekly', { usedPercent: 55.5, resetsAt: '2026-11-20T09:00:00Z', source: { kind: 'statusline', id: 'claude-statusline' } }],
-    [utc(2026, 11, 15, 12, 0), 'suno-pro', 'suno-pro:monthly-credits', { used: 300, source: { kind: 'agent', id: 'claude-code', note: 'read from the usage page' } }],
-    [utc(2026, 11, 18, 23, 0), 'svensk-tja-nst', 'svensk-tja-nst:la-tar', { used: 410 }],
-    [utc(2026, 11, 19, 9, 30), 'claude-max', 'claude-max:session', { usedPercent: 100, source: { kind: 'statusline', id: 'claude-statusline' } }],
-    [utc(2026, 11, 19, 9, 45), 'claude-max', 'claude-max:weekly', { usedPercent: 62, source: { kind: 'statusline', id: 'claude-statusline' } }]
+  const statusline: MeterSource = { kind: 'statusline', id: 'claude-statusline' };
+  const agent: MeterSource = { kind: 'agent', id: 'claude-code', note: 'read from the usage page' };
+  const readings: [number, string, string, Reading][] = [
+    [utc(2026, 11, 2, 9, 0), 'Claude Max', 'weekly', { usedPercent: 31, source: statusline }],
+    [utc(2026, 11, 2, 9, 0), 'Claude Max', 'session', { usedPercent: 80, source: statusline }],
+    [utc(2026, 11, 5, 21, 0), 'Claude Max', 'weekly', { usedPercent: 74, source: statusline }],
+    [utc(2026, 11, 5, 21, 0), 'Claude Max', 'weekly-opus', { usedPercent: 12, source: { kind: 'collector', id: 'claude-usage' } }],
+    [utc(2026, 11, 6, 10, 0), 'Suno Pro', 'monthly-credits', { remaining: 1200, source: agent }],
+    [utc(2026, 11, 14, 12, 0), 'Claude Max', 'weekly', { usedPercent: 55.5, resetsAt: '2026-11-20T09:00:00Z', source: statusline }],
+    [utc(2026, 11, 15, 12, 0), 'Suno Pro', 'monthly-credits', { used: 300, source: agent }],
+    [utc(2026, 11, 18, 23, 0), 'Svensk tjänst', 'songs', { used: 410 }],
+    [utc(2026, 11, 19, 9, 30), 'Claude Max', 'session', { usedPercent: 100, source: statusline }],
+    [utc(2026, 11, 19, 9, 30), 'Claude Max', 'opus-session', { usedPercent: 100, source: statusline }],
+    [utc(2026, 11, 19, 9, 45), 'Claude Max', 'weekly', { usedPercent: 62, source: statusline }]
   ];
-  const ids = new Map(state.accounts.map((account) => [account.label, account.id]));
-  const swedish = ids.get('Svensk tjänst') as string;
-  for (const [at, accountId, meterId, reading] of readings) {
-    const account = accountId === 'svensk-tja-nst' ? swedish : accountId;
-    const meter = accountId === 'svensk-tja-nst' ? `${swedish}:${(findAccount(state, swedish).meters[0] as Meter).key}` : meterId;
-    state = applyReadingToState(state, account, meter, reading, at);
+  for (const [at, label, key, reading] of readings) {
+    // Ids are looked up, not spelled out: how a label with "ä" becomes an id is not this fixture's business.
+    const account = state.accounts.find((candidate) => candidate.label === label) as Account;
+    state = applyReadingToState(state, account.id, `${account.id}:${key}`, reading, at);
   }
   state = updateAccount(state, 'suno-pro', { snoozedUntil: iso(NOW + 3 * DAY) }, utc(2026, 11, 19, 9, 50));
 
@@ -762,11 +778,8 @@ function richState(): State {
   return rollState(state, NOW);
 }
 
-function findAccount(state: State, id: string): Account {
-  return state.accounts.find((account) => account.id === id) as Account;
-}
-
-const asDocument = (state: State): unknown => JSON.parse(JSON.stringify(state)) as unknown;
+/** What a value looks like once it has been written out as JSON and read back. */
+const asDocument = (value: unknown): unknown => JSON.parse(JSON.stringify(value)) as unknown;
 
 describe('parseState', () => {
   it('builds a fixture that really covers the document', () => {
@@ -783,6 +796,8 @@ describe('parseState', () => {
     expect(meters.some((meter) => meter.resetsAt === null)).toBe(true);
     expect(meters.some((meter) => meter.rollover === 'carries')).toBe(true);
     expect(meters.some((meter) => meter.unitLabel === 'songs')).toBe(true);
+    expect(meters.some((meter) => meter.partial === true)).toBe(true);
+    expect(meters.some((meter) => meter.source.note !== undefined)).toBe(true);
     expect(state.accounts.some((account) => account.snoozedUntil !== null)).toBe(true);
   });
 
@@ -816,9 +831,9 @@ describe('parseState', () => {
     const document = asDocument(richState()) as State;
     const imported = parseState(document, NOW);
     (document.accounts[0] as Account).label = 'Changed afterwards';
-    ((document.accounts[0] as Account).meters[1] as Meter).reset = { kind: 'none' };
+    ((document.accounts[0] as Account).meters[2] as Meter).reset = { kind: 'none' };
     expect(imported.accounts[0]?.label).toBe('Claude Max');
-    expect(imported.accounts[0]?.meters[1]?.reset).toEqual({ kind: 'interval', hours: 168 });
+    expect(imported.accounts[0]?.meters[2]?.reset).toEqual({ kind: 'interval', hours: 168 });
   });
 
   it('rolls windows that ended between the export and the import', () => {
@@ -890,15 +905,15 @@ describe('parseState', () => {
   it('drops fields it does not know and never trusts derived ones', () => {
     const document = valid();
     account(document, 0)['admin'] = true;
-    meter(document, 0, 1)['tier'] = 'spent';
-    meter(document, 0, 1)['id'] = 'somebody-else:weekly';
+    meter(document, 0, 2)['tier'] = 'spent';
+    meter(document, 0, 2)['id'] = 'somebody-else:weekly';
     (document as Record<string, unknown>)['extra'] = { anything: 1 };
     const imported = parseState(document, NOW);
     expect(imported).not.toHaveProperty('extra');
     expect(imported.accounts[0]).not.toHaveProperty('admin');
-    expect(imported.accounts[0]?.meters[1]).not.toHaveProperty('tier');
+    expect(imported.accounts[0]?.meters[2]).not.toHaveProperty('tier');
     // A meter id always follows from its account and key.
-    expect(imported.accounts[0]?.meters[1]?.id).toBe('claude-max:weekly');
+    expect(imported.accounts[0]?.meters[2]?.id).toBe('claude-max:weekly');
     expect(asDocument(imported)).toEqual(asDocument(richState()));
   });
 });

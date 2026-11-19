@@ -79,6 +79,17 @@ The command line SHALL accept Claude Code's status line JSON on standard input, 
 - **WHEN** the input has no rate-limit data
 - **THEN** nothing is changed, a line is still printed and the exit code is 0
 
+### Requirement: Antigravity status line input
+The same command SHALL accept the Antigravity CLI's status line JSON, tell it apart from Claude Code's, record each quota bucket's remaining share and reset time on the Antigravity account, and store nothing else from the input.
+
+#### Scenario: Status line with quota buckets
+- **WHEN** the status line command receives Antigravity input with a weekly and a 5-hour Gemini bucket
+- **THEN** both meters are updated from the remaining fractions and the email address in the input is not stored
+
+#### Scenario: Disabled bucket
+- **WHEN** a bucket in the input is marked disabled
+- **THEN** no meter is created or updated for it
+
 ### Requirement: Local session logs
 A collector SHALL be able to read the most recent rate-limit snapshot from Codex session logs on the local machine without contacting any server, ignoring snapshots whose windows have already ended.
 

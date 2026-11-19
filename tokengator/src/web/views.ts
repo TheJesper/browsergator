@@ -78,16 +78,6 @@ function moreButton(ctx: Ctx, view: MeterView): HTMLButtonElement {
   return button;
 }
 
-function activate(handler: () => void): (event: KeyboardEvent) => void {
-  return (event) => {
-    if (event.target !== event.currentTarget) return;
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      handler();
-    }
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Queue
 // ---------------------------------------------------------------------------
@@ -103,21 +93,21 @@ function queueRow(ctx: Ctx, view: MeterView): HTMLElement {
   if (view.snoozed) classes.push('snoozed');
   return h(
     'li',
-    {
-      class: classes.join(' '),
-      tabindex: 0,
-      role: 'button',
-      'aria-pressed': String(selectedId === view.id),
-      dataset: { id: view.id, nav: 'row' },
-      onclick: select,
-      onkeydown: activate(select)
-    },
+    // The whole row is a click target for the mouse; the name inside it is the real control.
+    { class: classes.join(' '), dataset: { id: view.id }, onclick: select },
     monogram(view),
     h(
-      'div',
-      { class: 'row-name' },
-      h('div', { class: 'a' }, h('span', null, view.account.label), flags(view, now)),
-      h('div', { class: 'm' }, view.meter.label)
+      'button',
+      {
+        class: 'row-name',
+        type: 'button',
+        'aria-expanded': String(selectedId === view.id),
+        'aria-label': `${view.account.label}, ${view.meter.label}: ${barCaption(view, now).text}. Show details.`,
+        dataset: { id: view.id, nav: 'row' },
+        onclick: isolated(select)
+      },
+      h('span', { class: 'a' }, h('span', null, view.account.label), flags(view, now)),
+      h('span', { class: 'm' }, view.meter.label)
     ),
     h('div', { class: 'row-bar' }, forecastBar(view, now), h('div', { class: 'fcap' }, caption.nodes)),
     h(
@@ -204,7 +194,7 @@ export function boardView(ctx: Ctx, queue: MeterView[], all: MeterView[]): HTMLE
         'div',
         { class: 'card-head' },
         monogram(lead, true),
-        h('div', { class: 't' }, h('div', { class: 'card-title' }, account.label), h('div', { class: 'card-sub' }, [account.plan, price].filter(Boolean).join(' · ') || 'Custom')),
+        h('div', { class: 't' }, h('div', { class: 'card-title' }, account.label), h('div', { class: 'card-sub' }, [account.plan, price].filter(Boolean).join(', ') || 'Custom')),
         stateChip(lead)
       ),
       meters.map((view) => {
@@ -215,7 +205,7 @@ export function boardView(ctx: Ctx, queue: MeterView[], all: MeterView[]): HTMLE
           {
             class: 'card-meter',
             type: 'button',
-            'aria-pressed': String(view.id === selectedId),
+            'aria-expanded': String(view.id === selectedId),
             dataset: { id: view.id, nav: 'row' },
             onclick: () => ctx.app.select(view.id === selectedId ? null : view.id)
           },
@@ -233,7 +223,7 @@ export function boardView(ctx: Ctx, queue: MeterView[], all: MeterView[]): HTMLE
       h(
         'div',
         { class: 'card-foot' },
-        h('span', { class: 'sp' }, risk >= 0.005 && lead.currency ? `${formatMoney(risk, lead.currency)} at risk · ` : '', ageText(lead)),
+        h('span', { class: 'sp' }, risk >= 0.005 && lead.currency ? `${formatMoney(risk, lead.currency)} at risk, ` : '', ageText(lead)),
         h('button', { class: 'icon-btn', type: 'button', title: 'Update usage', 'aria-label': `Update ${account.label}`, onclick: () => ctx.actions.quick(`${lead.meter.id} `) }, icon('edit')),
         copyMenuButton(copyFormats(lead, now), `Copy ${account.label}`),
         moreButton(ctx, lead)
@@ -316,7 +306,8 @@ export function timelineView(ctx: Ctx, queue: MeterView[]): HTMLElement {
     const fraction = Math.min(1, (view.msLeft ?? 0) / horizonMs);
     const risk = riskText(view);
     const expiring = view.projectedUnused >= 0.05 && view.tier !== 'spent' && view.tier !== 'fresh';
-    const spanClass = view.tier === 'spent' ? 'tl-span ok' : view.tier === 'hot' ? 'tl-span hot' : expiring ? 'tl-span exp' : 'tl-span';
+    // Only two things are worth a colour on a deadline: quota that will expire, and quota already used up.
+    const spanClass = view.tier === 'spent' ? 'tl-span ok' : expiring ? 'tl-span exp' : 'tl-span';
     const flip = fraction > 0.66;
     const select = (): void => ctx.app.select(selectedId === view.id ? null : view.id);
     const end = h(
@@ -329,21 +320,19 @@ export function timelineView(ctx: Ctx, queue: MeterView[]): HTMLElement {
     grid.appendChild(
       h(
         'div',
-        {
-          class: selectedId === view.id ? 'tl-row selected' : 'tl-row',
-          tabindex: 0,
-          role: 'button',
-          'aria-pressed': String(selectedId === view.id),
-          'aria-label': `${view.account.label}, ${view.meter.label}: ${leftText(view)}, resets in ${formatDuration(view.msLeft ?? 0)}`,
-          dataset: { id: view.id, nav: 'row' },
-          onclick: select,
-          onkeydown: activate(select)
-        },
+        { class: selectedId === view.id ? 'tl-row selected' : 'tl-row', onclick: select },
         h(
-          'div',
-          { class: 'tl-label' },
+          'button',
+          {
+            class: 'tl-label',
+            type: 'button',
+            'aria-expanded': String(selectedId === view.id),
+            'aria-label': `${view.account.label}, ${view.meter.label}: ${leftText(view)}, resets in ${formatDuration(view.msLeft ?? 0)}. Show details.`,
+            dataset: { id: view.id, nav: 'row' },
+            onclick: isolated(select)
+          },
           h('span', { class: `state t-${stateKey(view)}` }, stateMark(stateKey(view))),
-          h('div', null, h('b', null, view.account.label), h('span', null, view.meter.label))
+          h('span', { class: 'tl-name' }, h('b', null, view.account.label), h('span', null, view.meter.label))
         ),
         h(
           'div',
@@ -375,16 +364,21 @@ export function timelineView(ctx: Ctx, queue: MeterView[]): HTMLElement {
             views.map((view) =>
               h(
                 'li',
-                { tabindex: 0, role: 'button', dataset: { id: view.id, nav: 'row' }, onclick: () => ctx.app.select(view.id), onkeydown: activate(() => ctx.app.select(view.id)) },
+                { onclick: () => ctx.app.select(view.id) },
                 h('span', { class: `state t-${stateKey(view)}` }, stateMark(stateKey(view))),
-                h('b', { style: { fontWeight: '500' } }, view.account.label),
-                view.meter.label,
+                h(
+                  'button',
+                  { class: 'tl-later-name', type: 'button', dataset: { id: view.id, nav: 'row' }, onclick: isolated(() => ctx.app.select(view.id)) },
+                  h('b', null, view.account.label),
+                  ' ',
+                  view.meter.label
+                ),
                 h('span', { class: 'num' }, tail(view))
               )
             )
           )
         );
-  const laterList = list('Later', later, (view) => `${leftText(view)} · ${formatMoment(view.resetsAtMs as number, now)}`);
+  const laterList = list('Later', later, (view) => `${leftText(view)}, resets ${formatMoment(view.resetsAtMs as number, now)}`);
   const idleList = list('No reset scheduled', unscheduled, (view) => leftText(view));
   if (laterList) root.appendChild(laterList);
   if (idleList) root.appendChild(idleList);
@@ -413,7 +407,24 @@ function tableColumns(ctx: Ctx): Column[] {
   const { now, prefs } = ctx.app.model;
   return [
     { id: 'state', label: 'State', sort: 'use-first', cell: (view) => stateChip(view), text: (view) => TIER_LABEL[view.tier as Tier] ?? '' },
-    { id: 'name', label: 'Subscription', sort: 'name', cell: (view) => h('span', { class: 'c-name' }, view.account.label), text: (view) => view.account.label },
+    {
+      id: 'name',
+      label: 'Subscription',
+      sort: 'name',
+      cell: (view) =>
+        h(
+          'button',
+          {
+            class: 'c-name',
+            type: 'button',
+            'aria-expanded': String(ctx.app.model.selectedId === view.id),
+            dataset: { id: view.id, nav: 'row' },
+            onclick: isolated(() => ctx.app.select(ctx.app.model.selectedId === view.id ? null : view.id))
+          },
+          view.account.label
+        ),
+      text: (view) => view.account.label
+    },
     { id: 'meter', label: 'Meter', cell: (view) => [view.meter.label, ' ', flags(view, now)], text: (view) => view.meter.label },
     { id: 'bar', label: 'Forecast', cell: (view) => h('div', { class: 'c-bar' }, forecastBar(view, now)), text: (view) => barCaption(view, now).text },
     {
@@ -503,13 +514,7 @@ export function tableView(ctx: Ctx, queue: MeterView[]): HTMLElement {
         queue.map((view) =>
           h(
             'tr',
-            {
-              class: selectedId === view.id ? 'selected' : null,
-              tabindex: 0,
-              dataset: { id: view.id, nav: 'row' },
-              onclick: () => ctx.app.select(selectedId === view.id ? null : view.id),
-              onkeydown: activate(() => ctx.app.select(selectedId === view.id ? null : view.id))
-            },
+            { class: selectedId === view.id ? 'selected' : null, onclick: () => ctx.app.select(selectedId === view.id ? null : view.id) },
             columns.map((column) => h('td', { class: column.right ? 'r' : null }, column.cell(view)))
           )
         )

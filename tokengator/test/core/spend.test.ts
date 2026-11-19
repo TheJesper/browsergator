@@ -206,7 +206,11 @@ describe('daily entries', () => {
     expectValidation(() => recordSpend(state, 'openai-api', { date: 'yesterday', amount: 1 }, NOW, 'UTC'), 'date');
     expectValidation(() => recordSpend(state, 'openai-api', { date: '18/11/2026', amount: 1 }, NOW, 'UTC'), 'date');
     expectValidation(() => recordSpend(state, 'openai-api', { date: '2026-13-01', amount: 1 }, NOW, 'UTC'), 'date');
+    // A day the calendar does not have would be counted in the month but shown on no day.
+    expectValidation(() => recordSpend(state, 'openai-api', { date: '2026-11-31', amount: 1 }, NOW, 'UTC'), 'date');
+    expectValidation(() => recordSpend(state, 'openai-api', { date: '2026-02-30', amount: 1 }, NOW, 'UTC'), 'date');
     expect(JSON.stringify(state)).toBe(before);
+    expect(sourceOf(recordSpend(state, 'openai-api', { date: '2028-02-29', amount: 1 }, NOW, 'UTC')).entries.map((entry) => entry.date)).toContain('2028-02-29');
   });
 });
 

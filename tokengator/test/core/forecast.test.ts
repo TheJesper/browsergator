@@ -508,6 +508,29 @@ describe('throttle state', () => {
     expect(other.blockedBy).toBeNull();
   });
 
+  it('does not let a partial limit, such as one model family, block the whole account', () => {
+    const opus: MeterInput = { ...session(100, 200), label: 'Opus session', partial: true };
+    const [onlyPartial] = views([weeklyResettingIn(14, 62), opus]) as [MeterView];
+    expect(onlyPartial.blockedBy).toBeNull();
+    expect(onlyPartial.blockedUntilMs).toBeNull();
+    // A full gate next to it still counts, and it is the one reported.
+    const [both, , partialView] = views([weeklyResettingIn(14, 62), session(100, 70), opus]) as [MeterView, MeterView, MeterView];
+    expect(both.blockedBy).toBe('Session');
+    expect(both.blockedUntilMs).toBe(NOW + 70 * MINUTE);
+    expect(partialView.throttle).toBe('blocked');
+  });
+
+  it('is attached by viewAccount, which sees the whole account; a single meter view cannot know', () => {
+    const state = add(emptyState(), 'Claude Max', [weeklyResettingIn(14, 62), session(100, 70)]);
+    const account = state.accounts[0] as Account;
+    const alone = viewMeter(account, account.meters[0] as Account['meters'][number], NOW);
+    expect(alone.tier).toBe('use-now');
+    expect(alone.blockedBy).toBeNull();
+    const together = viewAccount(account, NOW)[0] as MeterView;
+    expect(together.blockedBy).toBe('Session');
+    expect({ ...together, blockedBy: null, blockedUntilMs: null }).toEqual(alone);
+  });
+
   it('does not put the block marker on the throttle itself', () => {
     const [, sessionView] = views([weeklyResettingIn(14, 62), session(100, 70)]) as [MeterView, MeterView];
     expect(sessionView.blockedBy).toBeNull();

@@ -13,3 +13,4 @@ These rules apply to the entire repository.
 9. Before handoff, run `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build`.
 10. Keep MCP client session, `agentId`, `taskId`, `browserSessionId`, `browserContextId`, `pageId`, and `leaseOwnerId` distinct. Never use the MCP connection alone as agent or lease identity.
 11. Any stdio compatibility layer must remain a stateless proxy to the shared Streamable HTTP gateway and must never import, launch, stop, or own Chrome/CDP.
+12. `tokengator/` is a separate, self-contained package (quota dashboard, MCP server, CLI, skill). It must never import gateway code, launch or attach to a browser, or read browser cookies. When you change it, run `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build` inside `tokengator/` as well, and keep its OpenSpec specs (`tokengator/openspec/`) in step with its behaviour.

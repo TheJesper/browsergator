@@ -361,7 +361,7 @@ describe('TokengatorService', () => {
     });
 
     it('excludes a snoozed account from the summary until the snooze ends', async () => {
-      await service.addAccount(claude({ meters: [{ label: 'Weekly', reset: { kind: 'interval', hours: 168 }, used: 50, resetsAt: iso(NOW + 5 * DAY) }] }));
+      await service.addAccount(claude({ meters: [{ label: 'Weekly', reset: { kind: 'interval', hours: 168 }, used: 5, resetsAt: iso(NOW + 5 * DAY) }] }));
       expect((await service.snapshot()).summary.behind).toBe(1);
       await service.updateAccount('claude-max', { snoozedUntil: iso(NOW + 3 * DAY) });
       const during = await service.snapshot();
@@ -370,7 +370,8 @@ describe('TokengatorService', () => {
       clock = NOW + 3 * DAY + MINUTE;
       const after = await service.snapshot();
       expect(after.queue[0]?.snoozed).toBe(false);
-      expect(after.summary.useNow + after.summary.behind).toBe(1);
+      expect(after.summary.behind).toBe(1);
+      expect(after.summary.atRisk['USD']).toBeGreaterThan(0);
     });
 
     it('updates the settings', async () => {

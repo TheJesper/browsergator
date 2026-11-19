@@ -209,7 +209,7 @@ export function quickDialog(ctx: Ctx, prefill = ''): void {
     value: prefill,
     autocomplete: 'off',
     spellcheck: 'false',
-    placeholder: 'claude weekly 62%   ·   suno 1200 left resets in 9d',
+    placeholder: 'claude weekly 62%, or suno 1200 left resets in 9d',
     'aria-label': 'Quick update'
   }) as HTMLInputElement;
   const preview = h('p', { class: 'palette-preview', 'aria-live': 'polite' });

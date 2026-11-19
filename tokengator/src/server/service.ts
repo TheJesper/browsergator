@@ -293,7 +293,7 @@ export class TokengatorService {
    * leaves meters the collector did not report alone. Returns the ids of the meters it changed.
    */
   applyCollected(collectorId: string, accounts: CollectedAccount[], spend: CollectedSpend[]): Promise<string[]> {
-    const source: MeterSource = { kind: collectorId === 'claude-statusline' ? 'statusline' : 'collector', id: collectorId };
+    const source: MeterSource = { kind: collectorId.endsWith('-statusline') ? 'statusline' : 'collector', id: collectorId };
     return this.mutate((initial, nowMs) => {
       let state = initial;
       const changed: string[] = [];

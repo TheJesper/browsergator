@@ -117,7 +117,10 @@ export function recordSpend(
     throw new ValidationError('amount', 'amount must be a number of 0 or more.');
   }
   const date = entry.date ?? dateKey(nowMs, tz);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) {
+  // The parser rolls "2026-11-31" over into December instead of refusing it, so compare what comes back:
+  // a day the calendar does not have would count towards the month and appear on no day.
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(date) ? Date.parse(`${date}T00:00:00Z`) : Number.NaN;
+  if (Number.isNaN(parsed) || iso(parsed).slice(0, 10) !== date) {
     throw new ValidationError('date', 'date must look like 2026-11-19.');
   }
   const entries = source.entries.slice();

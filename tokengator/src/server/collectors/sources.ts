@@ -114,9 +114,17 @@ export function codexMeters(snapshot: CodexSnapshot, nowMs: number): CollectedMe
   for (const window of snapshot.windows) {
     const ends = window.resetsAt ? Date.parse(window.resetsAt) : null;
     if (ends === null || ends <= nowMs) continue; // a finished window says nothing about the current one
-    // Windows are told apart by length: hours are the session cap, a week is the allowance, a month is Go's.
-    const key = window.minutes <= 12 * 60 ? 'session' : window.minutes >= 20 * 24 * 60 ? 'monthly' : 'weekly';
-    meters.push({ key, reading: { usedPercent: Math.min(100, Math.max(0, window.usedPercent)), resetsAt: window.resetsAt as string } });
+    // "primary" and "secondary" are positional, not fixed: Pro plans have no 5-hour window at all. Windows are
+    // told apart by length, the way Codex's own interface does it.
+    const [key, label] =
+      window.minutes <= 12 * 60
+        ? ['session', '5-hour session']
+        : window.minutes <= 36 * 60
+          ? ['daily', 'Daily limit']
+          : window.minutes <= 10 * 24 * 60
+            ? ['weekly', 'Weekly limit']
+            : ['monthly', 'Monthly allowance'];
+    meters.push({ key, label, reading: { usedPercent: Math.min(100, Math.max(0, window.usedPercent)), resetsAt: window.resetsAt as string } });
   }
   return meters;
 }

@@ -79,6 +79,7 @@ Keyboard: `1`–`6` views, `U` update, `A` add, `C` copy brief, `/` filter, `J`/
 | Source | How | Credentials |
 | --- | --- | --- |
 | Claude Code | status line command: Claude Code hands its own rate-limit data to `tokengator statusline` | none |
+| Antigravity | status line command, the same way | none |
 | Codex | reads the rate-limit snapshot Codex writes to `~/.codex/sessions` | none |
 | ElevenLabs | documented subscription API | `ELEVENLABS_API_KEY` |
 | OpenRouter | documented credits API | `OPENROUTER_API_KEY` |
@@ -92,7 +93,8 @@ Collectors are off until you switch them on (menu > Automatic sources, or
 `~/.tokengator/.env`, when a collector runs. They are never stored, logged or returned by any
 interface. Details: [docs/COLLECTORS.md](docs/COLLECTORS.md).
 
-Claude Code status line, in `~/.claude/settings.json`:
+Claude Code status line, in `~/.claude/settings.json` (the Antigravity CLI takes the same entry in
+`~/.gemini/antigravity-cli/settings.json`):
 
 ```json
 { "statusLine": { "type": "command", "command": "tokengator statusline" } }

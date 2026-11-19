@@ -54,7 +54,7 @@ export function inspector(ctx: Ctx, view: MeterView): HTMLElement {
     type: 'text',
     autocomplete: 'off',
     spellcheck: 'false',
-    placeholder: view.meter.unit === 'percent' ? '62%  ·  38% left  ·  62% resets thu 09:00' : '1200 left  ·  40%  ·  resets in 9d',
+    placeholder: view.meter.unit === 'percent' ? '62%, or 38% left, or 62% resets thu 09:00' : '1200 left, or 40%, or resets in 9d',
     'aria-label': `Update ${view.meter.label}`
   }) as HTMLInputElement;
   const preview = h('p', { class: 'preview', 'aria-live': 'polite' }, 'Type what the usage page says. Enter saves.');
@@ -147,18 +147,18 @@ export function inspector(ctx: Ctx, view: MeterView): HTMLElement {
         'div',
         { class: 't' },
         h('div', { class: 'insp-title' }, account.label),
-        h('div', { class: 'insp-sub' }, [account.plan, price].filter(Boolean).join(' · ') || 'Custom subscription')
+        h('div', { class: 'insp-sub' }, [account.plan, price].filter(Boolean).join(', ') || 'Custom subscription')
       ),
       h('button', { class: 'icon-btn insp-close', type: 'button', 'aria-label': 'Close details', onclick: () => ctx.app.select(null) }, icon('x'))
     ),
     siblings.length > 1
       ? h(
           'div',
-          { class: 'meter-tabs', role: 'tablist', 'aria-label': 'Meters of this subscription' },
+          { class: 'meter-tabs', role: 'group', 'aria-label': 'Meters of this subscription' },
           siblings.map((other) =>
             h(
               'button',
-              { class: 'chip-btn', type: 'button', role: 'tab', 'aria-selected': String(other.id === view.id), 'aria-pressed': String(other.id === view.id), onclick: () => ctx.app.select(other.id) },
+              { class: 'chip-btn', type: 'button', 'aria-pressed': String(other.id === view.id), onclick: () => ctx.app.select(other.id) },
               other.meter.label
             )
           )

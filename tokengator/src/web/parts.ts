@@ -85,20 +85,20 @@ export function barCaption(view: MeterView, nowMs: number): { text: string; node
       return { text: 'Used up, nothing expires', nodes: [h('b', null, 'Used up'), ', nothing expires'] };
     case 'expired': {
       const text = `${usedPct} used, ${formatPercent(view.remainingFraction)} expired`;
-      return { text, nodes: [h('b', null, `${usedPct} used`), ' · ', h('span', { class: 'exp' }, `${formatPercent(view.remainingFraction)} expired`)] };
+      return { text, nodes: [h('b', null, `${usedPct} used`), ', ', h('span', { class: 'exp' }, `${formatPercent(view.remainingFraction)} expired`)] };
     }
     case 'idle':
     case 'balance': {
       const text = `${usedPct} used`;
-      return { text, nodes: [h('b', null, text), view.needsReset ? ' · set the reset time for a forecast' : ''] };
+      return { text, nodes: [h('b', null, text), view.needsReset ? ', set the reset time for a forecast' : ''] };
     }
     case 'fresh': {
       const text = `${usedPct} used, too early to forecast`;
-      return { text, nodes: [h('b', null, `${usedPct} used`), ' · too early to forecast'] };
+      return { text, nodes: [h('b', null, `${usedPct} used`), ', too early to forecast'] };
     }
     case 'hot': {
       const when = view.runsOutAtMs !== null ? `runs out ${formatMoment(view.runsOutAtMs, nowMs)}` : 'will run out early';
-      return { text: `${usedPct} used, ${when}`, nodes: [h('b', null, `${usedPct} used`), ` · ${when}`] };
+      return { text: `${usedPct} used, ${when}`, nodes: [h('b', null, `${usedPct} used`), `, ${when}`] };
     }
     default: {
       const projected = formatPercent(view.projectedFraction ?? view.usedFraction);
@@ -109,8 +109,8 @@ export function barCaption(view: MeterView, nowMs: number): { text: string; node
       return {
         text,
         nodes: expires
-          ? [h('b', null, `${usedPct} used`), ` · on pace for ${projected} · `, h('span', { class: 'exp' }, `${expires} expires`)]
-          : [h('b', null, `${usedPct} used`), ' · on pace to finish']
+          ? [h('b', null, `${usedPct} used`), `, on pace for ${projected}, `, h('span', { class: 'exp' }, `${expires} expires`)]
+          : [h('b', null, `${usedPct} used`), ', on pace to finish']
       };
     }
   }
@@ -124,7 +124,7 @@ export function forecastBar(view: MeterView, nowMs: number, size: 'sm' | 'lg' | 
   if (view.tier === 'expired') classes.push('is-settled');
   if (view.tier === null) classes.push('is-throttle');
   if (view.throttle === 'blocked') classes.push('is-blocked');
-  if (view.stale || view.meter.estimated) classes.push('uncertain');
+  if ((view.stale || view.meter.estimated) && view.msLeft !== null) classes.push('uncertain');
   const segment = (kind: string, share: number): HTMLElement | null =>
     share > 0.001 ? h('i', { class: `seg-${kind}`, style: { flex: `${share} 1 0`, minWidth: '2px' } }) : null;
   const rest = Math.max(0, 1 - shares.used - shares.projected - shares.expiring);
@@ -205,7 +205,7 @@ export function sourceText(view: MeterView): string {
     case 'collector':
       return source.id ? `Automatic (${source.id})` : 'Automatic';
     case 'statusline':
-      return 'Claude Code status line';
+      return source.id === 'antigravity-statusline' ? 'Antigravity status line' : 'Claude Code status line';
     case 'agent':
       return source.id ? `Reported by ${source.id}` : 'Reported by an agent';
     case 'demo':
@@ -222,8 +222,10 @@ export function flags(view: MeterView, nowMs: number): HTMLElement[] {
     const until = view.blockedUntilMs !== null && view.blockedUntilMs > nowMs ? ` ${formatDuration(view.blockedUntilMs - nowMs)}` : '';
     out.push(h('span', { class: 'tag stop', title: `${view.blockedBy} is at its limit` }, `blocked${until}`));
   }
-  if (view.meter.estimated) out.push(h('span', { class: 'tag warn', title: 'The window rolled over since the last reading' }, 'assumed'));
-  else if (view.stale && view.tier !== 'idle' && view.tier !== 'expired') {
+  // An idle window has nothing to be uncertain about, so it carries neither tag.
+  const idle = view.tier === 'idle' || view.throttle === 'idle';
+  if (view.meter.estimated && !idle) out.push(h('span', { class: 'tag warn', title: 'The window rolled over since the last reading' }, 'assumed'));
+  else if (view.stale && !idle && view.tier !== 'expired') {
     // Say how old, not just that it is old: "4d" is a reason to go and look, "stale" is only a label.
     out.push(h('span', { class: 'tag warn', title: 'This reading is old. Refresh it before relying on the forecast.' }, view.ageMs === null ? 'no reading yet' : `updated ${formatAge(view.ageMs)}`));
   }

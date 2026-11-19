@@ -79,7 +79,7 @@ export function costsView(ctx: Ctx): HTMLElement {
                 : '.',
               summary.previousMonth > 0 ? ` Last month ${formatMoney(summary.previousMonth, source.currency)}.` : ''
             ),
-            h('div', { class: 'meta' }, source.updatedAt ? `Updated ${formatAge(now - (toMs(source.updatedAt) ?? now))}` : 'No entries yet', source.source.kind === 'collector' ? ' · automatic' : ''),
+            h('div', { class: 'meta' }, source.updatedAt ? `Updated ${formatAge(now - (toMs(source.updatedAt) ?? now))}` : 'No entries yet', source.source.kind === 'collector' ? ', automatic' : ''),
             h(
               'div',
               { class: 'ops' },
@@ -188,7 +188,7 @@ export function historyView(ctx: Ctx): HTMLElement {
             'div',
             { class: 'who' },
             h('span', { class: 'mono', 'aria-hidden': 'true' }, monogramFor(CATALOG, last.providerId, last.accountLabel)),
-            h('div', null, h('b', null, last.accountLabel), h('span', null, `${last.meterLabel} · ${cycles.length} window${cycles.length === 1 ? '' : 's'}`))
+            h('div', null, h('b', null, last.accountLabel), h('span', null, `${last.meterLabel}, ${cycles.length} window${cycles.length === 1 ? '' : 's'}`))
           ),
           cycleColumns(recent, now, 520),
           h(

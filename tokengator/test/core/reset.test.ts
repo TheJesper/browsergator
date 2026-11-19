@@ -170,6 +170,30 @@ describe('window helpers', () => {
     expect(windowStartFor({ kind: 'none' }, end)).toBeNull();
   });
 
+  it('windowStartFor treats a reset shortly after a boundary as that boundary reported late', () => {
+    const monthly: ResetRule = { kind: 'monthly', day: 12, time: '00:00', tz: 'UTC' };
+    // The provider really resets at 14:37 on the 12th: the window still began on the previous 12th.
+    expect(iso(windowStartFor(monthly, utc(2026, 12, 12, 14, 37)) as number)).toBe('2026-11-12T00:00:00.000Z');
+    expect(iso(windowStartFor(monthly, utc(2026, 12, 14)) as number)).toBe('2026-11-12T00:00:00.000Z');
+    // A reset a little before a boundary is that boundary reported early.
+    expect(iso(windowStartFor(monthly, utc(2026, 12, 11, 20, 0)) as number)).toBe('2026-11-12T00:00:00.000Z');
+    expect(iso(windowStartFor(monthly, utc(2026, 11, 28, 10, 0)) as number)).toBe('2026-11-12T00:00:00.000Z');
+    // On the boundary itself nothing changes.
+    expect(iso(windowStartFor(monthly, utc(2026, 12, 12)) as number)).toBe('2026-11-12T00:00:00.000Z');
+
+    const daily: ResetRule = { kind: 'daily', time: '00:00', tz: 'UTC' };
+    expect(iso(windowStartFor(daily, utc(2026, 11, 20, 0, 30)) as number)).toBe('2026-11-19T00:00:00.000Z');
+    expect(iso(windowStartFor(daily, utc(2026, 11, 20, 20, 0)) as number)).toBe('2026-11-20T00:00:00.000Z');
+    expect(iso(windowStartFor(daily, utc(2026, 11, 20)) as number)).toBe('2026-11-19T00:00:00.000Z');
+    // A window never starts at or after its own end, wherever the end falls.
+    for (let minutes = 0; minutes <= 3 * 24 * 60; minutes += 37) {
+      const end = utc(2026, 3, 7) + minutes * MINUTE; // spans the Los Angeles clock change
+      const start = windowStartFor({ kind: 'daily', time: '00:00', tz: LA }, end) as number;
+      expect(end - start).toBeGreaterThanOrEqual(11 * HOUR);
+      expect(end - start).toBeLessThanOrEqual(37 * HOUR);
+    }
+  });
+
   it('windowLengthMs is the real span of the current window', () => {
     const monthly = one({ label: 'Monthly', unit: 'credits', limit: 100, reset: { kind: 'monthly', day: 1, time: '00:00', tz: 'UTC' } }).meter;
     expect(windowLengthMs(monthly)).toBe(30 * DAY); // November
@@ -319,6 +343,28 @@ describe('rollMeter', () => {
       estimated: true
     });
     expect(closed).toMatchObject({ startedAt: '2026-11-01T00:00:00.000Z', endedAt: '2026-12-01T00:00:00.000Z', used: 120 });
+  });
+
+  it('monthly: a reset reported a little before the boundary does not leave a sliver of a window behind', () => {
+    // The provider resets at 20:00 on the 11th; the rule says the 12th.
+    let meter = one({ label: 'Monthly credits', unit: 'credits', limit: 2500, reset: { kind: 'monthly', day: 12, time: '00:00', tz: 'UTC' } }).meter;
+    meter = applyReading(meter, { remaining: 1200, resetsAt: '2026-12-11T20:00:00Z' }, utc(2026, 12, 11, 19, 0)).meter;
+    const { meter: rolled, closed } = rollMeter(meter, utc(2026, 12, 11, 21, 0));
+    expect(closed).toMatchObject({ endedAt: '2026-12-11T20:00:00.000Z', used: 1300 });
+    expect(rolled.windowStartedAt).toBe('2026-12-11T20:00:00.000Z');
+    expect(rolled.resetsAt).toBe('2027-01-12T00:00:00.000Z');
+    // Nothing more happens when the rule's own boundary passes four hours later.
+    const later = rollMeter(rolled, utc(2026, 12, 12, 1, 0));
+    expect(later.meter).toBe(rolled);
+    expect(later.closed).toBeNull();
+  });
+
+  it('daily: a reset reported a little before the boundary does not leave a sliver of a window behind', () => {
+    let meter = one({ label: 'Daily', unit: 'requests', limit: 50, reset: { kind: 'daily', time: '00:00', tz: 'UTC' } }).meter;
+    meter = applyReading(meter, { used: 20, resetsAt: '2026-11-19T23:30:00Z' }, NOW).meter;
+    const { meter: rolled } = rollMeter(meter, utc(2026, 11, 19, 23, 45));
+    expect(rolled.resetsAt).toBe('2026-11-21T00:00:00.000Z');
+    expect(rolled.windowStartedAt).toBe('2026-11-19T23:30:00.000Z');
   });
 
   it('rolling: becomes idle', () => {
@@ -582,6 +628,22 @@ describe('applyReading', () => {
         expect(again.meter.resetsAt).toBe(iso(moved));
         expect(again.meter.samples.map((sample) => sample.used)).toEqual([20, 30]);
       }
+    });
+
+    it('keeps a month-long window when a monthly meter is given its exact reset time', () => {
+      // Suno really resets at 14:37 on the 12th; the rule only knows "the 12th".
+      const { meter } = one(
+        { label: 'Monthly credits', unit: 'credits', limit: 2500, used: 300, reset: { kind: 'monthly', day: 12, time: '00:00', tz: 'UTC' } },
+        NOW - 2 * DAY
+      );
+      const { meter: corrected, closed } = applyReading(meter, { remaining: 1200, resetsAt: '2026-12-12T14:37:00Z' }, NOW);
+      expect(closed).toBeNull();
+      expect(corrected.resetsAt).toBe('2026-12-12T14:37:00.000Z');
+      expect(corrected.windowStartedAt).toBe('2026-11-12T00:00:00.000Z');
+      expect(corrected.samples.map((sample) => sample.used)).toEqual([300, 1300]);
+      // The window is still about a month long and already a quarter gone, not a few hours long and unstarted.
+      expect(windowLengthMs(corrected) as number).toBeGreaterThan(30 * DAY);
+      expect(Date.parse(corrected.windowStartedAt as string)).toBeLessThan(NOW);
     });
 
     it('keeps the usage when the provider reports an earlier reset than the one stored', () => {

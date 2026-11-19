@@ -13,6 +13,7 @@ page and what to read there), or you type the number.
 | Id | Provider | Source | Kind | Needs | Every |
 | --- | --- | --- | --- | --- | --- |
 | `claude-statusline` | Claude | JSON that Claude Code pipes to its status line command | pushed | nothing | each turn |
+| `antigravity-statusline` | Antigravity | JSON that the Antigravity CLI pipes to its status line command | pushed | nothing | each turn |
 | `codex-sessions` | ChatGPT / Codex | `~/.codex/sessions/**/rollout-*.jsonl` | local file | nothing | 5 min |
 | `elevenlabs` | ElevenLabs | `GET api.elevenlabs.io/v1/user/subscription` | documented API | `ELEVENLABS_API_KEY` | 30 min |
 | `openrouter` | OpenRouter | `GET openrouter.ai/api/v1/credits` | documented API | `OPENROUTER_API_KEY` | 30 min |
@@ -42,6 +43,19 @@ is sent anywhere. Setting the command is the opt-in, so this source has no switc
 absent before the first response of a session and on plans without them, and the per-model weekly
 limit is not part of the payload: track that meter by hand or through an agent. The command always
 exits 0 and always prints a line, so it cannot break a terminal.
+
+### Antigravity status line (`antigravity-statusline`)
+
+The Antigravity CLI (`agy`) has the same hook. Its payload carries a `quota` object keyed by bucket
+(`gemini-weekly`, `gemini-5h`, `3p-weekly`, `3p-5h`), each with `remaining_fraction` (0 to 1) and
+`reset_time` (ISO 8601). The same command reads both tools' input and tells them apart, so the
+setting is identical, in `~/.gemini/antigravity-cli/settings.json`:
+
+```json
+{ "statusLine": { "type": "command", "command": "tokengator statusline" } }
+```
+
+The payload also contains the account's email address and plan tier; Tokengator stores neither.
 
 ### Codex session logs (`codex-sessions`)
 

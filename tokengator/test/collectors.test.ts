@@ -18,7 +18,7 @@ import {
   parseCodexLog,
   parseCopilot
 } from '../src/server/collectors/sources.js';
-import { parseStatusline, runStatusline, statuslineText } from '../src/server/collectors/statusline.js';
+import { parseStatusline, readStatusline, runStatusline, statuslineText } from '../src/server/collectors/statusline.js';
 import { CollectorError, type Collector, type CollectorContext } from '../src/server/collectors/types.js';
 import { TokengatorService } from '../src/server/service.js';
 import { MemoryStateStore } from '../src/server/store.js';
@@ -154,6 +154,46 @@ describe('Claude Code status line', () => {
   });
 });
 
+describe('Antigravity status line', () => {
+  const input = JSON.stringify({
+    product: 'antigravity',
+    plan_tier: 'Pro',
+    email: 'developer@example.com',
+    quota: {
+      'gemini-weekly': { remaining_fraction: 0.9378, reset_time: new Date(NOW + 6 * 86_400_000).toISOString(), reset_in_seconds: 518_400 },
+      'gemini-5h': { remaining_fraction: 0.5, reset_time: new Date(NOW + 2 * 3_600_000).toISOString() },
+      '3p-weekly': { remaining_fraction: 1, disabled: true }
+    }
+  });
+
+  it('is told apart from Claude Code input and read as fractions remaining', () => {
+    const reading = readStatusline(input, NOW);
+    expect(reading?.providerId).toBe('antigravity');
+    expect(reading?.collectorId).toBe('antigravity-statusline');
+    expect(reading?.meters.map((meter) => [meter.key, Math.round((meter.reading.remainingPercent ?? 0) * 100) / 100])).toEqual([
+      ['gemini-weekly', 93.78],
+      ['gemini-5h', 50]
+    ]);
+  });
+
+  it('records the buckets on the Antigravity account without storing the email', async () => {
+    const svc = service();
+    const line = await runStatusline(input, svc);
+    const state = await svc.state();
+    const account = state.accounts.find((candidate) => candidate.providerId === 'antigravity');
+    expect(account?.meters.find((meter) => meter.key === 'gemini-weekly')?.used).toBeCloseTo(6.22);
+    expect(account?.meters.find((meter) => meter.key === 'gemini-5h')).toMatchObject({ role: 'throttle', source: { kind: 'statusline', id: 'antigravity-statusline' } });
+    expect(JSON.stringify(state)).not.toContain('developer@example.com');
+    expect(line).toContain('week 94% left');
+    expect(line).toContain('5h 50% left');
+  });
+
+  it('returns null for input that carries no quota', () => {
+    expect(readStatusline(JSON.stringify({ product: 'antigravity' }), NOW)).toBeNull();
+    expect(readStatusline('{', NOW)).toBeNull();
+  });
+});
+
 describe('Codex session logs', () => {
   const line = (at: string, primary: object | null, secondary: object | null, plan: string | null = 'plus'): string =>
     JSON.stringify({ timestamp: at, type: 'event_msg', payload: { type: 'token_count', info: null, rate_limits: { limit_id: 'codex', primary, secondary, plan_type: plan } } });
@@ -173,6 +213,15 @@ describe('Codex session logs', () => {
     expect(meters).toHaveLength(1);
     expect(meters[0]?.key).toBe('weekly');
     expect(meters[0]?.reading.usedPercent).toBe(31);
+  });
+
+  it('classifies daily and monthly windows by their length too', () => {
+    const snapshot = parseCodexLog(line('2026-11-19T09:30:00Z', window(12, 1440, 3_600_000), window(40, 43_200, 20 * 86_400_000), 'go'));
+    const meters = codexMeters(snapshot as NonNullable<typeof snapshot>, NOW);
+    expect(meters.map((meter) => [meter.key, meter.label])).toEqual([
+      ['daily', 'Daily limit'],
+      ['monthly', 'Monthly allowance']
+    ]);
   });
 
   describe('on disk', () => {

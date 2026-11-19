@@ -196,6 +196,21 @@ describe('finished cycles', () => {
     expect(firstMeter(state)).toMatchObject({ windowStartedAt: '2026-11-25T00:00:00.000Z', resetsAt: '2026-11-26T00:00:00.000Z' });
   });
 
+  it('does not invent a fully wasted window when the provider resets a little before the rule says', () => {
+    // A collector-fed monthly meter whose provider resets at 20:00 on the 11th; the rule says the 12th.
+    const source: MeterSource = { kind: 'collector', id: 'fake-api' };
+    let state = add(emptyState(), 'Suno Pro', [{ label: 'Monthly credits', unit: 'credits', limit: 2500, reset: { kind: 'monthly', day: 12, time: '00:00', tz: 'UTC' } }], {
+      price: { amount: 10, currency: 'USD', period: 'month' }
+    });
+    state = read(state, 'suno-pro:monthly-credits', { remaining: 1200, resetsAt: '2026-12-11T20:00:00Z', source }, utc(2026, 12, 11, 19, 0));
+    // The service looks at the state between the provider's reset and the rule's boundary, and again after it.
+    state = rollState(state, utc(2026, 12, 11, 21, 0));
+    state = rollState(state, utc(2026, 12, 12, 1, 0));
+    expect(state.cycles).toHaveLength(1);
+    expect(state.cycles[0]).toMatchObject({ endedAt: '2026-12-11T20:00:00.000Z', used: 1300, confidence: 'measured' });
+    expect(ledgerTotals(state.cycles, utc(2026, 12, 12, 1, 0)).utilisation30).toBeCloseTo(0.52, 9);
+  });
+
   it('records a one-off expiry once, with what was paid for the unused share', () => {
     const expiry = NOW + 10 * DAY;
     let state = add(

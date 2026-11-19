@@ -142,7 +142,7 @@ function start(app: App, fellBack: boolean): void {
   const ctx: Ctx = { app, actions };
 
   // -- header (built once; only the tabs and counts are refreshed) -------------
-  const tabs = h('nav', { class: 'tabs', role: 'tablist', 'aria-label': 'Views' });
+  const tabs = h('nav', { class: 'tabs', 'aria-label': 'Views' });
   const filterInput = h('input', { id: 'filter', type: 'search', placeholder: 'Filter', 'aria-label': 'Filter subscriptions', autocomplete: 'off' }) as HTMLInputElement;
   filterInput.addEventListener('input', () => app.setFilter(filterInput.value));
   const moreButton = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Menu', title: 'Menu', onclick: () => showMenu(moreButton, mainMenu()) }, icon('more'));
@@ -263,7 +263,7 @@ function start(app: App, fellBack: boolean): void {
       VIEWS.map((view) =>
         h(
           'button',
-          { class: 'tab', type: 'button', role: 'tab', 'aria-selected': String(view.id === current), title: `${view.label} (${view.key})`, onclick: () => setView(view.id) },
+          { class: 'tab', type: 'button', 'aria-current': view.id === current ? 'page' : null, title: `${view.label} (${view.key})`, onclick: () => setView(view.id) },
           view.label,
           view.id === 'queue' && useNow > 0 ? h('span', { class: 'count', 'aria-label': `${useNow} to use now` }, useNow) : null
         )
@@ -310,7 +310,7 @@ function start(app: App, fellBack: boolean): void {
     // Emphasise the money inside the sentence without restating it.
     const sentence = money && line.includes(money) ? [line.slice(0, line.indexOf(money)), h('span', { class: 'at-risk num' }, money), line.slice(line.indexOf(money) + money.length)] : [line];
     const liveClass = demo ? 'live sample' : online ? 'live' : 'live off';
-    const liveText = demo ? 'Sample data' : online ? `Live${lastSync ? ` · synced ${formatAge(now - lastSync)}` : ''}` : 'Offline';
+    const liveText = demo ? 'Sample data' : online ? `Live${lastSync ? `, synced ${formatAge(now - lastSync)}` : ''}` : 'Offline';
     mount(
       summary,
       h(
@@ -465,7 +465,7 @@ function start(app: App, fellBack: boolean): void {
     }
 
     if (focused) {
-      const again = pane.querySelector<HTMLElement>(`[data-id="${CSS.escape(focused)}"]`);
+      const again = pane.querySelector<HTMLElement>(`[data-nav="row"][data-id="${CSS.escape(focused)}"]`);
       again?.focus({ preventScroll: true });
     }
     if (window.scrollY !== scrollY) window.scrollTo({ top: scrollY });

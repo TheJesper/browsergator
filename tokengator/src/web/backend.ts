@@ -349,7 +349,7 @@ export class MemoryBackend implements Backend {
   importState(document: unknown): Promise<void> {
     return this.change((_state, nowMs) => parseState(document, nowMs));
   }
-  setCollector(): Promise<void> {
+  setCollector(_id: string, _enabled: boolean): Promise<void> {
     return Promise.reject(new BackendError('Automatic sources need the local service. They are not available on sample data.', 'unavailable'));
   }
   refresh(): Promise<void> {

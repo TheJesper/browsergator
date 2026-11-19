@@ -125,6 +125,14 @@ export function connectSnippets(options: ConnectOptions): ConnectSnippet[] {
       code: json({ statusLine: { type: 'command', command: [command, ...args, 'statusline'].map(quote).join(' ') } })
     },
     {
+      id: 'statusline-antigravity',
+      group: 'statusline',
+      title: 'Antigravity status line',
+      description: 'Add to ~/.gemini/antigravity-cli/settings.json. The Antigravity CLI hands over its 5-hour and weekly quota the same way.',
+      language: 'json',
+      code: json({ statusLine: { type: 'command', command: [command, ...args, 'statusline'].map(quote).join(' ') } })
+    },
+    {
       id: 'skill',
       group: 'skill',
       title: 'Agent skill',

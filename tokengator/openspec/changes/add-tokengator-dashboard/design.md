@@ -132,8 +132,21 @@ Visual language:
 - **Colour means state, never identity.** Light blue is quota used and anything informational. Pastel Solarized orange is quota that will expire. Muted green is "used up, nothing wasted". Yellow is "running hot". Red is reserved for blocked and expired. Providers are told apart by name and a two-letter monogram, not by hue, so the eye is free to find the orange.
 - **Hatching means forecast, solid means fact.** The expiring segment of a forecast bar is hatched orange because it has not happened yet; the same share in the History view is solid because it did.
 - **The forecast bar** is the unit the whole interface is built from: used, projected, expiring, and a tick where an even pace would be. It is drawn the same way in every view at different sizes.
-- **Type:** one grotesque for text and one monospace for every figure, countdown and label that should align. Hero figures use the text face with proportional numerals.
+- **Type:** IBM Plex Sans for interface text and figures, IBM Plex Mono only for literals. Both are bundled, so the page makes no font request.
 - No gradients, glass, glows or decorative icons. Borders and fills are used by role: the selected row, the inspector and dialogs are surfaces; rows in a list are separated by hairlines, not boxed.
+
+Measured on the shipped tokens (WCAG 2 ratio; colour-blind separation as OKLab distance under Machado protan and deutan simulation, with the data-visualisation validator):
+
+| Check | Light | Dark |
+| --- | --- | --- |
+| Lowest text contrast on page, surface and selected row | 4.73:1 | 4.74:1 |
+| Lowest mark contrast on page, surface and track | 3.08:1 | 5.10:1 |
+| Used blue against expiring orange, red-green colour blindness | 19.2 | 17.7 |
+| Used blue against expiring orange, full colour vision | 24.1 | 21.5 |
+
+The target for separation is 8 and the floor is 6, so the one pair the product depends on is safe by a wide margin. Two deliberate deviations: the dark-theme marks are lighter than the validator's band for categorical series, because the brief asks for pastel light blue and pastel orange and the pair still clears every separation and contrast check; and the status hues (orange, yellow, green, raspberry) are not separable from each other by hue under colour blindness, which is why every state also has its own shape and its label, and why yellow and orange never touch inside one bar.
+
+Type: labels are sentence case at one size, with no tracked capitals. Figures use the text face, whose digits are tabular; the monospace face is kept for text a person copies or types (commands, configuration, keys).
 
 View modes are projections of one ordered list of meter views, so sort and filter state lives in one place and applies everywhere.
 

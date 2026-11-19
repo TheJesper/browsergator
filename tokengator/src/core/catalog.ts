@@ -213,7 +213,7 @@ export const CATALOG: readonly ProviderPreset[] = [
     usageUrl: 'https://antigravity.google/docs/plans/',
     howToRead:
       'Run /usage in the Antigravity CLI, or open Settings in the app: each model group has a 5-hour and a weekly quota with a reset time. The price belongs to your Google AI plan, so leave it empty here.',
-    collectors: [],
+    collectors: ['antigravity-statusline'],
     plans: [
       plan('included', 'With Google AI Pro or Ultra', null, [
         session(5, 'Gemini, 5-hour', 'gemini-5h'),
