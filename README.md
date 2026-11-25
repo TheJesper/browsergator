@@ -125,6 +125,19 @@ curl http://127.0.0.1:8788/healthz          # gateway up (then a tool call shows
 At logon both are started automatically by the OS services (see the client compatibility
 guide), so in normal use you never start anything by hand.
 
+### Intranet login without manual steps (site auth)
+
+If a service rejects agents with a login page (for example Confluence or Jira behind SSO),
+configure per-origin Bearer auth instead of logging in by hand. In `.env` (values are the
+NAMES of environment variables that hold personal access tokens, never the tokens):
+
+```text
+BROWSER_GATEWAY_SITE_AUTH=https://vgcs-confluence.it.volvo.net=CONFLUENCE_TOKEN,https://vgcs-jira.it.volvo.net=JIRA_TOKEN
+```
+
+The gateway logs `Site auth enabled` with the origins at start. A protected login tab never
+locks an agent: any agent can navigate away from it or close it (see `docs/SECURITY.md`).
+
 ## Install for agents (machine-wide)
 
 Browsergator ships agent-facing guidance that teaches any agent how to connect to and drive

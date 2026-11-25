@@ -20,7 +20,11 @@ Authorization, Proxy-Authorization, Cookie, Set-Cookie, API-key headers, passwor
 
 ## Protected tabs
 
-Configured sensitive URL patterns are protected by default. Only agent IDs explicitly allowlisted in `BROWSER_GATEWAY_PROTECTED_AGENTS` may claim, navigate, close, or atomically mutate them. Reads remain possible for authenticated clients in the MVP; per-reader ACLs are a roadmap item.
+Configured sensitive URL patterns are protected by default. On a protected tab (for example a login form), only agent IDs explicitly allowlisted in `BROWSER_GATEWAY_PROTECTED_AGENTS` may interact with page content (click, fill, type, evaluate and similar). Any agent may still claim, close, or navigate away from a protected tab, because leaving a login page never touches its content; a protected tab can therefore never become a dead end. The destination of a navigation is still checked, and a rendered fetch that redirects to a protected URL is rejected and its temporary tab closed. Reads remain possible for authenticated clients in the MVP; per-reader ACLs are a roadmap item.
+
+## Site auth (opt-in)
+
+`BROWSER_GATEWAY_SITE_AUTH` lists `https://host=ENV_VAR_NAME` entries. For each entry whose environment variable is set, the shared Chrome adds `Authorization: Bearer <value>` to requests for that exact origin, so intranet tools such as Confluence or Jira work without a manual login. The header is added only to top-level/frame navigations and to requests from a page already on the same origin, never to cross-site requests, and never when the request already has its own Authorization header. Only the variable name is stored in configuration; the token value is resolved at start and is never logged or emitted as an event. New tabs to a configured origin open blank first and then load, so the first request already carries the header.
 
 ## Prohibited automation
 

@@ -15,7 +15,7 @@ export function testConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
     maxResponseBodyBytes: 1_048_576,
     contextCleanupIntervalMs: 10_000,
     protectedPatterns: ['*/login*', '*/signin*', '*/auth*', '*/checkout*'],
-    protectedAgents: [],
+    protectedAgents: [], siteAuth: [],
     dataDir: resolve(process.cwd(), '.tmp', 'test-data'),
     ...overrides
   };

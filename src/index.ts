@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { loadConfig } from './config.js';
+import { loadConfig, resolveSiteAuth } from './config.js';
 import { GatewayError } from './errors.js';
 import { JsonlAuditLog } from './core/audit-log.js';
 import { loadDotenv } from './core/dotenv.js';
@@ -20,13 +20,15 @@ async function main(): Promise<void> {
 
   const audit = new JsonlAuditLog(join(config.dataDir, 'audit.jsonl'));
   await audit.initialize();
+  const siteAuth = resolveSiteAuth(config.siteAuth);
   const driver = new WebSocketCdpDriver(config.browserUrl, 15_000, {
     enabled: config.autoLaunchChrome,
     host: '127.0.0.1',
     ...(config.chromeBin ? { bin: config.chromeBin } : {}),
     ...(config.chromeProfile ? { profileDir: config.chromeProfile } : {}),
     headless: config.chromeHeadless
-  });
+  }, 10_000, siteAuth);
+  if (siteAuth.length) log('info', 'Site auth enabled', { origins: siteAuth.map((rule) => rule.origin) });
   const gateway = new BrowserGateway(config, driver, audit);
   let shuttingDown = false;
   let restartRequested = false;

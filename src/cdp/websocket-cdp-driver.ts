@@ -83,7 +83,9 @@ export class WebSocketCdpDriver implements BrowserDriver {
      *  debuggable Chrome whenever the debug port is absent, and self-heals after a crash. */
     private readonly launchOptions?: Omit<ChromeLaunchOptions, 'port'> & { enabled: boolean },
     /** Active heartbeat interval; detects a dead-but-open socket the passive readyState misses. */
-    private readonly healthPingMs = 10_000
+    private readonly healthPingMs = 10_000,
+    /** Opt-in per-origin Authorization header (see BROWSER_GATEWAY_SITE_AUTH). Never logged or emitted. */
+    private readonly siteAuth: ReadonlyArray<{ origin: string; authorization: string }> = []
   ) {}
 
   async start(): Promise<void> {
@@ -169,8 +171,11 @@ export class WebSocketCdpDriver implements BrowserDriver {
     const browserContextId = options.browserContextId && options.browserContextId !== 'default'
       ? options.browserContextId
       : undefined;
+    // With site auth, open blank, attach (enables request interception), then load the URL,
+    // so the very first request already carries the configured Authorization header.
+    const deferLoad = this.siteAuth.length > 0 && siteAuthRuleFor(this.siteAuth, url, 'Document', undefined) !== undefined;
     const result = await this.send('Target.createTarget', {
-      url,
+      url: deferLoad ? 'about:blank' : url,
       ...(browserContextId ? { browserContextId } : {}),
       ...(options.newWindow ? { newWindow: true } : {})
     });
@@ -194,6 +199,9 @@ export class WebSocketCdpDriver implements BrowserDriver {
       this.targets.set(pageId, target);
     }
     await this.ensureAttached(target);
+    if (deferLoad) {
+      await this.send('Page.navigate', { url }, this.requireSession(pageId));
+    }
     const inspected = await this.inspectPage(pageId).catch(() => ({ url, title: '' }));
     let windowId: number | undefined;
     if (options.newWindow) {
@@ -242,7 +250,7 @@ export class WebSocketCdpDriver implements BrowserDriver {
   async click(pageId: string, locator: ElementLocator): Promise<InteractionResult> {
     const sessionId = this.requireSession(pageId);
     const result = await this.evaluateInteraction(sessionId, locator, clickAction());
-    return interactionResult(pageId, 'hover', result);
+    return interactionResult(pageId, 'click', result);
   }
 
   async fill(pageId: string, locator: ElementLocator, value: string): Promise<InteractionResult> {
@@ -580,13 +588,22 @@ export class WebSocketCdpDriver implements BrowserDriver {
   }
 
   private async elementRect(sessionId: string, locator: ElementLocator): Promise<ScreenshotClip> {
-    const result = await this.evaluateInteraction(
+    // captureBeyondViewport clips use document coordinates, so add the scroll offset to the viewport rect.
+    const measure = () => this.evaluateInteraction(
       sessionId,
       locator,
-      `const element = this; element.scrollIntoView({ block: 'center', inline: 'center' }); const rect = element.getBoundingClientRect(); return { ok: rect.width > 0 && rect.height > 0, x: rect.left, y: rect.top, width: rect.width, height: rect.height };`
+      `const element = this; element.scrollIntoView({ block: 'center', inline: 'center' }); const rect = element.getBoundingClientRect(); return { ok: rect.width > 0 && rect.height > 0, reason: rect.width > 0 && rect.height > 0 ? undefined : 'zero-size', x: rect.left + window.scrollX, y: rect.top + window.scrollY, width: rect.width, height: rect.height };`
     );
+    let result = await measure();
+    // Pages that re-render (SPA updates) can briefly detach the element; one short retry avoids a false failure.
     if (result['ok'] !== true) {
-      throw new GatewayError('ELEMENT_NOT_FOUND', 'Element has no visible bounds to capture');
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      result = await measure();
+    }
+    if (result['ok'] !== true) {
+      throw new GatewayError('ELEMENT_NOT_FOUND', 'Element has no visible bounds to capture', {
+        reason: String(result['reason'] ?? 'unknown')
+      });
     }
     return {
       x: Number(result['x']),
@@ -764,6 +781,11 @@ export class WebSocketCdpDriver implements BrowserDriver {
     const pageId = sessionId ? this.pageBySession.get(sessionId) : undefined;
     if (!pageId) return;
 
+    if (method === 'Fetch.requestPaused') {
+      void this.continueWithSiteAuth(pageId, params, sessionId!);
+      return;
+    }
+
     if (method === 'Network.requestWillBeSent') {
       const requests = this.activeRequests.get(pageId) ?? new Set<string>();
       requests.add(String(params['requestId']));
@@ -834,9 +856,39 @@ export class WebSocketCdpDriver implements BrowserDriver {
         { maxTotalBufferSize: 10_000_000, maxResourceBufferSize: 2_000_000 },
         sessionId
       ),
-      this.send('Accessibility.enable', {}, sessionId)
+      this.send('Accessibility.enable', {}, sessionId),
+      ...(this.siteAuth.length
+        ? [this.send('Fetch.enable', {
+          patterns: this.siteAuth.map((rule) => ({ urlPattern: `${rule.origin}/*`, requestStage: 'Request' }))
+        }, sessionId)]
+        : [])
     ]);
     this.emitEvent('lifecycle', 'Target.attached', target.targetId, { title: target.title, url: target.url });
+  }
+
+  /**
+   * Adds the configured Authorization header to a paused request when it targets a configured origin
+   * and is either a top-level/frame navigation or issued by a page already on that origin (prevents
+   * other sites from making authenticated cross-site calls). Every paused request is always continued.
+   */
+  private async continueWithSiteAuth(pageId: string, params: Record<string, any>, sessionId: string): Promise<void> {
+    const requestId = String(params['requestId']);
+    try {
+      const request = (params['request'] ?? {}) as { url?: string; headers?: Record<string, string> };
+      const headers = request.headers ?? {};
+      const rule = siteAuthRuleFor(this.siteAuth, request.url, String(params['resourceType'] ?? ''),
+        this.targets.get(pageId)?.url, headers);
+      if (!rule) {
+        await this.send('Fetch.continueRequest', { requestId }, sessionId);
+        return;
+      }
+      const merged = Object.entries(headers).map(([name, value]) => ({ name, value: String(value) }));
+      merged.push({ name: 'Authorization', value: rule.authorization });
+      await this.send('Fetch.continueRequest', { requestId, headers: merged }, sessionId);
+    } catch (error) {
+      await this.send('Fetch.continueRequest', { requestId }, sessionId).catch(() => undefined);
+      this.recordError(error);
+    }
   }
 
   private send(
@@ -1158,4 +1210,23 @@ function assertLoopbackWebSocket(value: string): void {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Pure decision for site auth injection; exported for tests. */
+export function siteAuthRuleFor(
+  rules: ReadonlyArray<{ origin: string; authorization: string }>,
+  requestUrl: string | undefined,
+  resourceType: string,
+  pageUrl: string | undefined,
+  headers: Record<string, string> = {}
+): { origin: string; authorization: string } | undefined {
+  if (!requestUrl || Object.keys(headers).some((name) => name.toLowerCase() === 'authorization')) return undefined;
+  let requestOrigin: string;
+  try { requestOrigin = new URL(requestUrl).origin; } catch { return undefined; }
+  const rule = rules.find((candidate) => candidate.origin === requestOrigin);
+  if (!rule) return undefined;
+  if (resourceType === 'Document') return rule;
+  let pageOrigin: string | undefined;
+  try { pageOrigin = pageUrl ? new URL(pageUrl).origin : undefined; } catch { pageOrigin = undefined; }
+  return pageOrigin === rule.origin ? rule : undefined;
 }

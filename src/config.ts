@@ -28,6 +28,9 @@ const schema = z.object({
   contextCleanupIntervalMs: z.coerce.number().int().min(100).max(3_600_000).default(10_000),
   protectedPatterns: z.array(z.string()).default(['*/login*', '*/signin*', '*/auth*', '*/checkout*']),
   protectedAgents: z.array(z.string()).default([]),
+  /** Opt-in per-origin Bearer auth for the shared Chrome: entries "https://host=ENV_VAR_NAME".
+   *  Only the env-var name is configured here; the token value is resolved at start and never logged. */
+  siteAuth: z.array(z.string().regex(/^https:\/\/[a-z0-9.-]+(:\d+)?=[A-Z_][A-Z0-9_]*$/i, 'BROWSER_GATEWAY_SITE_AUTH entries must be https://host=ENV_VAR_NAME')).default([]),
   dataDir: z.string().default(resolve(process.cwd(), '.data'))
 });
 
@@ -51,6 +54,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
       contextCleanupIntervalMs: env['BROWSER_GATEWAY_CONTEXT_CLEANUP_INTERVAL_MS'],
       protectedPatterns: csv(env['BROWSER_GATEWAY_PROTECTED_PATTERNS']),
       protectedAgents: csv(env['BROWSER_GATEWAY_PROTECTED_AGENTS']),
+      siteAuth: csv(env['BROWSER_GATEWAY_SITE_AUTH']),
       dataDir: env['BROWSER_GATEWAY_DATA_DIR']
     });
     if (config.leaseTtlMs > config.maxLeaseTtlMs) {
@@ -72,6 +76,21 @@ function csv(value: string | undefined): string[] | undefined {
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+export interface SiteAuthRule {
+  origin: string;
+  authorization: string;
+}
+
+/** Resolve "https://host=ENV_VAR" entries to origin + Bearer header. Entries whose env var is unset are skipped. */
+export function resolveSiteAuth(entries: string[], env: NodeJS.ProcessEnv = process.env): SiteAuthRule[] {
+  return entries.flatMap((entry) => {
+    const separator = entry.lastIndexOf('=');
+    const origin = new URL(entry.slice(0, separator)).origin;
+    const token = env[entry.slice(separator + 1)]?.trim();
+    return token ? [{ origin, authorization: `Bearer ${token}` }] : [];
+  });
 }
 
 function assertLoopbackUrl(value: string): void {

@@ -169,6 +169,9 @@ When you do need a page opened, read, or driven:
 - **Clean up:** close only tabs you opened. Other agents are using the rest.
 - **Safety:** never purchase, trade, submit sensitive forms, handle BankID, or solve CAPTCHA.
   A mutating \`evaluate\` on a non-local site requires explicit user confirmation.
+- **Login pages never lock you:** you may always navigate away from, claim or close a tab that
+  shows a login page; only typing into it is blocked. Do not log in by hand -- if an intranet
+  site needs auth, it is configured with \`BROWSER_GATEWAY_SITE_AUTH\` in the Browsergator \`.env\`.
 
 Health check: \`curl http://127.0.0.1:8788/healthz\`. If it fails, start the service with
 \`npm run chrome\` and \`npm run serve\` in the Browsergator repo.

@@ -127,14 +127,20 @@ describe('BrowserGateway integration with mock CDP', () => {
       browserContextId: 'default'
     });
     driver.tabs.set('protected', mockTab('protected', 'https://example.com/login'));
+    const protectedMeta = { context: { agentId: 'a', taskId: '1', leaseOwnerId: 'owner-a', clientSessionId: 's1' } };
+    await expect(gateway.fill('protected', { selector: '#password' }, 'secret', protectedMeta))
+      .rejects.toMatchObject({ code: 'TAB_PROTECTED' });
+    await expect(gateway.click('protected', { selector: '#login' }, protectedMeta))
+      .rejects.toMatchObject({ code: 'TAB_PROTECTED' });
+    await expect(gateway.typeText('protected', 'secret', protectedMeta))
+      .rejects.toMatchObject({ code: 'TAB_PROTECTED' });
+    // Leaving a protected login page must never lock the tab.
     await expect(
-      gateway.navigate(
-        'protected',
-        'https://example.com/',
-        { waitUntil: 'load', timeoutMs: 1_000 },
-        { context: { agentId: 'a', taskId: '1', leaseOwnerId: 'owner-a', clientSessionId: 's1' } }
-      )
-    ).rejects.toMatchObject({ code: 'TAB_PROTECTED' });
+      gateway.navigate('protected', 'https://example.com/', { waitUntil: 'load', timeoutMs: 1_000 }, protectedMeta)
+    ).resolves.toMatchObject({ pageId: 'protected' });
+    driver.tabs.set('protected-2', mockTab('protected-2', 'https://example.com/login'));
+    await expect(gateway.claimTab('protected-2', protectedMeta.context)).resolves.toMatchObject({ pageId: 'protected-2' });
+    await expect(gateway.closeTab('protected-2', protectedMeta)).resolves.toEqual({ pageId: 'protected-2', closed: true });
     await expect(
       gateway.navigate(
         'p1',
@@ -327,7 +333,7 @@ describe('BrowserGateway integration with mock CDP', () => {
     expect(result.html).toBe(html);
   });
 
-  it('reports unknown cleanup when an allowed request redirects to a protected URL', async () => {
+  it('rejects a redirect to a protected URL and still closes the temporary tab', async () => {
     const protectedDriver = new MockBrowserDriver([mockTab('p1'), mockTab('p2')]);
     const audit = new MemoryAuditLog();
     const protectedGateway = new BrowserGateway(
@@ -349,16 +355,11 @@ describe('BrowserGateway integration with mock CDP', () => {
       'https://menu.example/public-menu',
       { timeoutMs: 1_000, maxBytes: 1_024 },
       { context: { agentId: 'fetcher', taskId: 'redirect-cleanup', leaseOwnerId: 'owner-cleanup', clientSessionId: 's1' } }
-    )).rejects.toMatchObject({
-      code: 'INTERNAL_ERROR',
-      details: { pageId: 'page-1', cleanup: 'unknown', closeErrorCode: 'TAB_PROTECTED' }
-    });
+    )).rejects.toMatchObject({ code: 'TAB_PROTECTED' });
 
     expect((await protectedGateway.listTabs()).map((tab) => tab.pageId).sort())
-      .toEqual(['p1', 'p2', 'page-1']);
-    expect(audit.events).toContainEqual(expect.objectContaining({
-      action: 'fetch_rendered_page_cleanup', outcome: 'error', pageId: 'page-1', errorCode: 'INTERNAL_ERROR'
-    }));
+      .toEqual(['p1', 'p2']);
+    expect(audit.events).not.toContainEqual(expect.objectContaining({ action: 'fetch_rendered_page_cleanup' }));
   });
 
   it('fails closed when the temporary target remains about:blank', async () => {

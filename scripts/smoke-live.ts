@@ -35,7 +35,7 @@ async function main(): Promise<void> {
     maxResponseBodyBytes: 1_048_576,
     contextCleanupIntervalMs: 10_000,
     protectedPatterns: ['*/login*', '*/signin*', '*/auth*', '*/checkout*'],
-    protectedAgents: [],
+    protectedAgents: [], siteAuth: [],
     dataDir: resolve(process.cwd(), '.tmp', 'live-smoke')
   };
   assertLoopback(new URL(config.browserUrl));

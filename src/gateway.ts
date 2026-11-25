@@ -288,6 +288,8 @@ export class BrowserGateway {
       }
       const inspected = await this.driver.inspectPage(page.pageId);
       remainingMs();
+      // A redirect to a protected page (e.g. login) is reported, not captured; cleanup still closes the tab.
+      this.policy.assertMutationAllowed(inspected.url, metadata.context.agentId);
       if (!isCommittedHttpUrl(document.url) || !isCommittedHttpUrl(inspected.url)
         || document.url !== inspected.url || !document.html.trim()) {
         throw new GatewayError('INTERNAL_ERROR', 'Rendered document identity or content was incomplete');
@@ -392,10 +394,11 @@ export class BrowserGateway {
   }
 
   async closeTab(pageId: string, metadata: MutationMetadata): Promise<{ pageId: string; closed: true }> {
+    // Closing never interacts with page content, so it is allowed even on protected (login) tabs.
     return this.mutate(pageId, 'close_tab', metadata, {}, async () => {
       await this.driver.closeTab(pageId);
       return { pageId, closed: true as const };
-    });
+    }, { leavingProtectedAllowed: true });
   }
 
   private async waitForCommittedDocument(pageId: string, deadline: number): Promise<void> {
@@ -421,9 +424,10 @@ export class BrowserGateway {
     metadata: MutationMetadata
   ): Promise<{ pageId: string; url: string; title: string }> {
     this.policy.assertMutationAllowed(url, metadata.context.agentId);
+    // Leaving a protected page (e.g. a login form) is always allowed; only the destination is checked.
     return this.mutate(pageId, 'navigate', metadata, { url, options }, () =>
       this.driver.navigate(pageId, url, options)
-    );
+    , { leavingProtectedAllowed: true });
   }
 
   async click(
@@ -617,8 +621,8 @@ export class BrowserGateway {
   }
 
   async claimTab(pageId: string, context: AgentContext, ttlMs?: number): Promise<PublicRuntimeLease> {
-    const tab = await this.requireTab(pageId);
-    this.policy.assertMutationAllowed(tab.url, context.agentId);
+    // A lease alone does not touch page content; content actions on protected tabs stay blocked in mutate().
+    await this.requireTab(pageId);
     try {
       const lease = this.leases.claim(pageId, context, ttlMs);
       await this.writeAudit('claim_tab', 'success', context, pageId, {
@@ -700,8 +704,7 @@ export class BrowserGateway {
       fingerprint,
       () =>
         this.queue.enqueue(input.pageId, async () => {
-          const tab = await this.requireTab(input.pageId);
-          this.policy.assertMutationAllowed(tab.url, input.context.agentId);
+          await this.requireTab(input.pageId);
           this.policy.assertMutationAllowed(input.action.url, input.context.agentId);
           const existing = this.leases.assertCanMutate(input.pageId, input.context);
           const lease = existing ?? this.leases.claim(input.pageId, input.context, input.leaseTtlMs);
@@ -750,12 +753,13 @@ export class BrowserGateway {
     action: string,
     metadata: MutationMetadata,
     input: Record<string, unknown>,
-    operation: () => Promise<T>
+    operation: () => Promise<T>,
+    options: { leavingProtectedAllowed?: boolean } = {}
   ): Promise<T> {
     const run = () =>
       this.queue.enqueue(pageId, async () => {
         const tab = await this.requireTab(pageId);
-        this.policy.assertMutationAllowed(tab.url, metadata.context.agentId);
+        if (!options.leavingProtectedAllowed) this.policy.assertMutationAllowed(tab.url, metadata.context.agentId);
         const existing = this.leases.assertCanMutate(pageId, metadata.context, metadata.leaseId);
         const lease = existing ?? this.leases.claim(pageId, metadata.context);
         const ephemeral = existing === undefined;
